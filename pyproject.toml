@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene"
+version = "0.0.1"
+description = "A Python port of the Benzene message-handler framework (spec-first, cross-language interop)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Benzene" }]
+keywords = ["benzene", "middleware", "hexagonal", "serverless", "message-handler"]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
+
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
