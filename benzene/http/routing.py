@@ -1,0 +1,149 @@
+"""HTTP route table for the inbound HTTP binding (transport-bindings.md section 2, HTTP).
+
+The HTTP binding resolves a topic *from route/method conventions*. In Python that convention is
+an explicit ``@http_endpoint(method, path)`` tag paired with the ``@message`` topic tag: the HTTP
+route says *where* the request arrives, ``@message`` says *which handler* it resolves to. A handler
+may carry several routes (stack the decorator).
+
+Paths use ``{name}`` placeholders (e.g. ``/orders/{id}``); a placeholder matches a single path
+segment and is surfaced to the handler as a request field. Routes are matched in registration
+order, first match wins.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+
+from ..handler import Handler, HandlerDefinition, definition_of
+
+_HTTP_ROUTES_ATTR = "_benzene_http_routes"
+
+#: A ``{name}`` placeholder in a route template.
+_PARAM_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def http_endpoint(method: str, path: str) -> "callable":
+    """Tag an async handler with an HTTP ``(method, path)`` route.
+
+    Pairs with :func:`benzene.message`, which supplies the topic the route resolves to. Stack the
+    decorator to give one handler several routes. The tagged function stays an ordinary callable.
+    """
+
+    def decorate(fn: Handler) -> Handler:
+        routes = list(getattr(fn, _HTTP_ROUTES_ATTR, ()))
+        routes.append((method.upper(), path))
+        setattr(fn, _HTTP_ROUTES_ATTR, routes)
+        return fn
+
+    return decorate
+
+
+def routes_of(fn: Handler) -> list[tuple[str, str]]:
+    """Return the ``(method, path)`` routes tagged onto a function, if any."""
+    return list(getattr(fn, _HTTP_ROUTES_ATTR, ()))
+
+
+def _compile(path: str) -> tuple[re.Pattern[str], tuple[str, ...]]:
+    params: list[str] = []
+
+    def sub(m: "re.Match[str]") -> str:
+        params.append(m.group(1))
+        return f"(?P<{m.group(1)}>[^/]+)"
+
+    pattern = _PARAM_RE.sub(sub, path)
+    return re.compile("^" + pattern + "$"), tuple(params)
+
+
+@dataclass(frozen=True)
+class HttpEndpoint:
+    """A single ``(method, path) -> (topic, version)`` route."""
+
+    method: str
+    path: str
+    topic: str
+    version: str = ""
+    _regex: "re.Pattern[str]" = field(init=False, repr=False, compare=False)
+    _params: tuple[str, ...] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        regex, params = _compile(self.path)
+        object.__setattr__(self, "_regex", regex)
+        object.__setattr__(self, "_params", params)
+
+    def match(self, method: str, path: str) -> dict[str, str] | None:
+        """Return the captured path parameters if this endpoint matches, else ``None``."""
+        if method.upper() != self.method:
+            return None
+        matched = self._regex.match(path)
+        if matched is None:
+            return None
+        return matched.groupdict()
+
+
+class HttpRouter:
+    """A registration-ordered table of :class:`HttpEndpoint` s plus the handlers they resolve to.
+
+    ``add`` registers a ``@message`` + ``@http_endpoint``-tagged function; ``register`` is the
+    first-class explicit path (mirroring :meth:`benzene.Registry.register`). The router also carries
+    the underlying :class:`~benzene.HandlerDefinition` records so the app can build a message
+    registry from it.
+    """
+
+    def __init__(self) -> None:
+        self._endpoints: list[HttpEndpoint] = []
+        self._definitions: dict[tuple[str, str], HandlerDefinition] = {}
+
+    def add(self, fn: Handler) -> "HttpRouter":
+        """Register a ``@message`` + ``@http_endpoint``-tagged handler for all of its routes."""
+        definition = definition_of(fn)
+        if definition is None:
+            raise ValueError(
+                f"{getattr(fn, '__name__', fn)!r} is not a @message-tagged handler; "
+                "use register(method, path, topic, fn) for explicit registration."
+            )
+        routes = routes_of(fn)
+        if not routes:
+            raise ValueError(
+                f"{getattr(fn, '__name__', fn)!r} has no @http_endpoint route; "
+                "add one, or use register(method, path, topic, fn)."
+            )
+        for method, path in routes:
+            self._register(method, path, definition)
+        return self
+
+    def register(
+        self,
+        method: str,
+        path: str,
+        topic: str,
+        handler: Handler,
+        version: str = "",
+        request_type: type | None = None,
+        response_type: type | None = None,
+    ) -> "HttpRouter":
+        """Explicitly map a route to a topic/handler (no decorators required)."""
+        definition = HandlerDefinition(topic, handler, version, request_type, response_type)
+        self._register(method, path, definition)
+        return self
+
+    def _register(self, method: str, path: str, definition: HandlerDefinition) -> None:
+        self._endpoints.append(
+            HttpEndpoint(method, path, definition.topic, definition.version)
+        )
+        # One handler may own several routes — register its definition once.
+        self._definitions[(definition.topic, definition.version)] = definition
+
+    def match(self, method: str, path: str) -> tuple[HttpEndpoint, dict[str, str]] | None:
+        """Resolve ``(method, path)`` to an endpoint and its captured path params, first match."""
+        for endpoint in self._endpoints:
+            params = endpoint.match(method, path)
+            if params is not None:
+                return endpoint, params
+        return None
+
+    def endpoints(self) -> list[HttpEndpoint]:
+        return list(self._endpoints)
+
+    def definitions(self) -> list[HandlerDefinition]:
+        return list(self._definitions.values())
