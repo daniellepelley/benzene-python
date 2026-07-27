@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ..handler import Handler, HandlerDefinition, definition_of
+from benzene.core import Handler, HandlerDefinition, definition_of
 
 _HTTP_ROUTES_ATTR = "_benzene_http_routes"
 
@@ -26,8 +26,8 @@ _PARAM_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 def http_endpoint(method: str, path: str) -> "callable":
     """Tag an async handler with an HTTP ``(method, path)`` route.
 
-    Pairs with :func:`benzene.message`, which supplies the topic the route resolves to. Stack the
-    decorator to give one handler several routes. The tagged function stays an ordinary callable.
+    Pairs with :func:`benzene.core.message`, which supplies the topic the route resolves to. Stack
+    the decorator to give one handler several routes. The tagged function stays an ordinary callable.
     """
 
     def decorate(fn: Handler) -> Handler:
@@ -85,9 +85,9 @@ class HttpRouter:
     """A registration-ordered table of :class:`HttpEndpoint` s plus the handlers they resolve to.
 
     ``add`` registers a ``@message`` + ``@http_endpoint``-tagged function; ``register`` is the
-    first-class explicit path (mirroring :meth:`benzene.Registry.register`). The router also carries
-    the underlying :class:`~benzene.HandlerDefinition` records so the app can build a message
-    registry from it.
+    first-class explicit path (mirroring :meth:`benzene.core.Registry.register`). The router also
+    carries the underlying :class:`~benzene.core.HandlerDefinition` records so the app can build a
+    message registry from it.
     """
 
     def __init__(self) -> None:

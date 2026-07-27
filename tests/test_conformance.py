@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from benzene import BenzeneMessageApplication, Registry
+from benzene.core import BenzeneMessageApplication, Registry
 
 from .canonical_handlers import register_canonical
 from .conformance_runner import (

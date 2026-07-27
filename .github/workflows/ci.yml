@@ -17,8 +17,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install
-        run: pip install -e ".[dev]"
+      - name: Install layered packages (editable) + pytest
+        # Installing all three local paths in one command lets pip satisfy the inter-package
+        # dependencies (benzene-core -> benzene-results, benzene-http -> benzene-core) from the
+        # workspace rather than PyPI. This also verifies the PEP 420 namespace packaging.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http
+          pip install pytest
       - name: Conformance (dependency-free runner)
         run: python -m tests.conformance_runner
       - name: Tests

@@ -102,10 +102,18 @@ anything that took the left column literally where the right was available:
   SDK) → adapters over the popular Python-ecosystem equivalent (e.g. `pydantic`,
   `redis`, `boto3`), one optional extra per library. Never reimplement the third
   party; adapt to its Python counterpart. Keep the core dependency-free.
-- Package granularity: the .NET/TS ports split one-package-per-project. Python
-  ships **one `benzene` distribution with subpackages** (`benzene`, `benzene.http`,
-  …); that is the idiomatic Python call — keep the import surface small and
-  documented, and keep the core free of transport/cloud dependencies.
+- Package granularity: the .NET/TS ports split one-package-per-project, partly for
+  **assembly isolation** Python doesn't have. Python ships a **layered stack of PyPI
+  distributions along the meaningful adoption seams** (`benzene-results` ←
+  `benzene-core` ← `benzene-http`), each contributing a subpackage to the shared
+  `benzene` PEP 420 namespace, so a developer installs only the layers they use and
+  ships no unused code. Mirror .NET's names and keep the arrows pointing down (a
+  lower layer never imports a higher one); **fold the assembly-only C# splits**
+  (e.g. `Benzene.Dependencies` → `benzene.core.dependencies`) rather than minting a
+  distribution per one, and reserve a new package for a genuinely optional concern (a
+  BYO-container adapter, a `pydantic` validation adapter). Document the layering in
+  `docs/packages.md`. Watch for the opposite failure too: a "convenience" top-level
+  re-export that drags the whole stack in defeats the point.
 
 ## How you review (default posture: read-only, propose)
 
@@ -116,7 +124,7 @@ You mostly **audit and recommend**; make edits only when asked to apply a fix.
    `docs/specification/` (in the `benzene-dotnet`/`Benzene` repo); the conformance
    fixtures are mirrored in `conformance/`.
 2. **Types-first.** Read the module's public surface as a consumer would — the names
-   exported from `benzene/__init__.py`, the shape of the keyword args and
+   exported from each layer's `benzene/<sub>/__init__.py`, the shape of the keyword args and
    dataclasses, what `await` gives back, what a wrong call looks like under a type
    checker (`mypy`/`pyright`) and at runtime. If the type hints don't guide the
    developer to the pit of success, that's the finding.

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .container import Scope
-from .result import Result
+from benzene.results import Result
+
+from .dependencies import Scope
 
 
 class Context:

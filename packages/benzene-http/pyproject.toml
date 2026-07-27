@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene-http"
+version = "0.0.1"
+description = "Benzene inbound HTTP (ASGI) transport binding — host your handlers over HTTP."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Benzene" }]
+keywords = ["benzene", "http", "asgi", "middleware", "hexagonal"]
+dependencies = ["benzene-core"]
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
+
+# PEP 420 namespace package — see benzene-results/pyproject.toml.
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]

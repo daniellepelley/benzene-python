@@ -5,9 +5,9 @@
 - **Topic** — resolved from route/method conventions via an :class:`HttpRouter`.
 - **Headers** — HTTP headers flow in and out, both directions.
 - **Status** — the handler's Benzene status maps to an HTTP code via wire-contracts §4.1
-  (:func:`benzene.to_http`).
+  (:func:`to_http`).
 - **Scope** — one DI scope and exactly one pipeline invocation per request (delegated to the
-  underlying :class:`~benzene.BenzeneMessageApplication`).
+  underlying :class:`~benzene.core.BenzeneMessageApplication`).
 - **Failure** — an uncaught handler error becomes a Benzene ``service-unavailable`` (mapped to
   503); a body that is not valid JSON becomes ``bad-request`` (400); an unmatched route becomes
   ``not-found`` (404). The host is never crashed by request content.
@@ -25,14 +25,18 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qsl
 
-from ..container import Container
-from ..envelope import VERSION_HEADER, BenzeneMessageApplication, error_payload
-from ..http_status import to_http
-from ..pipeline import MiddlewarePipeline
-from ..registry import Registry
-from ..result import Result
-from ..status import Status
+from benzene.core import (
+    VERSION_HEADER,
+    BenzeneMessageApplication,
+    Container,
+    MiddlewarePipeline,
+    Registry,
+    error_payload,
+)
+from benzene.results import Result, Status
+
 from .routing import HttpRouter
+from .status import to_http
 
 
 @dataclass(frozen=True)

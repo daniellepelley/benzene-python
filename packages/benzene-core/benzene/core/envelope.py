@@ -10,14 +10,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._mapping import to_jsonable
-from .container import Container
+from benzene.results import Result, Status
+
 from .context import Context
+from .dependencies import Container
+from .mapping import to_jsonable
 from .pipeline import MiddlewarePipeline
 from .registry import Registry
-from .result import Result
 from .router import message_router
-from .status import Status
 
 #: The header carrying the payload/handler version (draft in the spec; read with an empty default).
 VERSION_HEADER = "benzene-version"

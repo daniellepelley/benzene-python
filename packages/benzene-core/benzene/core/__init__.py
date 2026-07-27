@@ -1,0 +1,55 @@
+"""``benzene.core`` — the transport-neutral message-handling engine.
+
+The middle layer of the Benzene Python port (distribution ``benzene-core``): the handler registry
+and ``@message`` decorator, the middleware pipeline, the per-invocation DI container, request/
+response mapping, the message-router terminal middleware, and the ``BenzeneMessageApplication``
+envelope entry point. Depends only on ``benzene-results``.
+
+Install this to run handlers through the transport-neutral ``BenzeneMessage`` envelope without
+pulling in any specific transport binding:
+
+    pip install benzene-core
+
+Mirrors .NET's ``Benzene.Core`` + ``Benzene.Core.MessageHandlers`` + ``Benzene.Dependencies``
+(collapsed — the C# split existed for assembly isolation, which Python does not need). Contributes
+the ``benzene.core`` subpackage to the shared ``benzene`` namespace.
+"""
+
+from __future__ import annotations
+
+from .context import Context
+from .dependencies import Container, Lifetime, Scope
+from .envelope import (
+    VERSION_HEADER,
+    BenzeneMessageApplication,
+    encode_response,
+    error_payload,
+)
+from .handler import Handler, HandlerDefinition, definition_of, message
+from .mapping import to_jsonable, to_request
+from .pipeline import Middleware, MiddlewarePipeline, Next
+from .registry import DuplicateHandlerError, Registry
+from .router import message_router
+
+__all__ = [
+    "BenzeneMessageApplication",
+    "Container",
+    "Context",
+    "DuplicateHandlerError",
+    "Handler",
+    "HandlerDefinition",
+    "Lifetime",
+    "Middleware",
+    "MiddlewarePipeline",
+    "Next",
+    "Registry",
+    "Scope",
+    "VERSION_HEADER",
+    "definition_of",
+    "encode_response",
+    "error_payload",
+    "message",
+    "message_router",
+    "to_jsonable",
+    "to_request",
+]

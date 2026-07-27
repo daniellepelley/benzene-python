@@ -14,7 +14,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from benzene import BenzeneMessageApplication, Registry, from_http, is_successful, to_http
+from benzene.core import BenzeneMessageApplication, Registry
+from benzene.http import from_http, to_http
+from benzene.results import is_successful
 
 from .canonical_handlers import register_canonical
 

@@ -6,7 +6,7 @@ HTTP client to recover a Benzene status from an HTTP code (reverse).
 
 from __future__ import annotations
 
-from .status import Status
+from benzene.results import Status
 
 _BENZENE_TO_HTTP: dict[str, int] = {
     Status.OK: 200,

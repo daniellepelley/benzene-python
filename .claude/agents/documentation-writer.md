@@ -66,8 +66,8 @@ Ground every example in this project's real conventions (verify against `benzene
 
 | .NET (in the source docs) | Python (what you write) |
 | --- | --- |
-| `dotnet add package Benzene.X --prerelease` | `pip install benzene` (one distribution today; subpackages live under `benzene.*`) |
-| `Benzene.Core.MessageHandlers`, `Benzene.Aws.Lambda.*`, … | `benzene`, `benzene.http`, … (submodules of the one `benzene` package) |
+| `dotnet add package Benzene.X --prerelease` | `pip install benzene-x` (a layered stack of packages — install only the layer you use; see `docs/packages.md`) |
+| `Benzene.Results`, `Benzene.Core`, `Benzene.Http`, … | `benzene-results`/`benzene.results`, `benzene-core`/`benzene.core`, `benzene-http`/`benzene.http` — each a PyPI distribution contributing to the shared `benzene` PEP 420 namespace |
 | `[Message("topic")]` attribute | `@message("topic", request_type=..., response_type=...)` decorator |
 | `[HttpEndpoint("GET", "/path")]` attribute | `@http_endpoint("GET", "/path")` decorator (from `benzene.http`) |
 | `IMessageHandler<TReq, TRes>` + `HandleAsync` returning `Task<IBenzeneResult<T>>` | a plain `async def handle(request) -> Result` — no interface ceremony |
@@ -110,9 +110,10 @@ runnable code; testing; troubleshooting; trade-offs/variations; further reading.
    and interop guarantees, and the corresponding **.NET source doc** in `benzene-dotnet/docs/` for structure.
 2. **Read the existing Python docs** in `docs/` (if any) for style, and the README for the canonical API,
    spec-first framing, and roadmap.
-3. **Verify every API against `benzene/`** — the exported names in `benzene/__init__.py`, signatures, and
-   free-function vs method shape. Never guess a symbol; `grep` for it. If it isn't in `benzene/`, it doesn't
-   go in the doc.
+3. **Verify every API against the source** — the exported names in each layer's
+   `packages/<dist>/benzene/<sub>/__init__.py`, signatures, and free-function vs method shape. Never guess a
+   symbol; `grep` for it. If it isn't in the source, it doesn't go in the doc. Import from the right layer
+   (`from benzene.results import Result`, `from benzene.core import message`, `from benzene.http import …`).
 4. **Check `tests/`** (`test_core.py`, `test_http.py`, `canonical_handlers.py`, the conformance runner) for
    real, working usage patterns — prefer copying a shape that a test already exercises.
 5. Only then write.
@@ -120,8 +121,8 @@ runnable code; testing; troubleshooting; trade-offs/variations; further reading.
 ## Quality checklist (before finishing)
 - [ ] Mirrors the corresponding .NET doc's structure and the spec's meaning (or explains a deliberate divergence)
 - [ ] Every code example uses a **real** exported API, verified in `benzene/` (not transliterated C#/TS)
-- [ ] Import paths use the correct `benzene` / `benzene.http` module names; examples are runnable as written
-- [ ] `pip install benzene` (and any extras) is correct
+- [ ] Import paths use the correct layer (`benzene.results` / `benzene.core` / `benzene.http`); examples are runnable as written
+- [ ] The `pip install benzene-<layer>` line names the right package(s) for the imports used
 - [ ] Python idioms: `async`/`await`, `snake_case`, `@message`/`@http_endpoint`, dataclasses, type hints
 - [ ] Prerequisites (Python 3.10+) stated; troubleshooting where useful
 - [ ] The new file is linked from `docs/index.md`, and every link in it resolves to a real file

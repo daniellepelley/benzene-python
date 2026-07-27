@@ -6,16 +6,15 @@ import asyncio
 
 import pytest
 
-from benzene import (
+from benzene.core import (
     BenzeneMessageApplication,
     Context,
     DuplicateHandlerError,
     MiddlewarePipeline,
     Registry,
-    Result,
-    Status,
     message,
 )
+from benzene.results import Result, Status
 
 
 def test_result_success_classification() -> None:

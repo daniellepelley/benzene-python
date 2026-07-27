@@ -5,6 +5,10 @@ that must survive a port are: per-invocation scoping, overridable defaults (``tr
 framework registers its defaults with ``try_add``, an application's own registration wins), and
 construction of handlers/middleware with their dependencies. This is a deliberately small
 implementation of those semantics, keyed by an arbitrary token (typically a ``type`` or ``str``).
+
+Mirrors .NET's ``Benzene.Dependencies``; folded into ``benzene.core`` here rather than shipped as a
+separate distribution (the C# split existed for assembly isolation, which Python does not need — a
+bring-your-own-container adapter would still be its own package).
 """
 
 from __future__ import annotations

@@ -8,8 +8,9 @@ from dataclasses import dataclass
 
 import pytest
 
-from benzene import Result, message
+from benzene.core import message
 from benzene.http import BenzeneHttpApp, HttpRouter, http_endpoint
+from benzene.results import Result
 
 
 @dataclass

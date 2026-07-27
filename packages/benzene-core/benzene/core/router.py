@@ -7,11 +7,12 @@ result. Registered last in the pipeline. Empty topic → ``validation-error``; n
 
 from __future__ import annotations
 
-from ._mapping import to_request
+from benzene.results import Result
+
 from .context import Context
+from .mapping import to_request
 from .pipeline import Middleware, Next
 from .registry import Registry
-from .result import Result
 
 
 def message_router(registry: Registry) -> Middleware:

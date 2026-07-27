@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from benzene import Registry, Result, message
-from benzene.status import is_successful
+from benzene.core import Registry, message
+from benzene.results import Result, is_successful
 
 
 @dataclass

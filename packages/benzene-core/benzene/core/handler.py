@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from .result import Result
+from benzene.results import Result
 
 #: A handler: an async function from a request to a Result.
 Handler = Callable[[Any], Awaitable[Result]]
