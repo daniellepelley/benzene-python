@@ -17,6 +17,7 @@ the ``benzene.core`` subpackage to the shared ``benzene`` namespace.
 
 from __future__ import annotations
 
+from .clients import MessageSender
 from .context import Context
 from .dependencies import Container, Lifetime, Scope
 from .envelope import (
@@ -39,6 +40,7 @@ __all__ = [
     "Handler",
     "HandlerDefinition",
     "Lifetime",
+    "MessageSender",
     "Middleware",
     "MiddlewarePipeline",
     "Next",

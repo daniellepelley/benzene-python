@@ -1,0 +1,4 @@
+# Runtime dependencies for deploying the GCP orders example to Cloud Functions.
+# (In this monorepo the benzene-* packages resolve locally; on a real deploy they come from PyPI.)
+functions-framework>=3.0
+benzene-gcp[pubsub]

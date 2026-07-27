@@ -1,19 +1,24 @@
 # This repo is a monorepo of several independently-publishable distributions under packages/
-# (benzene-results, benzene-core, benzene-http), each sharing the `benzene` PEP 420 namespace so a
-# developer installs only the layers they use. This root file is NOT a distribution — it only
-# configures the dev/test tooling for the whole workspace.
+# (benzene-results, benzene-core, benzene-http, benzene-testing, plus per-cloud hosts like
+# benzene-gcp), each sharing the `benzene` PEP 420 namespace so a developer installs only the layers
+# they use. This root file is NOT a distribution — it only configures the dev/test tooling for the
+# whole workspace, including the runnable examples under examples/.
 #
 # Local dev (no build needed — PEP 420 namespace packages resolve straight off sys.path):
-#     pytest                       # uses the pythonpath below
+#     pytest                       # uses the pythonpath below (packages + examples)
 #     python -m tests.conformance_runner
 #
 # Or install the layers editable (what CI does, and what proves the packaging):
-#     pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http
+#     pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http \
+#                  -e packages/benzene-testing -e packages/benzene-gcp
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "examples"]
 pythonpath = [
     "packages/benzene-results",
     "packages/benzene-core",
     "packages/benzene-http",
+    "packages/benzene-testing",
+    "packages/benzene-gcp",
+    "examples",
 ]

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene-gcp"
+version = "0.0.1"
+description = "Benzene Google Cloud Functions host — HTTP + Pub/Sub transport bindings and a Pub/Sub outbound client."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Benzene" }]
+keywords = ["benzene", "gcp", "google-cloud", "cloud-functions", "pubsub", "hexagonal"]
+dependencies = ["benzene-core", "benzene-http"]
+
+[project.optional-dependencies]
+# Only needed for the real Pub/Sub outbound client; inbound bindings + tests need no cloud SDK.
+pubsub = ["google-cloud-pubsub>=2.0"]
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
+
+# PEP 420 namespace package — see benzene-results/pyproject.toml.
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]

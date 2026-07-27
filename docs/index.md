@@ -16,8 +16,18 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 
 - **[`benzene.results`](reference/results.md)** — the `Result` type and the status vocabulary.
 - **[`benzene.core`](reference/core.md)** — handlers, the `@message` decorator, the registry, the
-  middleware pipeline, dependency injection, and the `BenzeneMessage` envelope.
+  middleware pipeline, dependency injection, the outbound client port, and the `BenzeneMessage`
+  envelope.
 - **[`benzene.http`](reference/http.md)** — the inbound HTTP (ASGI) transport binding.
+- **[`benzene.gcp`](reference/gcp.md)** — the Google Cloud Functions host (HTTP + Pub/Sub).
+- **[`benzene.testing`](reference/testing.md)** — the in-memory test host and test doubles.
+
+## Guides & cookbooks
+
+- **[Hosting on Google Cloud Functions](cookbooks/hosting-on-gcp.md)** — one set of handlers behind
+  HTTP + Pub/Sub triggers, with Pub/Sub egress.
+- **[Examples](https://github.com/daniellepelley/benzene-python/tree/main/examples)** — runnable,
+  multi-transport cloud examples, each with dogfooded tests.
 
 ## Concepts & the spec
 

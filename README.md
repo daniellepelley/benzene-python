@@ -31,6 +31,8 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-results` | `benzene.results` | `Result` + status vocabulary — the return type of a handler | — (zero deps) | `Benzene.Results` |
 | `benzene-core` | `benzene.core` | pipeline, registry, `@message`, DI, the `BenzeneMessage` envelope | `benzene-results` | `Benzene.Core*` + `Benzene.Dependencies` |
 | `benzene-http` | `benzene.http` | inbound HTTP (ASGI) binding + status mapping | `benzene-core` | `Benzene.Http` |
+| `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
+| `benzene-testing` | `benzene.testing` | in-memory test host + fakes (dev/test) | `benzene-core` | `Benzene.Testing` |
 
 Adoption levels, bottom to top:
 
@@ -128,9 +130,11 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 1. **(done)** Wire contracts + core model + `BenzeneMessage` envelope, conformance-green.
 2. **(done)** An HTTP inbound binding end-to-end (ASGI), including the status-code mapping.
 3. **(done)** Layered, install-what-you-use packages (`benzene-results` / `-core` / `-http`).
-4. One cloud host (Google Cloud Functions / AWS Lambda) — the "host anywhere" proof on Python.
+4. **(in progress)** Cloud hosts — the "host anywhere" proof on Python, each a multi-transport,
+   dogfood-tested example per the [Port Quality Standards](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/port-quality-standards.md):
+   **GCP (done)** — `benzene-gcp`, HTTP + Pub/Sub + egress; **AWS** and **Azure** next.
 5. The mesh module (ServiceDescriptor + `/benzene/spec`) so Python services appear in the mesh UI.
-6. Payload versioning, more transports (Pub/Sub, SQS/SNS), and gRPC — each its own package.
+6. Payload versioning and gRPC.
 
 ## Documentation
 
