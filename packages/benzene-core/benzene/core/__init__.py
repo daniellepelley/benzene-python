@@ -41,15 +41,28 @@ from .envelope import (
 from .errors import MessageHandlingError
 from .handler import Handler, HandlerDefinition, definition_of, message
 from .mapping import encode_body, to_camel, to_jsonable, to_request
-from .metadata import TOPIC_KEY, take_topic
+from .metadata import (
+    DEFAULT_WIRE_NAMES,
+    TOPIC_KEY,
+    VERSION_KEY,
+    WireNames,
+    take_topic,
+    use_wire_names,
+    wire_names,
+)
 from .pipeline import Middleware, MiddlewarePipeline, Next
 from .registry import DuplicateHandlerError, Registry
 from .startup import AppDefinition, BenzeneStartUp, build_application
 from .router import message_router
 
 __all__ = [
+    "DEFAULT_WIRE_NAMES",
     "TOPIC_KEY",
+    "VERSION_KEY",
+    "WireNames",
     "take_topic",
+    "use_wire_names",
+    "wire_names",
     "warn_unregistered_handlers",
     "unregistered_handlers",
     "handlers_in_package",

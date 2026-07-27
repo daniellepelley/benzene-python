@@ -17,6 +17,8 @@ from .dependencies import Container
 from .mapping import to_jsonable
 from .pipeline import MiddlewarePipeline
 from .registry import Registry
+from .metadata import WireNames
+from .metadata import wire_names as resolve_wire_names
 from .router import message_router
 
 #: The header carrying the payload/handler version (draft in the spec; read with an empty default).
@@ -34,7 +36,16 @@ class BenzeneMessageApplication:
         self._container = container or Container()
         self._pipeline = pipeline or MiddlewarePipeline()
         # The router is the terminal middleware, registered last.
-        self._pipeline.use(message_router(registry))
+        self._pipeline.use(message_router(registry, self.wire_names))
+
+    @property
+    def wire_names(self) -> WireNames:
+        """The reserved wire names this service uses — its own registration, or the defaults.
+
+        Resolved per read rather than cached at construction: a host may build the application
+        before the startup finished registering, and the container is the single source of truth.
+        """
+        return resolve_wire_names(self._container.create_scope())
 
     async def handle_async(self, request_envelope: dict[str, Any]) -> dict[str, Any]:
         topic = request_envelope.get("topic") or ""

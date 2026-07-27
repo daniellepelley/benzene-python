@@ -11,6 +11,7 @@ from benzene.results import Result
 
 from .context import Context
 from .discovery import suggest_topic
+from .metadata import DEFAULT_WIRE_NAMES, WireNames
 from .mapping import to_request
 from .pipeline import Middleware, Next
 from .registry import Registry
@@ -50,10 +51,19 @@ def _unresolved_topic_message(registry: Registry, topic: str, version: str) -> s
     )
 
 
-def message_router(registry: Registry) -> Middleware:
+def message_router(registry: Registry, names: WireNames | None = None) -> Middleware:
+    resolved_names = names or DEFAULT_WIRE_NAMES
+
     async def middleware(context: Context, next: Next) -> None:  # noqa: A002 - spec name
         if not context.topic:
-            context.result = Result.validation_error("Topic is required")
+            # An empty topic is the symptom of a metadata-key mismatch: a queue message whose
+            # sender wrote a different key arrives with nothing to route on, and "Topic is
+            # required" alone sends the reader looking at their handler instead of the sender.
+            # wire-contracts §2 asks implementations to name the configured key here.
+            context.result = Result.validation_error(
+                "Topic is required. On transports without the envelope it is read from the "
+                f"{resolved_names.topic!r} metadata key — check the sender writes that name."
+            )
             return
 
         definition = registry.find(context.topic, context.version)

@@ -200,3 +200,53 @@ def test_empty_topic_is_still_a_validation_error() -> None:
     app = BenzeneMessageApplication(Registry().add(handler))
     response = asyncio.run(app.handle_async({"topic": "", "headers": {}, "body": "{}"}))
     assert response["statusCode"] == Status.VALIDATION_ERROR
+
+
+# --- configurable wire names ------------------------------------------------------------------
+
+
+def test_default_topic_key_is_the_plain_name() -> None:
+    from benzene.core import DEFAULT_WIRE_NAMES
+
+    assert DEFAULT_WIRE_NAMES.topic == "topic"
+
+
+def test_use_wire_names_overrides_for_the_whole_service() -> None:
+    from benzene.core import Container, WireNames, use_wire_names, wire_names
+
+    services = Container()
+    use_wire_names(services, WireNames(topic="x-my-topic"))
+    assert wire_names(services.create_scope()).topic == "x-my-topic"
+
+
+def test_a_service_that_registers_nothing_gets_the_defaults() -> None:
+    from benzene.core import Container, DEFAULT_WIRE_NAMES, wire_names
+
+    assert wire_names(Container().create_scope()) is DEFAULT_WIRE_NAMES
+    assert wire_names(None) is DEFAULT_WIRE_NAMES
+
+
+def test_the_application_exposes_the_registered_names() -> None:
+    """Hosts read the names from here, so one registration reaches every binding."""
+    from benzene.core import Container, WireNames, use_wire_names
+
+    services = Container()
+    use_wire_names(services, WireNames(topic="x-my-topic"))
+    app = BenzeneMessageApplication(Registry(), container=services)
+    assert app.wire_names.topic == "x-my-topic"
+
+
+def test_take_topic_reads_case_insensitively_and_consumes_the_key() -> None:
+    from benzene.core import take_topic
+
+    topic, headers = take_topic({"Topic": "order:create", "tenant": "acme"})
+    assert topic == "order:create"
+    assert headers == {"tenant": "acme"}  # the routing key must not also be a header
+
+
+def test_take_topic_ignores_a_key_that_is_not_the_configured_one() -> None:
+    from benzene.core import WireNames, take_topic
+
+    topic, headers = take_topic({"topic": "order:create"}, WireNames(topic="x-my-topic"))
+    assert topic == ""
+    assert headers == {"topic": "order:create"}  # now just an application header

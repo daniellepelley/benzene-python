@@ -103,19 +103,19 @@ def _metadata_adapters() -> dict[str, Any]:
     from benzene.gcp.pubsub import TOPIC_ATTRIBUTE as GCP_TOPIC_KEY
     from benzene.gcp.pubsub import decode_pubsub_message
 
-    def sqs(metadata: dict[str, str]) -> dict[str, Any]:
+    def sqs(metadata: dict[str, str], names: Any = None) -> dict[str, Any]:
         attrs = {k: {"stringValue": v} for k, v in metadata.items()}
-        return sqs_record_envelope({"messageAttributes": attrs, "body": "{}"})
+        return sqs_record_envelope({"messageAttributes": attrs, "body": "{}"}, names)
 
-    def sns(metadata: dict[str, str]) -> dict[str, Any]:
+    def sns(metadata: dict[str, str], names: Any = None) -> dict[str, Any]:
         attrs = {k: {"Type": "String", "Value": v} for k, v in metadata.items()}
-        return sns_record_envelope({"Sns": {"MessageAttributes": attrs, "Message": "{}"}})
+        return sns_record_envelope({"Sns": {"MessageAttributes": attrs, "Message": "{}"}}, names)
 
-    def pubsub(metadata: dict[str, str]) -> dict[str, Any]:
-        return decode_pubsub_message({"attributes": dict(metadata), "data": "e30="})  # body {}
+    def pubsub(metadata: dict[str, str], names: Any = None) -> dict[str, Any]:
+        return decode_pubsub_message({"attributes": dict(metadata), "data": "e30="}, names)
 
-    def service_bus(metadata: dict[str, str]) -> dict[str, Any]:
-        return decode_service_bus(FakeServiceBusMessage(b"{}", dict(metadata)))
+    def service_bus(metadata: dict[str, str], names: Any = None) -> dict[str, Any]:
+        return decode_service_bus(FakeServiceBusMessage(b"{}", dict(metadata)), names)
 
     return {
         "sqs": (sqs, AWS_TOPIC_KEY),
@@ -132,23 +132,32 @@ def run_transport_metadata_cases() -> list[str]:
     every envelope/status/HTTP case, and still be unable to exchange a queue message with another
     port. So this checks the constant *and* runs every case through the real decoder.
     """
+    from benzene.core import WireNames
+
     failures: list[str] = []
     data = _load("transport-metadata-cases.json")
-    expected_topic_key = data["reservedMetadataKeys"]["topic"]
+    expected_topic_key = data["defaultMetadataKeys"]["topic"]
     adapters = _metadata_adapters()
+
+    # Default cases run with no override (names=None); each override case supplies its own, which
+    # is what proves the names are configurable rather than hard-coded.
+    cases = [(c, None) for c in data["metadataCases"]] + [
+        (c, WireNames(topic=c["metadataKeys"]["topic"])) for c in data.get("overrideCases", [])
+    ]
 
     for binding, (decode, topic_key) in sorted(adapters.items()):
         if topic_key != expected_topic_key:
             failures.append(
-                f"transport-metadata[{binding}]: topic key {topic_key!r}, expected {expected_topic_key!r}"
+                f"transport-metadata[{binding}]: default topic key {topic_key!r}, "
+                f"expected {expected_topic_key!r}"
             )
 
-        for case in data["metadataCases"]:
+        for case, names in cases:
             # benzene-version is tier C; this port does not implement payload versioning yet.
             if case.get("requires") == "versioning":
                 continue
             name, expected = case["name"], case["expected"]
-            envelope = decode(case["metadata"])
+            envelope = decode(case["metadata"], names)
 
             if envelope["topic"] != expected["topic"]:
                 failures.append(

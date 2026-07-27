@@ -15,7 +15,7 @@ from __future__ import annotations
 import base64
 from typing import Any, Callable
 
-from benzene.core import TOPIC_KEY, encode_body, take_topic
+from benzene.core import DEFAULT_WIRE_NAMES, TOPIC_KEY, WireNames, encode_body, take_topic
 from benzene.results import Result, Status
 
 #: Message-attribute name carrying the Benzene topic (wire-contracts §2, tier A). Prefixed because
@@ -23,9 +23,11 @@ from benzene.results import Result, Status
 TOPIC_ATTRIBUTE = TOPIC_KEY
 
 
-def decode_pubsub_message(message: dict[str, Any]) -> dict[str, Any]:
+def decode_pubsub_message(
+    message: dict[str, Any], names: WireNames | None = None
+) -> dict[str, Any]:
     """Decode a Pub/Sub ``message`` dict into a Benzene envelope ``{topic, headers, body}``."""
-    topic, headers = take_topic(message.get("attributes") or {})
+    topic, headers = take_topic(message.get("attributes") or {}, names)
 
     raw = message.get("data")
     if raw is None:
@@ -56,10 +58,13 @@ class PubSubMessageSender:
         topic_path: str,
         publisher: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
+        names: WireNames | None = None,
     ) -> None:
         self._topic_path = topic_path
         self._publisher = publisher
         self._serialize = serializer or encode_body
+        # Defaults unless the service registered its own; the same value the inbound side reads.
+        self._names = names or DEFAULT_WIRE_NAMES
 
     def _client(self) -> Any:
         if self._publisher is None:
@@ -72,7 +77,8 @@ class PubSubMessageSender:
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
         attributes = {str(k): str(v) for k, v in (headers or {}).items()}
-        attributes[TOPIC_ATTRIBUTE] = topic
+        # The service's own names, so an override applies outbound as well as inbound.
+        attributes[self._names.topic] = topic
         data = self._serialize(message).encode("utf-8")
         try:
             future = self._client().publish(self._topic_path, data, **attributes)

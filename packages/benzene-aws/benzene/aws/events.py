@@ -15,9 +15,10 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlencode
 
-from benzene.core import TOPIC_KEY, take_topic
+from benzene.core import TOPIC_KEY, WireNames, take_topic
 
-#: Alias of the core constant — one definition across every binding (wire-contracts §2).
+#: The default, aliased from core — one definition across every binding (wire-contracts §2).
+#: A service that overrides it registers a WireNames; the decoders below take it per call.
 TOPIC_ATTRIBUTE = TOPIC_KEY
 
 
@@ -61,18 +62,20 @@ def api_gateway_request(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def sqs_record_envelope(record: dict[str, Any]) -> dict[str, Any]:
+def sqs_record_envelope(record: dict[str, Any], names: WireNames | None = None) -> dict[str, Any]:
     """Map one SQS record to a Benzene envelope. Topic from the ``topic`` message attribute."""
     attributes = record.get("messageAttributes") or {}
     topic, headers = take_topic(
-        {k: (v or {}).get("stringValue", "") for k, v in attributes.items()}
+        {k: (v or {}).get("stringValue", "") for k, v in attributes.items()}, names
     )
     return {"topic": topic, "headers": headers, "body": record.get("body") or ""}
 
 
-def sns_record_envelope(record: dict[str, Any]) -> dict[str, Any]:
+def sns_record_envelope(record: dict[str, Any], names: WireNames | None = None) -> dict[str, Any]:
     """Map one SNS record to a Benzene envelope. Topic from the ``topic`` message attribute."""
     sns = record.get("Sns") or {}
     attributes = sns.get("MessageAttributes") or {}
-    topic, headers = take_topic({k: (v or {}).get("Value", "") for k, v in attributes.items()})
+    topic, headers = take_topic(
+        {k: (v or {}).get("Value", "") for k, v in attributes.items()}, names
+    )
     return {"topic": topic, "headers": headers, "body": sns.get("Message") or ""}

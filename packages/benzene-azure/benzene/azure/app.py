@@ -78,7 +78,7 @@ class AzureFunctionsApp:
 
     # --- Service Bus trigger ---------------------------------------------------------------
     def handle_service_bus(self, message: Any) -> None:
-        asyncio.run(self._run_or_raise(decode_service_bus(message)))
+        asyncio.run(self._run_or_raise(decode_service_bus(message, self._application.wire_names)))
 
     # --- Event Hub trigger -----------------------------------------------------------------
     def handle_event_hub(self, events: Any) -> None:
@@ -88,7 +88,7 @@ class AzureFunctionsApp:
 
         async def run() -> None:
             for event in events:
-                await self._run_or_raise(decode_event_hub_event(event))
+                await self._run_or_raise(decode_event_hub_event(event, self._application.wire_names))
 
         asyncio.run(run())
 

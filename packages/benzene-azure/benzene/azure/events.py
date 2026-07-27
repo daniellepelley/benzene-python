@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from benzene.core import TOPIC_KEY, take_topic
+from benzene.core import TOPIC_KEY, WireNames, take_topic
 
 #: Alias of the core constant — one definition across every binding (wire-contracts §2).
 TOPIC_PROPERTY = TOPIC_KEY
@@ -53,13 +53,17 @@ def _get_body(message: Any) -> Any:
     return getattr(message, "body", None)
 
 
-def decode_service_bus(message: Any) -> dict[str, Any]:
+def decode_service_bus(message: Any, names: WireNames | None = None) -> dict[str, Any]:
     """Map a Service Bus message → a Benzene envelope. Topic from ``application_properties``."""
-    topic, headers = take_topic(_properties(message, "application_properties", "properties"))
+    topic, headers = take_topic(
+        _properties(message, "application_properties", "properties"), names
+    )
     return {"topic": topic, "headers": headers, "body": body_to_text(_get_body(message))}
 
 
-def decode_event_hub_event(event: Any) -> dict[str, Any]:
+def decode_event_hub_event(event: Any, names: WireNames | None = None) -> dict[str, Any]:
     """Map an Event Hub event → a Benzene envelope. Topic from ``properties``."""
-    topic, headers = take_topic(_properties(event, "properties", "application_properties"))
+    topic, headers = take_topic(
+        _properties(event, "properties", "application_properties"), names
+    )
     return {"topic": topic, "headers": headers, "body": body_to_text(_get_body(event))}
