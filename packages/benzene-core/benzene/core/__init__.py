@@ -20,6 +20,18 @@ from __future__ import annotations
 from .clients import MessageSender
 from .context import Context
 from .dependencies import Container, Lifetime, Scope
+from .discovery import (
+    CompositeHandlers,
+    ExplicitHandlers,
+    HandlerSource,
+    ModuleHandlers,
+    PackageHandlers,
+    UnregisteredHandlerWarning,
+    handlers_in_module,
+    handlers_in_package,
+    unregistered_handlers,
+    warn_unregistered_handlers,
+)
 from .envelope import (
     VERSION_HEADER,
     BenzeneMessageApplication,
@@ -35,8 +47,18 @@ from .startup import AppDefinition, BenzeneStartUp, build_application
 from .router import message_router
 
 __all__ = [
+    "warn_unregistered_handlers",
+    "unregistered_handlers",
+    "handlers_in_package",
+    "handlers_in_module",
+    "UnregisteredHandlerWarning",
+    "PackageHandlers",
+    "ModuleHandlers",
+    "HandlerSource",
+    "ExplicitHandlers",
     "BenzeneMessageApplication",
     "Container",
+    "CompositeHandlers",
     "Context",
     "DuplicateHandlerError",
     "Handler",

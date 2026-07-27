@@ -47,8 +47,14 @@ async def hello(request: Greet) -> Result:
 application = BenzeneMessageApplication(Registry().add(hello))
 ```
 
-The `@message("say:hello")` decorator registers the handler under a topic. `request_type=Greet`
-tells Benzene to build a `Greet` from the decoded JSON body before calling you.
+The `@message("say:hello")` decorator tags the handler with a topic; `Registry().add(...)` is what
+registers it. `request_type=Greet` tells Benzene to build a `Greet` from the decoded JSON body
+before calling you.
+
+> **Once you have more than a handful of handlers**, name the package instead of listing them:
+> `Registry.from_package("myapp.handlers")` registers every `@message` handler underneath it, so
+> there is no per-handler line to forget. See
+> [handler discovery](reference/core.md#handler-discovery).
 
 ## 3. Drive it with the transport-neutral envelope
 

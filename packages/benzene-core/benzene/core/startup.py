@@ -51,6 +51,7 @@ def build_application(
     *,
     overrides: Sequence[Callable[[Container], None]] = (),
     config: Mapping[str, str] | None = None,
+    check_packages: Sequence[str] = (),
 ) -> tuple[AppDefinition, Scope]:
     """Boot an app from its startup: register services, apply overrides, then configure.
 
@@ -58,6 +59,12 @@ def build_application(
     a caller — a test, or a host supplying its cloud's real outbound client — can replace any
     registration before the app is wired. Returns the :class:`AppDefinition` and the root
     :class:`~benzene.core.Scope` (so a caller can resolve services for assertions).
+
+    ``check_packages`` names the package(s) the application keeps its handlers in; each is scanned
+    and any ``@message`` handler missing from the registry is warned about. Opt-in, because only the
+    application knows where its handlers live, and because scanning everything imported would flag
+    handlers a sibling deployable legitimately owns. Applications that build their registry with
+    :meth:`Registry.from_package` have no use for it — nothing in a scanned package can be missed.
     """
     instance = startup() if isinstance(startup, type) else startup
     resolved_config = dict(config or {})
@@ -68,4 +75,11 @@ def build_application(
         override(container)
 
     scope = container.create_scope()
-    return instance.configure(scope, resolved_config), scope
+    definition = instance.configure(scope, resolved_config)
+
+    if check_packages and definition.registry is not None:
+        from .discovery import warn_unregistered_handlers
+
+        warn_unregistered_handlers(definition.registry, *check_packages, stacklevel=3)
+
+    return definition, scope

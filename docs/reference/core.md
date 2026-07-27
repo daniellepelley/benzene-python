@@ -50,6 +50,83 @@ registry.find("order:get", "2")      # exact version match
 registry.find("order:get", "9")      # None — no fuzzy fallback
 ```
 
+## Handler discovery
+
+Listing every handler by hand is a line you can forget, and forgetting it fails at *runtime* as a
+`not-found` that looks like a routing problem. Naming the package instead removes the step:
+
+```python
+from benzene.core import BenzeneMessageApplication, Registry
+
+app = BenzeneMessageApplication(Registry.from_package("myapp.handlers"))
+```
+
+Every `@message` handler anywhere under `myapp.handlers` is registered, including in modules nothing
+else imports. Re-exporting a handler (`from .orders import create_order` in a package `__init__`) is
+safe — a scan de-duplicates by function identity rather than registering it twice.
+
+**Why you must name the package.** .NET enumerates the types in a compiled assembly without running
+your code; Python can only find a decorated function by *importing the module that defines it*. The
+package walk imports each submodule, and that import **is** the discovery. So the rule is: a handler
+is found if it lives under a package you named, and is invisible otherwise.
+
+### Sources
+
+Discovery is a seam, not a fixed behaviour — the counterpart of .NET's `IMessageHandlersFinder`.
+Anything with a `definitions() -> list[HandlerDefinition]` method satisfies `HandlerSource`:
+
+| Source | Produces |
+|---|---|
+| `PackageHandlers(*packages)` | every tagged handler under each package tree |
+| `ModuleHandlers(*modules)` | tagged handlers in those modules only, no submodule walk |
+| `ExplicitHandlers(*handlers)` | the functions you pass — the explicit path, as a source |
+| `CompositeHandlers(*sources)` | each source in order, skipping a handler an earlier one supplied |
+| `Registry` | itself — registries compose as sources |
+
+```python
+registry = Registry().add_source(
+    CompositeHandlers(
+        PackageHandlers("myapp.handlers"),
+        ExplicitHandlers(handler_from_a_plugin),
+    )
+)
+```
+
+Scanning stays *sugar*: a source yields the same records you could have passed to `register()`
+yourself, so explicit registration remains first-class (core-concepts §9 requires this).
+
+### Catching a handler you forgot
+
+If you register explicitly and want a missed one surfaced, scan the package and compare:
+
+```python
+from benzene.core import warn_unregistered_handlers
+
+warn_unregistered_handlers(registry, "myapp.handlers")
+```
+
+It emits an `UnregisteredHandlerWarning` per tagged handler the registry will never route to, naming
+the module, the function and the topic. Because it imports the package tree, it sees handlers in
+modules nothing else imported — the blind spot of checking only what is already loaded.
+
+It **warns rather than raises** deliberately: one codebase often builds several deployables, and an
+orders host legitimately does not mount the payments handlers. `build_application(...,
+check_packages=["myapp.handlers"])` runs the same check at the composition root.
+
+### When a topic does not resolve
+
+The `not-found` result says which of three unrelated bugs you have, rather than only that dispatch
+failed:
+
+| Situation | Message |
+|---|---|
+| Nothing registered | `the handler registry is empty … check the application's startup wiring` |
+| Topic known, version not | `the topic is registered, but only for 'unversioned', '2'` |
+| Topic unknown | `12 handler(s) are registered. Did you mean 'order:create'?` |
+
+The message travels to the caller on the wire, so it gives a count and at most one close match —
+not the service's full topic inventory.
+
 ## Middleware pipeline
 
 Middleware is `async def mw(context, next) -> None`, run in registration order (first registered is
