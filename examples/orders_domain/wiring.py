@@ -14,8 +14,8 @@ from benzene.http import HttpRouter
 from .handlers import OrderService, make_get_order, make_on_order_created, make_place_order
 from .model import ORDER_CREATED_TOPIC, OrderCreated, PlaceOrder
 
-PLACE_ORDER_TOPIC = "orders.place"
-GET_ORDER_TOPIC = "orders.get"
+PLACE_ORDER_TOPIC = "orders:place"
+GET_ORDER_TOPIC = "orders:get"
 
 
 @dataclass
@@ -49,14 +49,3 @@ def build_orders(
     registry.register(ORDER_CREATED_TOPIC, on_created, request_type=OrderCreated)
 
     return OrdersWiring(router=router, registry=registry)
-
-
-# Back-compat helpers if a host wants just one side.
-def build_orders_router(service: OrderService, sender: MessageSender) -> HttpRouter:
-    return build_orders(service, sender).router
-
-
-def build_orders_registry(
-    service: OrderService, sender: MessageSender, seen: list[str] | None = None
-) -> Registry:
-    return build_orders(service, sender, seen).registry

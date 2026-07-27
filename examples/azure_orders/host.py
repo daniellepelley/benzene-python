@@ -27,9 +27,14 @@ def build_azure_orders_app(
     if sender is None:
         import os
 
-        sender = ServiceBusMessageSender(
-            connection_string=os.environ["BENZENE_SERVICEBUS_CONNECTION"],
-            entity_name=os.environ["BENZENE_SERVICEBUS_ENTITY"],
-        )
+        connection = os.environ.get("BENZENE_SERVICEBUS_CONNECTION")
+        entity = os.environ.get("BENZENE_SERVICEBUS_ENTITY")
+        if not connection or not entity:
+            raise RuntimeError(
+                "Set BENZENE_SERVICEBUS_CONNECTION and BENZENE_SERVICEBUS_ENTITY to run the Azure "
+                "host with a real Service Bus client, or pass sender=... (e.g. a FakeMessageSender) "
+                "in tests."
+            )
+        sender = ServiceBusMessageSender(connection_string=connection, entity_name=entity)
     wiring = build_orders(service, sender, seen if seen is not None else [])
     return AzureFunctionsApp(http_router=wiring.router, registry=wiring.registry)

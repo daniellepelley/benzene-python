@@ -13,7 +13,13 @@ SDK. Contributes the ``benzene.azure`` subpackage to the shared ``benzene`` name
 
 from __future__ import annotations
 
-from .app import AzureFunctionsApp, AzureHttpResponse
+from .app import (
+    AzureFunctionsApp,
+    AzureHttpResponse,
+    event_hub_function,
+    http_function,
+    service_bus_function,
+)
 from .clients import ServiceBusMessageSender
 from .events import TOPIC_PROPERTY, decode_event_hub_event, decode_service_bus
 
@@ -24,4 +30,7 @@ __all__ = [
     "TOPIC_PROPERTY",
     "decode_event_hub_event",
     "decode_service_bus",
+    "event_hub_function",
+    "http_function",
+    "service_bus_function",
 ]

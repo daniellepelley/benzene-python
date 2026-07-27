@@ -26,8 +26,9 @@ from .envelope import (
     encode_response,
     error_payload,
 )
+from .errors import MessageHandlingError
 from .handler import Handler, HandlerDefinition, definition_of, message
-from .mapping import to_jsonable, to_request
+from .mapping import encode_body, to_camel, to_jsonable, to_request
 from .pipeline import Middleware, MiddlewarePipeline, Next
 from .registry import DuplicateHandlerError, Registry
 from .router import message_router
@@ -40,6 +41,7 @@ __all__ = [
     "Handler",
     "HandlerDefinition",
     "Lifetime",
+    "MessageHandlingError",
     "MessageSender",
     "Middleware",
     "MiddlewarePipeline",
@@ -48,10 +50,12 @@ __all__ = [
     "Scope",
     "VERSION_HEADER",
     "definition_of",
+    "encode_body",
     "encode_response",
     "error_payload",
     "message",
     "message_router",
+    "to_camel",
     "to_jsonable",
     "to_request",
 ]

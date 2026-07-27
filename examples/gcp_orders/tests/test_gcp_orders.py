@@ -77,4 +77,4 @@ def test_pubsub_unroutable_topic_raises_for_redelivery() -> None:
     host, _, _, _ = make_host()
     # No handler for this topic -> not-found -> the binding raises so Pub/Sub redelivers.
     with pytest.raises(RuntimeError):
-        host.send_pubsub("orders.unknown", body={})
+        host.send_pubsub("orders:unknown", body={})

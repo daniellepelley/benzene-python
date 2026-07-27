@@ -22,26 +22,30 @@ wiring = build_orders(OrderService(), ServiceBusMessageSender(connection_string=
 app = AzureFunctionsApp(http_router=wiring.router, registry=wiring.registry)
 ```
 
-## Adapt the Azure triggers
+## Wire the Azure triggers (v2 programming model)
 
-In an isolated-worker Function App, each trigger function adapts the `azure.functions` input to the
-app:
+The `benzene.azure` entry-point helpers adapt the `azure.functions` types for you, so `function_app.py`
+is thin:
 
 ```python
 import azure.functions as func
+from benzene.azure import event_hub_function, http_function, service_bus_function
 
+_http, _sb, _eh = http_function(app), service_bus_function(app), event_hub_function(app)
+
+app_fn = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+
+@app_fn.route(route="orders/{id?}")
 def orders_http(req: func.HttpRequest) -> func.HttpResponse:
-    r = app.handle_http_request(
-        method=req.method, path=req.url.split("?")[0].split("/", 3)[-1],
-        headers=dict(req.headers), body=req.get_body().decode() or "",
-    )
-    return func.HttpResponse(r.body, status_code=r.status_code, headers=r.headers)
+    return _http(req)
 
+@app_fn.service_bus_queue_trigger(arg_name="message", queue_name="orders", connection="BENZENE_SERVICEBUS")
 def orders_service_bus(message: func.ServiceBusMessage) -> None:
-    app.handle_service_bus(message)          # topic from application_properties
+    _sb(message)                             # topic from application_properties
 
+@app_fn.event_hub_message_trigger(arg_name="events", event_hub_name="orders", connection="BENZENE_EVENTHUB", cardinality="many")
 def orders_event_hub(events: list[func.EventHubEvent]) -> None:
-    app.handle_event_hub(events)             # one scope per event
+    _eh(events)                              # one scope per event
 ```
 
 Service Bus / Event Hub read the topic from the message's `topic` application property; a failure

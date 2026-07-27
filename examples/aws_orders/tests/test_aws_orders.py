@@ -63,7 +63,7 @@ def test_sqs_partial_batch_failure_reports_only_failed_record() -> None:
     event = (
         SqsEventBuilder()
         .with_message(ORDER_CREATED_TOPIC, {"id": "ok-1", "sku": "A"}, message_id="m1")
-        .with_message("orders.unknown", {}, message_id="m2")     # no handler -> not-found -> fails
+        .with_message("orders:unknown", {}, message_id="m2")     # no handler -> not-found -> fails
         .build()
     )
     result = host.send_sqs_event(event)

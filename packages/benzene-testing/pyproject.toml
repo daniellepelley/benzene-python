@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Benzene" }]
 keywords = ["benzene", "testing", "test-helpers", "hexagonal"]
-dependencies = ["benzene-core"]
+dependencies = ["benzene-core", "benzene-results"]
 
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"

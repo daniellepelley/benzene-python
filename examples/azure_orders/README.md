@@ -18,9 +18,10 @@ pytest examples/azure_orders
 
 The tests dogfood `benzene.testing` + `benzene.azure.testing`, driving the real bindings in memory.
 
-## Deploy (sketch)
+## Deploy
 
-In an isolated-worker Function App, add an HTTP trigger, a Service Bus trigger, and an Event Hub
-trigger whose functions adapt the `azure.functions` inputs to `app.handle_http_request(...)`,
-`app.handle_service_bus(msg)`, and `app.handle_event_hub(events)` respectively, and set the
-`BENZENE_SERVICEBUS_*` settings for egress.
+The entry point is [`function_app.py`](function_app.py) (the Azure Functions v2 programming model):
+an HTTP trigger, a Service Bus trigger, and an Event Hub trigger, each delegating to the
+`benzene.azure` entry-point helpers. Set `BENZENE_SERVICEBUS_CONNECTION` / `BENZENE_SERVICEBUS_ENTITY`
+(egress) and the trigger connection settings, then `func azure functionapp publish <app>`. Run
+locally with `func start`.

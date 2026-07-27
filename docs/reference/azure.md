@@ -31,8 +31,12 @@ app = AzureFunctionsApp(http_router=router, registry=registry)   # shares one pi
 - `handle_service_bus(message)` → `None` (duck-typed `get_body()` + `application_properties`).
 - `handle_event_hub(events)` → `None` (a single event or a list).
 
-The example's `main.py` adapts the `azure.functions` request/message types to these methods, so the
-package and its tests need no Azure SDK.
+The entry-point helpers `http_function(app)` / `service_bus_function(app)` / `event_hub_function(app)`
+wrap an app as the plain callables an Azure Functions trigger invokes (adapting the `azure.functions`
+types lazily) — mirroring `benzene.gcp.http_function` and `benzene.aws.to_lambda_handler`. The
+package and its tests need no Azure SDK; see the example's
+[`function_app.py`](https://github.com/daniellepelley/benzene-python/tree/main/examples/azure_orders/function_app.py)
+for the v2-model wiring.
 
 ## Outbound client
 

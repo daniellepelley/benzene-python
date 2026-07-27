@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
+
+from dataclasses import dataclass
 
 from benzene.core import (
     BenzeneMessageApplication,
@@ -12,7 +15,11 @@ from benzene.core import (
     DuplicateHandlerError,
     MiddlewarePipeline,
     Registry,
+    encode_body,
     message,
+    to_camel,
+    to_jsonable,
+    to_request,
 )
 from benzene.results import Result, Status
 
@@ -89,3 +96,40 @@ def test_handler_exception_becomes_service_unavailable() -> None:
     app = BenzeneMessageApplication(Registry().add(boom))
     response = asyncio.run(app.handle_async({"topic": "boom", "headers": {}, "body": "{}"}))
     assert response["statusCode"] == Status.SERVICE_UNAVAILABLE
+
+
+# --- wire-contracts §6: payload naming policy (cross-language interop) ----------------------
+
+
+@dataclass
+class MultiWord:
+    order_id: str = ""
+    line_count: int = 0
+
+
+def test_dataclass_payload_is_written_camelcase() -> None:
+    assert to_camel("order_id") == "orderId"
+    assert to_jsonable(MultiWord(order_id="o1", line_count=3)) == {"orderId": "o1", "lineCount": 3}
+    assert encode_body(MultiWord("o1", 3)) == '{"orderId": "o1", "lineCount": 3}'
+
+
+def test_dataclass_request_is_read_case_insensitively() -> None:
+    # An inbound camelCase payload (from a .NET/Go/TS peer) populates snake_case Python fields.
+    from_camel = to_request(MultiWord, {"orderId": "o1", "lineCount": 3})
+    assert from_camel == MultiWord(order_id="o1", line_count=3)
+    # snake_case and odd casing also work.
+    assert to_request(MultiWord, {"order_id": "o2", "LINECOUNT": 5}) == MultiWord("o2", 5)
+
+
+def test_camelcase_payload_round_trips_through_the_envelope() -> None:
+    @message("wire:echo", request_type=MultiWord)
+    async def echo(request: MultiWord) -> Result:
+        return Result.ok(request)
+
+    app = BenzeneMessageApplication(Registry().add(echo))
+    # Send camelCase in; expect camelCase back out.
+    response = asyncio.run(
+        app.handle_async({"topic": "wire:echo", "headers": {}, "body": '{"orderId": "o9", "lineCount": 2}'})
+    )
+    assert response["statusCode"] == Status.OK
+    assert json.loads(response["body"]) == {"orderId": "o9", "lineCount": 2}

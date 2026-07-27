@@ -9,14 +9,7 @@ from __future__ import annotations
 
 from .handlers import OrderService, make_get_order, make_on_order_created, make_place_order
 from .model import ORDER_CREATED_TOPIC, Order, OrderCreated, PlaceOrder
-from .wiring import (
-    GET_ORDER_TOPIC,
-    PLACE_ORDER_TOPIC,
-    OrdersWiring,
-    build_orders,
-    build_orders_registry,
-    build_orders_router,
-)
+from .wiring import GET_ORDER_TOPIC, PLACE_ORDER_TOPIC, OrdersWiring, build_orders
 
 __all__ = [
     "GET_ORDER_TOPIC",
@@ -28,8 +21,6 @@ __all__ = [
     "OrdersWiring",
     "PlaceOrder",
     "build_orders",
-    "build_orders_registry",
-    "build_orders_router",
     "make_get_order",
     "make_on_order_created",
     "make_place_order",

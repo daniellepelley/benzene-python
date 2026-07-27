@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from benzene.core import BenzeneMessageApplication, Registry
+from benzene.core import BenzeneMessageApplication, MessageHandlingError, Registry
 from benzene.http import BenzeneHttpApp, HttpRouter
 from benzene.results import is_successful
 
@@ -48,7 +48,7 @@ class AwsLambdaApp:
             BenzeneHttpApp(http_router, application=application) if http_router else None
         )
 
-    def handle(self, event: dict[str, Any], context: Any = None) -> Any:
+    def handle(self, event: dict[str, Any], context: Any = None) -> dict[str, Any] | None:
         source = event_source(event)
         if source == "apigateway":
             return self._handle_api_gateway(event)
@@ -73,24 +73,29 @@ class AwsLambdaApp:
 
     # --- SQS (partial batch response) ------------------------------------------------------
     def _handle_sqs(self, event: dict[str, Any]) -> dict[str, Any]:
-        failures: list[dict[str, str]] = []
-        for record in event.get("Records", []):
-            envelope = sqs_record_envelope(record)
-            response = asyncio.run(self._application.handle_async(envelope))
-            if not is_successful(response["statusCode"]):
-                failures.append({"itemIdentifier": record.get("messageId", "")})
-        return {"batchItemFailures": failures}
+        async def run() -> list[dict[str, str]]:
+            failures: list[dict[str, str]] = []
+            for record in event.get("Records", []):
+                envelope = sqs_record_envelope(record)
+                response = await self._application.handle_async(envelope)
+                if not is_successful(response["statusCode"]):
+                    failures.append({"itemIdentifier": record.get("messageId", "")})
+            return failures
+
+        return {"batchItemFailures": asyncio.run(run())}
 
     # --- SNS -------------------------------------------------------------------------------
     def _handle_sns(self, event: dict[str, Any]) -> None:
-        for record in event.get("Records", []):
-            envelope = sns_record_envelope(record)
-            response = asyncio.run(self._application.handle_async(envelope))
-            if not is_successful(response["statusCode"]):
-                raise RuntimeError(
-                    f"SNS handler for topic {envelope['topic']!r} failed with "
-                    f"status {response['statusCode']!r}: {response['body']}"
-                )
+        async def run() -> None:
+            for record in event.get("Records", []):
+                envelope = sns_record_envelope(record)
+                response = await self._application.handle_async(envelope)
+                if not is_successful(response["statusCode"]):
+                    raise MessageHandlingError(
+                        envelope["topic"], response["statusCode"], response["body"]
+                    )
+
+        asyncio.run(run())
 
 
 def to_lambda_handler(app: AwsLambdaApp):

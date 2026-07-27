@@ -8,8 +8,11 @@
 - **Event Hub** — a batch of events; **one scope per event**, processed in order; a failure raises
   (stops at the first failure, matching checkpoint semantics).
 
-The example's ``main.py`` adapts the ``azure-functions`` request/response types to these methods, so
-the package itself (and its tests) need no Azure SDK.
+The :func:`http_function` / :func:`service_bus_function` / :func:`event_hub_function` helpers wrap an
+app as the plain callables an Azure Functions trigger invokes (adapting the ``azure-functions``
+request/message types lazily), mirroring ``benzene.gcp.http_function`` and
+``benzene.aws.to_lambda_handler``. The package itself (and its tests) need no Azure SDK — see the
+example's ``function_app.py`` for the v2-model wiring.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
-from benzene.core import BenzeneMessageApplication, Registry
+from benzene.core import BenzeneMessageApplication, MessageHandlingError, Registry
 from benzene.http import BenzeneHttpApp, HttpRouter
 from benzene.results import is_successful
 
@@ -75,23 +78,69 @@ class AzureFunctionsApp:
 
     # --- Service Bus trigger ---------------------------------------------------------------
     def handle_service_bus(self, message: Any) -> None:
-        self._run_or_raise(decode_service_bus(message), "Service Bus")
+        asyncio.run(self._run_or_raise(decode_service_bus(message)))
 
     # --- Event Hub trigger -----------------------------------------------------------------
     def handle_event_hub(self, events: Any) -> None:
         # Cardinality 'many' delivers a list; 'one' a single event. Process each, one scope apiece.
         if _is_single_event(events):
             events = [events]
-        for event in events:
-            self._run_or_raise(decode_event_hub_event(event), "Event Hub")
 
-    def _run_or_raise(self, envelope: dict[str, Any], transport: str) -> None:
-        response = asyncio.run(self._application.handle_async(envelope))
+        async def run() -> None:
+            for event in events:
+                await self._run_or_raise(decode_event_hub_event(event))
+
+        asyncio.run(run())
+
+    async def _run_or_raise(self, envelope: dict[str, Any]) -> None:
+        response = await self._application.handle_async(envelope)
         if not is_successful(response["statusCode"]):
-            raise RuntimeError(
-                f"{transport} handler for topic {envelope['topic']!r} failed with "
-                f"status {response['statusCode']!r}: {response['body']}"
-            )
+            raise MessageHandlingError(envelope["topic"], response["statusCode"], response["body"])
+
+
+def http_function(app: AzureFunctionsApp):
+    """Return an Azure Functions HTTP entry point adapting ``azure.functions.HttpRequest``.
+
+    Mirrors ``benzene.gcp.http_function`` / ``benzene.aws.to_lambda_handler`` so the entry-point
+    idiom is the same across clouds. ``azure-functions`` is imported lazily inside the callable.
+    """
+
+    def entry(req: Any):
+        import azure.functions as func  # lazy: only needed at deploy time
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(getattr(req, "url", "") or "")
+        raw = req.get_body()
+        response = app.handle_http_request(
+            method=req.method,
+            path=parts.path or "/",
+            query_string=parts.query,
+            headers=dict(req.headers),
+            body=raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else (raw or ""),
+        )
+        return func.HttpResponse(
+            response.body, status_code=response.status_code, headers=response.headers
+        )
+
+    return entry
+
+
+def service_bus_function(app: AzureFunctionsApp):
+    """Return a Service Bus entry point: ``def entry(message)``."""
+
+    def entry(message: Any) -> None:
+        app.handle_service_bus(message)
+
+    return entry
+
+
+def event_hub_function(app: AzureFunctionsApp):
+    """Return an Event Hub entry point: ``def entry(events)`` (single event or a batch)."""
+
+    def entry(events: Any) -> None:
+        app.handle_event_hub(events)
+
+    return entry
 
 
 def _is_single_event(events: Any) -> bool:

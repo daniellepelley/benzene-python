@@ -9,6 +9,7 @@ and it is exactly what makes the handlers testable: a test injects an in-memory 
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from benzene.core import Handler, MessageSender
 from benzene.results import Result
@@ -49,7 +50,7 @@ def make_place_order(service: OrderService, sender: MessageSender) -> Handler:
 def make_get_order(service: OrderService) -> Handler:
     """GET /orders/{id} → fetch an order."""
 
-    async def get_order(request: dict) -> Result:
+    async def get_order(request: dict[str, Any]) -> Result:
         order = service.get(request.get("id", ""))
         if order is None:
             return Result.not_found(f"No order {request.get('id')!r}")

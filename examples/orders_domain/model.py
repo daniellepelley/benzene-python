@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 #: Topic the order-created event is published on (and subscribed to over Pub/Sub, SNS, etc.).
-ORDER_CREATED_TOPIC = "orders.created"
+#: Uses the ``:`` separator convention from core-concepts §2 (matching the .NET reference examples).
+ORDER_CREATED_TOPIC = "orders:created"
 
 
 @dataclass

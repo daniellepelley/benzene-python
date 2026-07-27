@@ -6,22 +6,12 @@ property plus one per header). ``azure-servicebus`` is an optional dependency, i
 
 from __future__ import annotations
 
-import json
 from typing import Any, Callable
 
+from benzene.core import encode_body
 from benzene.results import Result, Status
 
 from .events import TOPIC_PROPERTY
-
-
-def _default_serialize(message: Any) -> str:
-    from dataclasses import asdict, is_dataclass
-
-    if isinstance(message, str):
-        return message
-    if is_dataclass(message) and not isinstance(message, type):
-        return json.dumps(asdict(message))
-    return json.dumps(message)
 
 
 class ServiceBusMessageSender:
@@ -41,7 +31,7 @@ class ServiceBusMessageSender:
         self._connection_string = connection_string
         self._entity_name = entity_name
         self._sender = sender
-        self._serialize = serializer or _default_serialize
+        self._serialize = serializer or encode_body
 
     def _make_message(self, topic: str, message: Any, headers: dict[str, str] | None) -> Any:
         from azure.servicebus import ServiceBusMessage  # lazy: optional dependency

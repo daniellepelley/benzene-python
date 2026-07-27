@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from benzene.core import BenzeneMessageApplication, Registry
+from benzene.core import BenzeneMessageApplication, MessageHandlingError, Registry
 from benzene.http import BenzeneHttpApp, HttpRouter
 from benzene.results import is_successful
 
@@ -72,10 +72,7 @@ class GcpFunctionsApp:
         envelope = decode_pubsub_message(message)
         response = asyncio.run(self._application.handle_async(envelope))
         if not is_successful(response["statusCode"]):
-            raise RuntimeError(
-                f"Pub/Sub handler for topic {envelope['topic']!r} failed with "
-                f"status {response['statusCode']!r}: {response['body']}"
-            )
+            raise MessageHandlingError(envelope["topic"], response["statusCode"], response["body"])
 
 
 def http_function(app: GcpFunctionsApp):

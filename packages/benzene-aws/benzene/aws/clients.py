@@ -7,22 +7,12 @@ end. ``boto3`` is an optional dependency, imported lazily.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Callable
 
+from benzene.core import encode_body
 from benzene.results import Result, Status
 
 from .events import TOPIC_ATTRIBUTE
-
-
-def _default_serialize(message: Any) -> str:
-    from dataclasses import asdict, is_dataclass
-
-    if isinstance(message, str):
-        return message
-    if is_dataclass(message) and not isinstance(message, type):
-        return json.dumps(asdict(message))
-    return json.dumps(message)
 
 
 def _string_attributes(topic: str, headers: dict[str, str] | None) -> dict[str, dict[str, str]]:
@@ -40,7 +30,7 @@ class SnsMessageSender:
     ) -> None:
         self._topic_arn = topic_arn
         self._client = client
-        self._serialize = serializer or _default_serialize
+        self._serialize = serializer or encode_body
 
     def _sns(self) -> Any:
         if self._client is None:
@@ -71,7 +61,7 @@ class SqsMessageSender:
     ) -> None:
         self._queue_url = queue_url
         self._client = client
-        self._serialize = serializer or _default_serialize
+        self._serialize = serializer or encode_body
 
     def _sqs(self) -> Any:
         if self._client is None:

@@ -13,9 +13,9 @@ onto the native message attributes so correlation/trace propagation works end to
 from __future__ import annotations
 
 import base64
-import json
 from typing import Any, Callable
 
+from benzene.core import encode_body
 from benzene.results import Result, Status
 
 #: Message-attribute name carrying the Benzene topic (the cross-port convention).
@@ -60,7 +60,7 @@ class PubSubMessageSender:
     ) -> None:
         self._topic_path = topic_path
         self._publisher = publisher
-        self._serialize = serializer or _default_serialize
+        self._serialize = serializer or encode_body
 
     def _client(self) -> Any:
         if self._publisher is None:
@@ -82,13 +82,3 @@ class PubSubMessageSender:
         except Exception as ex:  # a failed publish is a service-unavailable, not a crash
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
-
-
-def _default_serialize(message: Any) -> str:
-    from dataclasses import asdict, is_dataclass
-
-    if isinstance(message, str):
-        return message
-    if is_dataclass(message) and not isinstance(message, type):
-        return json.dumps(asdict(message))
-    return json.dumps(message)

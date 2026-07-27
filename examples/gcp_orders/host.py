@@ -26,6 +26,12 @@ def build_gcp_orders_app(
     if sender is None:
         import os
 
-        sender = PubSubMessageSender(os.environ["BENZENE_PUBSUB_TOPIC"])
+        topic = os.environ.get("BENZENE_PUBSUB_TOPIC")
+        if not topic:
+            raise RuntimeError(
+                "Set BENZENE_PUBSUB_TOPIC (projects/<project>/topics/<topic>) to run the GCP host "
+                "with a real Pub/Sub client, or pass sender=... (e.g. a FakeMessageSender) in tests."
+            )
+        sender = PubSubMessageSender(topic)
     wiring = build_orders(service, sender, seen if seen is not None else [])
     return GcpFunctionsApp(http_router=wiring.router, registry=wiring.registry)

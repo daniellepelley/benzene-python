@@ -26,6 +26,12 @@ def build_aws_orders_app(
     if sender is None:
         import os
 
-        sender = SnsMessageSender(os.environ["BENZENE_SNS_TOPIC_ARN"])
+        topic_arn = os.environ.get("BENZENE_SNS_TOPIC_ARN")
+        if not topic_arn:
+            raise RuntimeError(
+                "Set BENZENE_SNS_TOPIC_ARN to run the AWS host with a real SNS client, "
+                "or pass sender=... (e.g. a FakeMessageSender) in tests."
+            )
+        sender = SnsMessageSender(topic_arn)
     wiring = build_orders(service, sender, seen if seen is not None else [])
     return AwsLambdaApp(http_router=wiring.router, registry=wiring.registry)

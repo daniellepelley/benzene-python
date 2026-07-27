@@ -69,4 +69,4 @@ def test_event_hub_batch_is_handled_per_event() -> None:
 def test_service_bus_unroutable_topic_raises_for_retry() -> None:
     host, _, _, _ = make_host()
     with pytest.raises(RuntimeError):
-        host.send_service_bus("orders.unknown", {})
+        host.send_service_bus("orders:unknown", {})
