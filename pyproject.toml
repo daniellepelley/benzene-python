@@ -21,5 +21,6 @@ pythonpath = [
     "packages/benzene-testing",
     "packages/benzene-gcp",
     "packages/benzene-aws",
+    "packages/benzene-azure",
     "examples",
 ]

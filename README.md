@@ -33,6 +33,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-http` | `benzene.http` | inbound HTTP (ASGI) binding + status mapping | `benzene-core` | `Benzene.Http` |
 | `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
 | `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + egress) | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` |
+| `benzene-azure` | `benzene.azure` | Azure Functions host (HTTP + Service Bus + Event Hub + egress) | `benzene-core`, `benzene-http` | `Benzene.Azure.Function.*` |
 | `benzene-testing` | `benzene.testing` | in-memory test host + fakes (dev/test) | `benzene-core` | `Benzene.Testing` |
 
 Adoption levels, bottom to top:
@@ -133,8 +134,8 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 3. **(done)** Layered, install-what-you-use packages (`benzene-results` / `-core` / `-http`).
 4. **(in progress)** Cloud hosts — the "host anywhere" proof on Python, each a multi-transport,
    dogfood-tested example per the [Port Quality Standards](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/port-quality-standards.md):
-   **GCP (done)** — `benzene-gcp`, HTTP + Pub/Sub + egress; **AWS (done)** — `benzene-aws`, API
-   Gateway + SQS + SNS + egress; **Azure** next.
+   **GCP** (`benzene-gcp`, HTTP + Pub/Sub), **AWS** (`benzene-aws`, API Gateway + SQS + SNS), and
+   **Azure** (`benzene-azure`, HTTP + Service Bus + Event Hub) — all done, each with egress.
 5. The mesh module (ServiceDescriptor + `/benzene/spec`) so Python services appear in the mesh UI.
 6. Payload versioning and gRPC.
 

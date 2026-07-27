@@ -1,0 +1,4 @@
+# Runtime dependencies for deploying the Azure orders example to Azure Functions.
+# (In this monorepo the benzene-* packages resolve locally; on a real deploy they come from PyPI.)
+azure-functions
+benzene-azure[servicebus]

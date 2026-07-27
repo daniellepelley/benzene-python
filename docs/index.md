@@ -21,6 +21,7 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 - **[`benzene.http`](reference/http.md)** — the inbound HTTP (ASGI) transport binding.
 - **[`benzene.gcp`](reference/gcp.md)** — the Google Cloud Functions host (HTTP + Pub/Sub).
 - **[`benzene.aws`](reference/aws.md)** — the AWS Lambda host (API Gateway + SQS + SNS).
+- **[`benzene.azure`](reference/azure.md)** — the Azure Functions host (HTTP + Service Bus + Event Hub).
 - **[`benzene.testing`](reference/testing.md)** — the in-memory test host and test doubles.
 
 ## Guides & cookbooks
@@ -29,6 +30,8 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
   HTTP + Pub/Sub triggers, with Pub/Sub egress.
 - **[Hosting on AWS Lambda](cookbooks/hosting-on-aws.md)** — one function across API Gateway + SQS +
   SNS, with SNS egress.
+- **[Hosting on Azure Functions](cookbooks/hosting-on-azure.md)** — HTTP + Service Bus + Event Hub
+  triggers, with Service Bus egress.
 - **[Examples](https://github.com/daniellepelley/benzene-python/tree/main/examples)** — runnable,
   multi-transport cloud examples, each with dogfooded tests.
 

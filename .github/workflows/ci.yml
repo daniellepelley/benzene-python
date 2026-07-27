@@ -29,7 +29,8 @@ jobs:
             -e packages/benzene-http \
             -e packages/benzene-testing \
             -e packages/benzene-gcp \
-            -e packages/benzene-aws
+            -e packages/benzene-aws \
+            -e packages/benzene-azure
           pip install pytest
       - name: Conformance (dependency-free runner)
         run: python -m tests.conformance_runner
