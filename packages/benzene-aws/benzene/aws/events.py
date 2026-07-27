@@ -15,9 +15,10 @@ TOPIC_ATTRIBUTE = "topic"
 
 
 def is_api_gateway(event: dict[str, Any]) -> bool:
-    return "httpMethod" in event or "requestContext" in event and "http" in event.get(
-        "requestContext", {}
-    )
+    # v1 proxy events carry httpMethod; v2 (HTTP API) carry requestContext.http.
+    if "httpMethod" in event:
+        return True
+    return "http" in (event.get("requestContext") or {})
 
 
 def event_source(event: dict[str, Any]) -> str | None:
