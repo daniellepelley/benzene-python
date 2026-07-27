@@ -15,19 +15,17 @@ from __future__ import annotations
 import base64
 from typing import Any, Callable
 
-from benzene.core import encode_body
+from benzene.core import TOPIC_KEY, encode_body, take_topic
 from benzene.results import Result, Status
 
 #: Message-attribute name carrying the Benzene topic (wire-contracts §2, tier A). Prefixed because
 #: an attribute shares a namespace with the application; the envelope's own ``topic`` field is not.
-TOPIC_ATTRIBUTE = "benzene-topic"
+TOPIC_ATTRIBUTE = TOPIC_KEY
 
 
 def decode_pubsub_message(message: dict[str, Any]) -> dict[str, Any]:
     """Decode a Pub/Sub ``message`` dict into a Benzene envelope ``{topic, headers, body}``."""
-    attributes = {str(k): str(v) for k, v in (message.get("attributes") or {}).items()}
-    topic = attributes.get(TOPIC_ATTRIBUTE, "")
-    headers = {k: v for k, v in attributes.items() if k != TOPIC_ATTRIBUTE}
+    topic, headers = take_topic(message.get("attributes") or {})
 
     raw = message.get("data")
     if raw is None:

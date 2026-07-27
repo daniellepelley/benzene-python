@@ -15,7 +15,10 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlencode
 
-TOPIC_ATTRIBUTE = "benzene-topic"
+from benzene.core import TOPIC_KEY, take_topic
+
+#: Alias of the core constant — one definition across every binding (wire-contracts §2).
+TOPIC_ATTRIBUTE = TOPIC_KEY
 
 
 def is_api_gateway(event: dict[str, Any]) -> bool:
@@ -61,10 +64,9 @@ def api_gateway_request(event: dict[str, Any]) -> dict[str, Any]:
 def sqs_record_envelope(record: dict[str, Any]) -> dict[str, Any]:
     """Map one SQS record to a Benzene envelope. Topic from the ``topic`` message attribute."""
     attributes = record.get("messageAttributes") or {}
-    headers = {
-        str(k): str(v.get("stringValue", "")) for k, v in attributes.items()
-    }
-    topic = headers.pop(TOPIC_ATTRIBUTE, "")
+    topic, headers = take_topic(
+        {k: (v or {}).get("stringValue", "") for k, v in attributes.items()}
+    )
     return {"topic": topic, "headers": headers, "body": record.get("body") or ""}
 
 
@@ -72,6 +74,5 @@ def sns_record_envelope(record: dict[str, Any]) -> dict[str, Any]:
     """Map one SNS record to a Benzene envelope. Topic from the ``topic`` message attribute."""
     sns = record.get("Sns") or {}
     attributes = sns.get("MessageAttributes") or {}
-    headers = {str(k): str(v.get("Value", "")) for k, v in attributes.items()}
-    topic = headers.pop(TOPIC_ATTRIBUTE, "")
+    topic, headers = take_topic({k: (v or {}).get("Value", "") for k, v in attributes.items()})
     return {"topic": topic, "headers": headers, "body": sns.get("Message") or ""}
