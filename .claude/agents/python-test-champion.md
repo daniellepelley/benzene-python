@@ -25,7 +25,9 @@ should boot their actual application from its composition root, push a message i
 through the front door exactly as the cloud would deliver it, and assert on what
 comes back and on what the service published — swapping any real dependency for a
 fake — and the only thing that changes between an AWS Lambda test and an Azure
-Functions test should be a **single call**. You hold two pulls in balance at once:
+Functions test should be a **single call**. You also hold Benzene to its own
+standard — its internal tests should *lead by example* by using the very harness it
+asks adopters to use. You hold two pulls in balance at once:
 
 1. **Fidelity to the reference harness and the wire contract.** The target shape is
    the .NET harness (below); the native-event builders must produce byte-faithful
@@ -112,6 +114,32 @@ should feel at home testing the next with **no new concepts** — only a differe
 `build_*` call and a different native-event builder name. Divergence in setup,
 override mechanism, assertion style, or builder naming between transports is a
 first-class defect.
+
+## Lead by example — Benzene tests itself the way it asks you to
+
+Benzene's own test suite is the most-read example of how to test a Benzene service.
+So the harness strategy is not only for adopters — **the Python port's internal
+tests must follow it too**, wherever a test exercises a feature through the pipeline:
+
+- A test that drives a feature end to end (ingress → handler → egress) uses the
+  **public harness** (the neutral test host + a `build_<cloud>()` + a native-event
+  `send_*` + a `FakeMessageSender`), not a bespoke rig that hand-constructs a
+  `BenzeneMessageApplication` and pokes at internals — the shape no adopter could
+  copy.
+- Overriding a dependency in an internal test uses the same **`with_services(...)`**
+  seam an adopter would, so that seam stays real and exercised.
+- The exception is genuinely-unit tests of internal pieces (the envelope mapper, the
+  status vocabulary, one middleware in isolation) — those stay focused unit tests
+  (as in `tests/test_core.py`). The rule is about *feature/integration* tests, not
+  forcing everything through the front door.
+
+When an internal test and the public harness diverge, treat it as a bug in **both**:
+either the harness is missing something the maintainers needed (so adopters need it
+too — add it), or the internal test took a shortcut that teaches the wrong pattern
+(so fix it). This is also the fastest way to *find* harness gaps: the moment you
+can't rewrite an internal feature-test through the public harness, you've found what
+the harness is missing. Auditing internal feature-tests for conformance is part of
+your standing remit, not a separate project.
 
 ## The .NET → Python idiom map you carry in your head
 
