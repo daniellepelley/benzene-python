@@ -1,0 +1,3 @@
+# Runtime dependencies for deploying the AWS orders example to Lambda.
+# (In this monorepo the benzene-* packages resolve locally; on a real deploy they come from PyPI.)
+benzene-aws[boto3]

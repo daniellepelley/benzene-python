@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene-aws"
+version = "0.0.1"
+description = "Benzene AWS Lambda host — API Gateway + SQS + SNS bindings and SNS/SQS outbound clients."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Benzene" }]
+keywords = ["benzene", "aws", "lambda", "sqs", "sns", "api-gateway", "hexagonal"]
+dependencies = ["benzene-core", "benzene-http"]
+
+[project.optional-dependencies]
+# Only needed for the real SNS/SQS outbound clients; inbound bindings + tests need no AWS SDK.
+boto3 = ["boto3>=1.26"]
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
+
+# PEP 420 namespace package — see benzene-results/pyproject.toml.
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]

@@ -14,6 +14,7 @@ Python equivalent.
 | [`benzene-core`](https://pypi.org/project/benzene-core/) | `benzene.core` | handler registry + `@message`, the middleware pipeline, per-invocation DI, and the transport-neutral `BenzeneMessage` envelope | `benzene-results` |
 | [`benzene-http`](https://pypi.org/project/benzene-http/) | `benzene.http` | the inbound HTTP (ASGI) binding and the Benzene↔HTTP status mapping | `benzene-core` |
 | [`benzene-gcp`](https://pypi.org/project/benzene-gcp/) | `benzene.gcp` | the Google Cloud Functions host (HTTP + Pub/Sub bindings, Pub/Sub outbound client) | `benzene-core`, `benzene-http` |
+| [`benzene-aws`](https://pypi.org/project/benzene-aws/) | `benzene.aws` | the AWS Lambda host (API Gateway + SQS + SNS bindings, SNS/SQS outbound clients) | `benzene-core`, `benzene-http` |
 | [`benzene-testing`](https://pypi.org/project/benzene-testing/) | `benzene.testing` | in-memory test host + test doubles (a dev/test dependency) | `benzene-core` |
 
 Because Benzene uses a [PEP 420 namespace package](https://peps.python.org/pep-0420/), all of these
