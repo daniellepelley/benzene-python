@@ -31,6 +31,7 @@ from .handler import Handler, HandlerDefinition, definition_of, message
 from .mapping import encode_body, to_camel, to_jsonable, to_request
 from .pipeline import Middleware, MiddlewarePipeline, Next
 from .registry import DuplicateHandlerError, Registry
+from .startup import AppDefinition, BenzeneStartUp, build_application
 from .router import message_router
 
 __all__ = [
@@ -46,7 +47,10 @@ __all__ = [
     "Middleware",
     "MiddlewarePipeline",
     "Next",
+    "AppDefinition",
+    "BenzeneStartUp",
     "Registry",
+    "build_application",
     "Scope",
     "VERSION_HEADER",
     "definition_of",

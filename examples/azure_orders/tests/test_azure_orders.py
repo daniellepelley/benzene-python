@@ -11,19 +11,29 @@ import json
 
 import pytest
 
-from benzene.azure.testing import AzureFunctionsTestHost
-from benzene.testing import FakeMessageSender
+from benzene.core import MessageSender
+from benzene.testing import FakeMessageSender, create_test_host
 
-from azure_orders import build_azure_orders_app
-from orders_domain import ORDER_CREATED_TOPIC, OrderService
+from orders_domain import ORDER_CREATED_TOPIC, ORDER_EVENTS_KEY, OrderService, OrdersStartUp
 
 
-def make_host() -> tuple[AzureFunctionsTestHost, OrderService, FakeMessageSender, list[str]]:
+def make_host():
+    """Boot the real app from OrdersStartUp, fake only the edges, specialize to Azure.
+
+    Identical to the GCP and AWS suites except the single ``.build_azure()`` call and the ``send_*``
+    shape — the test-champion consistency law in action.
+    """
     service = OrderService()
     sender = FakeMessageSender()
     seen: list[str] = []
-    app = build_azure_orders_app(service, sender, seen)
-    return AzureFunctionsTestHost(app), service, sender, seen
+
+    def overrides(services):
+        services.add_instance(OrderService, service)
+        services.add_instance(MessageSender, sender)
+        services.add_instance(ORDER_EVENTS_KEY, seen)
+
+    host = create_test_host(OrdersStartUp).with_services(overrides).build_azure()
+    return host, service, sender, seen
 
 
 def test_http_place_order_creates_and_publishes() -> None:

@@ -9,19 +9,30 @@ from __future__ import annotations
 
 import json
 
-from benzene.aws.testing import AwsLambdaTestHost, SqsEventBuilder
-from benzene.testing import FakeMessageSender
+from benzene.aws.testing import SqsEventBuilder
+from benzene.core import MessageSender
+from benzene.testing import FakeMessageSender, create_test_host
 
-from aws_orders import build_aws_orders_app
-from orders_domain import ORDER_CREATED_TOPIC, OrderService
+from orders_domain import ORDER_CREATED_TOPIC, ORDER_EVENTS_KEY, OrderService, OrdersStartUp
 
 
-def make_host() -> tuple[AwsLambdaTestHost, OrderService, FakeMessageSender, list[str]]:
+def make_host():
+    """Boot the real app from OrdersStartUp, fake only the edges, specialize to AWS.
+
+    Identical to the GCP and Azure suites except the single ``.build_aws()`` call and the ``send_*``
+    shape — the test-champion consistency law in action.
+    """
     service = OrderService()
     sender = FakeMessageSender()
     seen: list[str] = []
-    app = build_aws_orders_app(service, sender, seen)
-    return AwsLambdaTestHost(app), service, sender, seen
+
+    def overrides(services):
+        services.add_instance(OrderService, service)
+        services.add_instance(MessageSender, sender)
+        services.add_instance(ORDER_EVENTS_KEY, seen)
+
+    host = create_test_host(OrdersStartUp).with_services(overrides).build_aws()
+    return host, service, sender, seen
 
 
 def test_api_gateway_place_order_creates_and_publishes() -> None:

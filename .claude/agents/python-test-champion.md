@@ -170,28 +170,28 @@ flag anything that took the C# form literally:
 
 ## Current state & your first mission (verify, don't assume)
 
-The port today ships `benzene.testing` (`InMemoryBenzeneHost`, `MessageBuilder`,
-`FakeMessageSender`) and **per-cloud** test hosts (`GcpFunctionsTestHost`,
-`AwsLambdaTestHost`, `AzureFunctionsTestHost`) with parallel `send_*` methods and
-native-event builders, dogfooded by `examples/*/tests`. That already satisfies
-invariants 4–6 well. The gaps to drive down are invariants 1–3 and the consistency
-law:
+The unified harness now exists (all six invariants + the consistency law are met for
+the order example): `benzene.core` has the composition root (`BenzeneStartUp`,
+`AppDefinition`, `build_application`) with a container-based `with_services` override
+seam; `benzene.testing` has `create_test_host(StartUp).with_services(...).build_gcp()
+/.build_aws()/.build_azure()`; and the three example suites plus `tests/test_startup.py`
+dogfood it — setup identical across clouds bar the `build_<cloud>()` call and the
+`send_*` shape. The remaining work to drive down:
 
-- There is **no single provider-agnostic entry point** yet (`create_test_host(StartUp)`
-  with a one-call `.build_<cloud>()` specialization); each example constructs a
-  per-cloud host object directly. Converging on one neutral builder is the headline
-  work.
-- Python handlers currently receive collaborators via **`make_*` factory closures**,
-  not a DI container, so "override *any* registration" (invariant 3) has no seam.
-  Deciding whether the examples' composition root should wire through
-  `benzene.core`'s container so `.with_services(...)` can override it — versus a
-  lighter Python-idiomatic override — is the central design question, and you own
-  landing it **with the `python-dx-champion`** (spec/idiom balance) rather than
-  alone.
-- Audit builder **parallelism**: the three clouds should take topic+payload+headers
-  the same way and return response objects with the same-named fields.
+- **Broader lead-by-example.** Sweep the *library's own* `tests/` (not just the
+  examples) for feature/integration tests that hand-construct a
+  `BenzeneMessageApplication` or poke internals instead of going through the harness,
+  and convert the ones that exercise a feature end to end.
+- **Builder parallelism polish.** Keep the three clouds' `send_*` names, argument
+  order, and response object field names in lockstep as transports are added; the
+  moment one drifts, it's a finding.
+- **Scope access & config.** If test authors need to resolve services for assertions,
+  consider exposing the built scope on the test host; flesh out `with_config` usage as
+  real config-driven handlers appear.
+- **Coverage of new transports/clouds.** Every new host must arrive with its
+  `build_<cloud>()` + native-event builders + a dogfooded example, or it's not done.
 
-Treat this as the roadmap, but re-verify against the code each time — it will move.
+Re-verify against the code each time — it will move.
 
 ## How you work — audit by doing, then harden
 

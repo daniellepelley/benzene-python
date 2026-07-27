@@ -1,15 +1,16 @@
-"""GCP host wiring: mount the shared order domain onto Cloud Functions HTTP + Pub/Sub triggers.
+"""GCP host wiring: boot the shared ``OrdersStartUp`` and specialize it to Cloud Functions.
 
-Compare with ``aws_orders`` / ``azure_orders``: only this file changes between clouds — the domain
-(``orders_domain``) is identical.
+Deployment and tests build the app from the *same* composition root (``OrdersStartUp``); only the
+outbound ``MessageSender`` differs — the real Pub/Sub client here, a fake in tests. Only this file
+is GCP-specific.
 """
 
 from __future__ import annotations
 
-from benzene.core import MessageSender
+from benzene.core import Container, MessageSender, build_application
 from benzene.gcp import GcpFunctionsApp, PubSubMessageSender
 
-from orders_domain import OrderService, build_orders
+from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
 
 
 def build_gcp_orders_app(
@@ -17,21 +18,30 @@ def build_gcp_orders_app(
     sender: MessageSender | None = None,
     seen: list[str] | None = None,
 ) -> GcpFunctionsApp:
-    """Build the GCP Functions app for the order domain.
+    """Build the GCP Functions app for the order domain, booting from ``OrdersStartUp``.
 
-    Pass a store / outbound client / event log for tests; in production the defaults create a real
-    :class:`~benzene.gcp.PubSubMessageSender` (its Pub/Sub topic comes from configuration).
+    Pass a store / outbound client / event log to override the defaults (tests do this via the test
+    harness instead); in production the default publishes ``orders:created`` to the Pub/Sub topic
+    named by ``BENZENE_PUBSUB_TOPIC``.
     """
-    service = service or OrderService()
-    if sender is None:
-        import os
 
-        topic = os.environ.get("BENZENE_PUBSUB_TOPIC")
-        if not topic:
-            raise RuntimeError(
-                "Set BENZENE_PUBSUB_TOPIC (projects/<project>/topics/<topic>) to run the GCP host "
-                "with a real Pub/Sub client, or pass sender=... (e.g. a FakeMessageSender) in tests."
-            )
-        sender = PubSubMessageSender(topic)
-    wiring = build_orders(service, sender, seen if seen is not None else [])
-    return GcpFunctionsApp(http_router=wiring.router, registry=wiring.registry)
+    def overrides(services: Container) -> None:
+        if service is not None:
+            services.add_instance(OrderService, service)
+        if seen is not None:
+            services.add_instance(ORDER_EVENTS_KEY, seen)
+        if sender is not None:
+            services.add_instance(MessageSender, sender)
+        else:
+            import os
+
+            topic = os.environ.get("BENZENE_PUBSUB_TOPIC")
+            if not topic:
+                raise RuntimeError(
+                    "Set BENZENE_PUBSUB_TOPIC (projects/<project>/topics/<topic>) to run the GCP "
+                    "host with a real Pub/Sub client, or pass sender=... in tests."
+                )
+            services.add_instance(MessageSender, PubSubMessageSender(topic))
+
+    definition, _ = build_application(OrdersStartUp, overrides=[overrides])
+    return GcpFunctionsApp(http_router=definition.router, registry=definition.registry)

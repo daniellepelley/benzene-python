@@ -1,15 +1,16 @@
-"""AWS host wiring: mount the shared order domain onto Lambda (API Gateway + SQS + SNS + egress).
+"""AWS host wiring: boot the shared ``OrdersStartUp`` and specialize it to Lambda.
 
-Only this file differs from the GCP and Azure hosts — the domain (``orders_domain``) is identical.
-The ``orders.created`` subscriber handles the event whether it arrives over SQS or SNS.
+Deployment and tests build the app from the *same* composition root (``OrdersStartUp``); only the
+outbound ``MessageSender`` differs — the real SNS client here, a fake in tests. Only this file is
+AWS-specific. The ``orders:created`` subscriber handles the event whether it arrives over SQS or SNS.
 """
 
 from __future__ import annotations
 
 from benzene.aws import AwsLambdaApp, SnsMessageSender
-from benzene.core import MessageSender
+from benzene.core import Container, MessageSender, build_application
 
-from orders_domain import OrderService, build_orders
+from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
 
 
 def build_aws_orders_app(
@@ -17,21 +18,29 @@ def build_aws_orders_app(
     sender: MessageSender | None = None,
     seen: list[str] | None = None,
 ) -> AwsLambdaApp:
-    """Build the AWS Lambda app for the order domain.
+    """Build the AWS Lambda app for the order domain, booting from ``OrdersStartUp``.
 
-    Pass a store / outbound client / event log for tests; in production the default publishes
-    ``orders.created`` to the SNS topic named by ``BENZENE_SNS_TOPIC_ARN``.
+    In production the default publishes ``orders:created`` to the SNS topic named by
+    ``BENZENE_SNS_TOPIC_ARN``; tests override the sender via the test harness.
     """
-    service = service or OrderService()
-    if sender is None:
-        import os
 
-        topic_arn = os.environ.get("BENZENE_SNS_TOPIC_ARN")
-        if not topic_arn:
-            raise RuntimeError(
-                "Set BENZENE_SNS_TOPIC_ARN to run the AWS host with a real SNS client, "
-                "or pass sender=... (e.g. a FakeMessageSender) in tests."
-            )
-        sender = SnsMessageSender(topic_arn)
-    wiring = build_orders(service, sender, seen if seen is not None else [])
-    return AwsLambdaApp(http_router=wiring.router, registry=wiring.registry)
+    def overrides(services: Container) -> None:
+        if service is not None:
+            services.add_instance(OrderService, service)
+        if seen is not None:
+            services.add_instance(ORDER_EVENTS_KEY, seen)
+        if sender is not None:
+            services.add_instance(MessageSender, sender)
+        else:
+            import os
+
+            topic_arn = os.environ.get("BENZENE_SNS_TOPIC_ARN")
+            if not topic_arn:
+                raise RuntimeError(
+                    "Set BENZENE_SNS_TOPIC_ARN to run the AWS host with a real SNS client, "
+                    "or pass sender=... in tests."
+                )
+            services.add_instance(MessageSender, SnsMessageSender(topic_arn))
+
+    definition, _ = build_application(OrdersStartUp, overrides=[overrides])
+    return AwsLambdaApp(http_router=definition.router, registry=definition.registry)

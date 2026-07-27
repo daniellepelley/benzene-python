@@ -11,19 +11,29 @@ import json
 
 import pytest
 
-from benzene.gcp.testing import GcpFunctionsTestHost
-from benzene.testing import FakeMessageSender
+from benzene.core import MessageSender
+from benzene.testing import FakeMessageSender, create_test_host
 
-from gcp_orders import build_gcp_orders_app
-from orders_domain import ORDER_CREATED_TOPIC, OrderService
+from orders_domain import ORDER_CREATED_TOPIC, ORDER_EVENTS_KEY, OrderService, OrdersStartUp
 
 
-def make_host() -> tuple[GcpFunctionsTestHost, OrderService, FakeMessageSender, list[str]]:
+def make_host():
+    """Boot the real app from OrdersStartUp, fake only the edges, specialize to GCP.
+
+    Note the setup is identical to the AWS and Azure suites except the single ``.build_gcp()`` call
+    and the ``send_*`` shape — the test-champion consistency law in action.
+    """
     service = OrderService()
     sender = FakeMessageSender()
     seen: list[str] = []
-    app = build_gcp_orders_app(service, sender, seen)
-    return GcpFunctionsTestHost(app), service, sender, seen
+
+    def overrides(services):
+        services.add_instance(OrderService, service)     # override ANY registration...
+        services.add_instance(MessageSender, sender)      # ...only the external edge is faked
+        services.add_instance(ORDER_EVENTS_KEY, seen)
+
+    host = create_test_host(OrdersStartUp).with_services(overrides).build_gcp()
+    return host, service, sender, seen
 
 
 def test_http_place_order_creates_and_publishes() -> None:

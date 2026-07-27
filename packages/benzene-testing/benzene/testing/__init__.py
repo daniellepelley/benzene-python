@@ -9,6 +9,7 @@ event builders on top (e.g. ``benzene.gcp.testing``, ``benzene.aws.testing``). M
 from __future__ import annotations
 
 from .fakes import FakeMessageSender, SentMessage
+from .harness import TestHostBuilder, create_test_host
 from .host import InMemoryBenzeneHost, MessageBuilder
 
 __all__ = [
@@ -16,4 +17,6 @@ __all__ = [
     "InMemoryBenzeneHost",
     "MessageBuilder",
     "SentMessage",
+    "TestHostBuilder",
+    "create_test_host",
 ]
