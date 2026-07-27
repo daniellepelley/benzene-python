@@ -17,7 +17,7 @@ One host, one binding per trigger (transport-bindings §1):
   the message is retried / dead-lettered.
 - **Event Hub** — a batch of events; one scope per event, in order; a failure raises.
 
-Topic for Service Bus/Event Hub comes from the `topic` application property.
+Topic for Service Bus/Event Hub comes from the `benzene-topic` application property.
 
 ## `AzureFunctionsApp`
 

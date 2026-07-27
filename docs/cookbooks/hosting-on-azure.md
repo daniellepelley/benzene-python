@@ -48,7 +48,7 @@ def orders_event_hub(events: list[func.EventHubEvent]) -> None:
     _eh(events)                              # one scope per event
 ```
 
-Service Bus / Event Hub read the topic from the message's `topic` application property; a failure
+Service Bus / Event Hub read the topic from the message's `benzene-topic` application property; a failure
 raises so the platform retries / dead-letters.
 
 ## Test every trigger in memory (dogfooded)

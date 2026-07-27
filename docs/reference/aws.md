@@ -18,7 +18,7 @@ One host, inner bindings selected by event shape (transport-bindings §1):
   (`batchItemFailures`) so only failed records redeliver.
 - **SNS** — one scope per record; a failure raises so Lambda retries.
 
-Topic for SQS/SNS comes from the `topic` message attribute.
+Topic for SQS/SNS comes from the `benzene-topic` message attribute.
 
 ## `AwsLambdaApp`
 

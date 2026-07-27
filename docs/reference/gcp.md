@@ -12,7 +12,7 @@ pip install benzene-gcp            # add [pubsub] for the real outbound client
 One host, two triggers, the same handlers behind both (transport-bindings §1):
 
 - **HTTP** — delegates to the `benzene.http` binding (route → topic, status mapping).
-- **Pub/Sub** — topic from the `topic` message attribute; one scope per message; a failure result
+- **Pub/Sub** — topic from the `benzene-topic` message attribute; one scope per message; a failure result
   is raised so Pub/Sub redelivers (the queue-transport failure rule).
 
 ## `GcpFunctionsApp`
@@ -37,7 +37,7 @@ orders_pubsub = pubsub_function(app)     # entry point for @functions_framework.
 ## Pub/Sub binding
 
 - `decode_pubsub_message(message)` → a `{topic, headers, body}` envelope. The Benzene topic comes
-  from the `topic` message attribute (`TOPIC_ATTRIBUTE`); other attributes become headers; the
+  from the `benzene-topic` message attribute (`TOPIC_ATTRIBUTE`); other attributes become headers; the
   base64 `data` is the JSON body.
 - `PubSubMessageSender(topic_path, publisher=None)` — the outbound client (`benzene.core.MessageSender`)
   over `google-cloud-pubsub`, publishing to `topic_path` with the Benzene topic as an attribute and

@@ -27,7 +27,7 @@ handler = to_lambda_handler(app)     # point your Lambda at main.handler
 The single `handler` dispatches by event shape:
 
 - an **API Gateway** event → route → topic → handler, Benzene status → HTTP code;
-- an **SQS** event → one scope per record (topic from the `topic` message attribute); failed
+- an **SQS** event → one scope per record (topic from the `benzene-topic` message attribute); failed
   records come back as `batchItemFailures` for redelivery;
 - an **SNS** event → one scope per record; a failure raises so Lambda retries.
 

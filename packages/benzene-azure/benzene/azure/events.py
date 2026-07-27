@@ -1,7 +1,9 @@
 """Decoders for the Azure Functions message shapes Benzene binds (Service Bus, Event Hub).
 
 Each maps a native message/event into a Benzene envelope ``{topic, headers, body}``. Following the
-cross-port convention, the Benzene topic is carried in the ``topic`` application/message property;
+cross-port convention, the Benzene topic is carried in the ``benzene-topic`` application/message
+property (wire-contracts §2, tier A — prefixed because a property shares a namespace with the
+application, unlike the envelope's own ``topic`` field);
 the remaining properties are the headers, and the message body (decoded to text) is the JSON body.
 """
 
@@ -9,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-TOPIC_PROPERTY = "topic"
+TOPIC_PROPERTY = "benzene-topic"
 
 
 def body_to_text(body: Any) -> str:

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .app import AzureFunctionsApp, AzureHttpResponse
+from .events import TOPIC_PROPERTY
 
 
 def _body_text(value: Any) -> str:
@@ -47,7 +48,9 @@ class FakeEventHubEvent:
 
 def _with_topic(topic: str, headers: dict[str, str] | None) -> dict[str, str]:
     props = {str(k): str(v) for k, v in (headers or {}).items()}
-    props["topic"] = topic
+    # Via the constant, not a literal: a fake that spells the property itself drifts from the
+    # decoder, and then passes while exercising a message shape no real binding produces.
+    props[TOPIC_PROPERTY] = topic
     return props
 
 

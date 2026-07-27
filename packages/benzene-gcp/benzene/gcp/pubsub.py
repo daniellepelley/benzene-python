@@ -18,8 +18,9 @@ from typing import Any, Callable
 from benzene.core import encode_body
 from benzene.results import Result, Status
 
-#: Message-attribute name carrying the Benzene topic (the cross-port convention).
-TOPIC_ATTRIBUTE = "topic"
+#: Message-attribute name carrying the Benzene topic (wire-contracts §2, tier A). Prefixed because
+#: an attribute shares a namespace with the application; the envelope's own ``topic`` field is not.
+TOPIC_ATTRIBUTE = "benzene-topic"
 
 
 def decode_pubsub_message(message: dict[str, Any]) -> dict[str, Any]:

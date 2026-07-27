@@ -2,8 +2,12 @@
 
 Each decoder maps a native event/record into a Benzene envelope ``{topic, headers, body}``. Per the
 cross-port convention (transport-bindings §"AWS Lambda"), the topic for the messaging transports is
-carried in the ``topic`` message attribute; API Gateway resolves its topic from the route instead
-(handled by the HTTP binding), so there is no ``topic`` attribute there.
+carried in the ``benzene-topic`` message attribute; API Gateway resolves its topic from the route
+instead (handled by the HTTP binding), so there is no ``benzene-topic`` attribute there.
+
+Note the asymmetry with the envelope this builds: the *envelope's* field is plain ``topic``, because
+the envelope is entirely Benzene's own namespace, while a message attribute shares a namespace with
+the application and the transport and so carries the ``benzene-`` marker (wire-contracts §2).
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlencode
 
-TOPIC_ATTRIBUTE = "topic"
+TOPIC_ATTRIBUTE = "benzene-topic"
 
 
 def is_api_gateway(event: dict[str, Any]) -> bool:

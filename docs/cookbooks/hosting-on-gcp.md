@@ -54,7 +54,7 @@ orders_pubsub = pubsub_function(app)
 ```
 
 The HTTP trigger resolves the topic from the route and maps the Benzene status to an HTTP code; the
-Pub/Sub trigger reads the topic from the message's `topic` attribute and raises on failure so
+Pub/Sub trigger reads the topic from the message's `benzene-topic` attribute and raises on failure so
 Pub/Sub redelivers.
 
 ## 4. Test it in memory (dogfooded, no cloud)
