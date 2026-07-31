@@ -12,6 +12,7 @@ may fail, slow, or block the invocation.
 
 from __future__ import annotations
 
+import collections
 import os
 import re
 import time
@@ -101,16 +102,53 @@ class TraceEvent:
 
 @runtime_checkable
 class TraceExporter(Protocol):
-    """Receives finished :class:`TraceEvent`s. ``export`` must be non-blocking and must not raise."""
+    """Receives finished :class:`TraceEvent`s from the trace middleware.
+
+    ``export`` is called inline on the request path, so it **must be non-blocking**: buffer or
+    enqueue the event and return immediately — never do network/disk I/O inline, and never raise
+    (mesh.md: trace export is asynchronous, non-blocking, and lossy under backpressure; no mesh feed
+    may slow or break the invocation it observes). :class:`QueueTraceExporter` is the non-blocking
+    default; a real deployment drains it to a collector on a background task.
+    """
 
     def export(self, event: TraceEvent) -> None: ...
 
 
 class InMemoryTraceExporter(list):
-    """A ``list`` of exported events (``export`` appends) — the fake for tests and dogfooding."""
+    """A ``list`` of exported events (``export`` appends) — the fake for tests and dogfooding.
+
+    Unbounded and synchronous: perfect for tests, but prefer :class:`QueueTraceExporter` in a
+    long-running service so a slow/absent collector can't grow the buffer without bound.
+    """
 
     def export(self, event: TraceEvent) -> None:
         self.append(event)
+
+
+class QueueTraceExporter:
+    """A bounded, lossy :class:`TraceExporter` — non-blocking by construction (the deployment default).
+
+    ``export`` appends to a fixed-size ``deque`` in O(1) and never blocks or does I/O; when the
+    buffer is full the **oldest** event is dropped (lossy under backpressure, per mesh.md). A
+    background task periodically :meth:`drain`s the buffer and ships it via
+    :meth:`~benzene.mesh.MeshFeedSender.publish_traces` — so the collector never touches the request
+    path.
+    """
+
+    def __init__(self, maxlen: int = 10_000) -> None:
+        self._buffer: "collections.deque[TraceEvent]" = collections.deque(maxlen=maxlen)
+
+    def export(self, event: TraceEvent) -> None:
+        self._buffer.append(event)  # deque(maxlen) evicts the oldest when full — lossy, never blocks
+
+    def drain(self) -> list[TraceEvent]:
+        """Remove and return all buffered events (hand them to ``publish_traces``)."""
+        events = list(self._buffer)
+        self._buffer.clear()
+        return events
+
+    def __len__(self) -> int:
+        return len(self._buffer)
 
 
 def trace_middleware(

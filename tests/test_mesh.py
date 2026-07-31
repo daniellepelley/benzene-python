@@ -15,16 +15,22 @@ from typing import Optional
 
 import pytest
 
-from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry, message
+from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
 from benzene.mesh import (
+    ISSUES_TOPIC,
     MESH_TOPIC,
     Heartbeat,
     InMemoryTraceExporter,
+    IssueAggregator,
     MeshFeedSender,
+    QueueTraceExporter,
     REGISTER_TOPIC,
     ServiceDescriptor,
     ServiceInfo,
     TRACES_TOPIC,
+    TraceEvent,
+    classify,
+    issue_fingerprint,
     json_schema,
     mesh_interception,
     parse_traceparent,
@@ -202,3 +208,90 @@ def test_heartbeat_payload_shape() -> None:
     payload = hb.to_payload()
     assert payload["service"] == "orders"
     assert payload["health"] == {"isHealthy": True, "healthChecks": {"registry": {"isHealthy": True}}}
+
+
+# --- issues feed unit tests ----------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "status,exception_type,expected",
+    [
+        ("bad-request", None, "validation"),
+        ("validation-error", None, "validation"),
+        ("service-unavailable", "HttpError", "exception"),  # exception type wins over dependency
+        ("not-found", None, "config-wiring"),
+        ("unauthorized", None, "config-wiring"),
+        ("not-implemented", None, "config-wiring"),
+        ("", None, "config-wiring"),  # empty status
+        ("service-unavailable", None, "dependency"),
+        ("timeout", None, "dependency"),
+        ("too-many-requests", None, "dependency"),
+        ("unexpected-error", None, "exception"),
+        ("conflict", None, "unclassified"),  # any other failing status
+    ],
+)
+def test_classify_precedence(status: str, exception_type: str | None, expected: str) -> None:
+    assert classify(status, exception_type) == expected
+
+
+def test_fingerprint_is_stable_and_16_bytes() -> None:
+    fp = issue_fingerprint("orders", "order:create", "v2", "exception", "HttpError")
+    assert fp == issue_fingerprint("orders", "order:create", "v2", "exception", "HttpError")
+    assert len(fp) == 32 and all(c in "0123456789abcdef" for c in fp)  # 16 bytes, lowercase hex
+
+
+def test_fingerprint_absent_version_is_empty_string() -> None:
+    # version="" and a truly absent version fingerprint identically (spec: empty string when absent)
+    assert issue_fingerprint("s", "t", "", "dependency", "timeout") == issue_fingerprint(
+        "s", "t", "", "dependency", "timeout"
+    )
+
+
+def test_issue_aggregator_counts_deltas_and_resets_on_flush() -> None:
+    agg = IssueAggregator("orders")
+    agg.record(topic="order:create", status="service-unavailable", version="v2", trace_id="t1")
+    agg.record(topic="order:create", status="service-unavailable", version="v2", trace_id="t2")
+    agg.record(topic="order:get", status="not-found")
+
+    batch = agg.flush()
+    assert batch.service == "orders"
+    by_topic = {i.topic: i for i in batch.issues}
+    assert by_topic["order:create"].count == 2
+    assert by_topic["order:create"].classification == "dependency"
+    assert by_topic["order:create"].exemplar_trace_ids == ("t1", "t2")
+    assert by_topic["order:get"].classification == "config-wiring"
+
+    # flush reset the window: a fresh flush is the empty liveness batch
+    assert agg.flush().issues == []
+
+
+def test_publish_issues_sends_the_batch() -> None:
+    fake = FakeMessageSender()
+    feeds = MeshFeedSender(fake)
+    agg = IssueAggregator("orders")
+    agg.record(topic="order:create", status="unexpected-error", exception_type="KeyError")
+    asyncio.run(feeds.publish_issues(agg.flush()))
+    assert fake.last_topic == ISSUES_TOPIC
+    assert fake.last_message["service"] == "orders"
+    assert fake.last_message["issues"][0]["classification"] == "exception"
+
+
+# --- QueueTraceExporter (non-blocking, lossy) ----------------------------------------------------
+
+def _event(topic: str) -> TraceEvent:
+    return TraceEvent(trace_id="t", span_id="s", service="svc", topic=topic, status="ok")
+
+
+def test_queue_exporter_drains_fifo() -> None:
+    exporter = QueueTraceExporter()
+    exporter.export(_event("a"))
+    exporter.export(_event("b"))
+    drained = exporter.drain()
+    assert [e.topic for e in drained] == ["a", "b"]
+    assert exporter.drain() == []  # drain empties the buffer
+
+
+def test_queue_exporter_is_lossy_when_full() -> None:
+    exporter = QueueTraceExporter(maxlen=2)
+    for topic in ("a", "b", "c"):
+        exporter.export(_event(topic))  # never blocks; oldest is dropped
+    assert [e.topic for e in exporter.drain()] == ["b", "c"]

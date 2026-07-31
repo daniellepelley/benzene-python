@@ -23,9 +23,13 @@ anything else           ``{}``   (unknown/custom — matches everything)
 
 **Property names follow the wire naming policy** (``benzene.core.to_camel`` — dataclass fields are
 emitted camelCase), so the schema describes what actually crosses the wire. **A field is
-``required`` iff it has no default** (no ``default`` and no ``default_factory``): those are the
-properties the marshaler always emits, in declaration order (determinism feeds the descriptor
-hash). Recursive types cut the cycle with ``{}`` rather than emitting a ``$ref``.
+``required`` iff it has no default** (no ``default`` and no ``default_factory``) — the properties a
+caller must supply. This is a declaration-time reading of the spec's "always emitted by the
+marshaler": Python's marshaler happens to *emit* every field (defaulted or not), so ``required``
+deliberately tracks the caller's obligation, not runtime emission — which is exactly what the
+language-neutral conformance fixture pins (``errors`` carries a default and is *not* required).
+Properties are listed in declaration order (determinism feeds the descriptor hash). Recursive types
+cut the cycle with ``{}`` rather than emitting a ``$ref``.
 """
 
 from __future__ import annotations

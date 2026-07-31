@@ -31,6 +31,7 @@ from benzene.core import MessageSender
 from benzene.results import Result
 
 from .descriptor import ServiceDescriptor
+from .issues import IssueBatch
 from .trace import TraceEvent
 
 REGISTER_TOPIC = "benzene:mesh:register"
@@ -68,16 +69,22 @@ class Heartbeat:
 
 
 class MeshFeedSender:
-    """Pushes a service's mesh feeds to a collector over an outbound :class:`MessageSender`."""
+    """Pushes a service's mesh feeds to a collector over an outbound :class:`MessageSender`.
+
+    One method per feed: :meth:`register` announces the service's descriptor once; the ongoing
+    telemetry feeds — :meth:`publish_heartbeat`, :meth:`publish_traces`, :meth:`publish_issues` —
+    are pushed periodically. Each returns the outbound :class:`~benzene.results.Result` so a caller
+    can log a failed feed; sending never raises.
+    """
 
     def __init__(self, sender: MessageSender) -> None:
         self._sender = sender
 
     async def register(self, descriptor: ServiceDescriptor) -> Result:
-        """Send the ServiceDescriptor to ``benzene:mesh:register``."""
+        """Announce the ServiceDescriptor on ``benzene:mesh:register``."""
         return await self._sender.send_message(REGISTER_TOPIC, descriptor.to_payload())
 
-    async def heartbeat(self, heartbeat: Heartbeat) -> Result:
+    async def publish_heartbeat(self, heartbeat: Heartbeat) -> Result:
         """Send a :class:`Heartbeat` to ``benzene:mesh:heartbeat``."""
         return await self._sender.send_message(HEARTBEAT_TOPIC, heartbeat.to_payload())
 
@@ -85,3 +92,7 @@ class MeshFeedSender:
         """Send a batch of :class:`TraceEvent`s to ``benzene:mesh:traces`` as ``{"events": [...]}``."""
         body = {"events": [event.to_payload() for event in events]}
         return await self._sender.send_message(TRACES_TOPIC, body)
+
+    async def publish_issues(self, batch: IssueBatch) -> Result:
+        """Send an :class:`~benzene.mesh.IssueBatch` to ``benzene:mesh:issues``."""
+        return await self._sender.send_message(ISSUES_TOPIC, batch.to_payload())

@@ -20,6 +20,8 @@ service serves, with a request/response schema per topic and a content hash over
 from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
 from benzene.mesh import ServiceDescriptor, ServiceInfo, mesh_interception
 
+registry = Registry()  # ... your handlers, e.g. registry.add(place_order)
+
 descriptor = ServiceDescriptor.derive(
     registry,
     ServiceInfo(service="orders", service_version="1.4.2", placement={"cloud": "aws"}),
@@ -54,15 +56,20 @@ pipeline = (
 
 ## Report into a collector
 
-`MeshFeedSender` pushes the four independent feeds — register, heartbeat, traces, issues — to a
-collector over any outbound `MessageSender` (Pub/Sub, SNS, Service Bus, or an HTTP POST):
+`MeshFeedSender` pushes a service's four mesh feeds to a collector over any outbound `MessageSender`
+(Pub/Sub, SNS, Service Bus, or an HTTP POST) — `register` announces the descriptor once, and
+`publish_heartbeat` / `publish_traces` / `publish_issues` stream the ongoing telemetry:
 
 ```python
-from benzene.mesh import MeshFeedSender
+from benzene.mesh import IssueAggregator, MeshFeedSender
 
 feeds = MeshFeedSender(outbound_client)
 await feeds.register(descriptor)
 await feeds.publish_traces(exporter)   # any iterable of TraceEvent
+
+issues = IssueAggregator(service="orders")
+issues.record(topic="order:create", status="service-unavailable", exception_type="HttpError")
+await feeds.publish_issues(issues.flush())   # deduplicated failure signatures; count is a delta
 ```
 
 Mirrors .NET's `Benzene.Mesh`, and contributes the `benzene.mesh` subpackage to the shared `benzene`

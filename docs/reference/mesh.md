@@ -20,8 +20,8 @@ on its own:
   per-topic request/response schemas, a content hash).
 - **The reserved endpoint** — `mesh_interception()` answers `benzene:mesh` with that descriptor.
 - **Tracing** — `trace_middleware()` emits exactly one `TraceEvent` per invocation.
-- **Collector feeds** — `MeshFeedSender` pushes the descriptor, heartbeats, and traces to a collector
-  over any outbound `MessageSender`.
+- **Collector feeds** — `MeshFeedSender` pushes the descriptor, heartbeats, traces, and issues to a
+  collector over any outbound `MessageSender`.
 
 Every feed is independent and optional on both sides. An unreachable collector, a failing exporter, or
 a missing endpoint must never affect service traffic — the module is built so a mesh feed can never
@@ -229,7 +229,11 @@ Wire keys: `traceId`, `spanId`, `service`, `topic`, `status` (always present) pl
   implementation **must be non-blocking and must not raise**; export is asynchronous and lossy under
   backpressure by design.
 - `InMemoryTraceExporter` — a `list` subclass whose `export()` appends; the fake for tests and
-  dogfooding. Iterate it to read the events.
+  dogfooding. Iterate it to read the events. Unbounded, so prefer `QueueTraceExporter` in a service.
+- `QueueTraceExporter(maxlen=10_000)` — the non-blocking, bounded default for a real deployment.
+  `export()` appends to a fixed-size `deque` in O(1) and never blocks or does I/O; when full, the
+  oldest event is dropped (lossy under backpressure). A background task periodically `drain()`s it and
+  ships the events via `publish_traces`, so the collector never touches the request path.
 - `parse_traceparent(header)` — parse a W3C `traceparent` (`00-<32hex>-<16hex>-<2hex>`) →
   `(trace_id, parent_span_id)`, or `None` for a malformed or absent header (the caller then starts a
   fresh trace). The all-zero trace-id and all-zero parent-id are invalid per W3C, as is any
@@ -250,13 +254,14 @@ from benzene.mesh import Heartbeat, MeshFeedSender
 feeds = MeshFeedSender(sender)                       # any benzene.core MessageSender
 
 await feeds.register(descriptor)                     # -> benzene:mesh:register
-await feeds.heartbeat(Heartbeat(
+await feeds.publish_heartbeat(Heartbeat(
     service="orders",
     sent_at="2026-07-31T12:00:00Z",
     instance_id="orders-7f9c",
     descriptor_hash=descriptor.descriptor_hash(),
 ))                                                   # -> benzene:mesh:heartbeat
 await feeds.publish_traces(exporter)                 # -> benzene:mesh:traces  {"events": [...]}
+await feeds.publish_issues(aggregator.flush())       # -> benzene:mesh:issues  (see below)
 ```
 
 The collector topic constants and their bodies (the cross-language contract):
@@ -268,12 +273,13 @@ The collector topic constants and their bodies (the cross-language contract):
 | `TRACES_TOPIC` | `benzene:mesh:traces` | `{"events": [TraceEvent, ...]}` | `{"accepted": <count>}` |
 | `ISSUES_TOPIC` | `benzene:mesh:issues` | IssueBatch | `{"accepted": <count>}` |
 
-- `MeshFeedSender.register(descriptor)` — send the `ServiceDescriptor` payload.
-- `MeshFeedSender.heartbeat(heartbeat)` — send a `Heartbeat`.
+- `MeshFeedSender.register(descriptor)` — announce the `ServiceDescriptor` payload.
+- `MeshFeedSender.publish_heartbeat(heartbeat)` — send a `Heartbeat`.
 - `MeshFeedSender.publish_traces(events)` — send an iterable of `TraceEvent`s as `{"events": [...]}`.
+- `MeshFeedSender.publish_issues(batch)` — send an `IssueBatch`.
 
 The module ships the **sender** half (a service reporting in). The collector that ingests these feeds
-and answers `mesh:query:*` is a separate concern, and the issues feed has no sender helper yet.
+and answers `mesh:query:*` is a separate concern.
 
 ### `Heartbeat`
 
@@ -294,12 +300,42 @@ Heartbeat(
 `to_payload()` emits `service`, `sentAt`, optional `instanceId` / `descriptorHash`, and a `health`
 object `{"isHealthy": ..., "healthChecks": {...}}`.
 
+### Issues — `IssueAggregator`, `Issue`, `IssueBatch`
+
+The issues feed reports **deduplicated failure signatures**. Two pieces are normative so a Python
+service produces the same signatures a .NET one would (the collector merges by `fingerprint` across
+instances):
+
+- `classify(status, exception_type=None)` — maps a failure to the closed vocabulary `validation`,
+  `exception`, `config-wiring`, `dependency`, `unclassified`, in the spec's precedence order.
+  (`contract-drift` is reserved for collector-derived issues and is never produced here.)
+- `issue_fingerprint(service, topic, version, classification, discriminator)` — the exact signature:
+  lowercase hex of the first 16 bytes of `sha256("service|topic|version|classification|discriminator")`,
+  where `discriminator` is the exception type when present, else the status.
+
+`IssueAggregator` is the pit of success — `record(...)` each failure, `flush()` to an `IssueBatch`:
+
+```python
+from benzene.mesh import IssueAggregator
+
+issues = IssueAggregator(service="orders")
+issues.record(topic="order:create", status="service-unavailable", version="v2",
+              transport="sqs", exception_type="HttpError", trace_id=event.trace_id)
+await feeds.publish_issues(issues.flush())           # count is a DELTA; flush() resets the window
+```
+
+`flush()` drains everything seen since the previous flush and resets, so every `count` is a delta,
+never a cumulative total. Flushing an empty aggregator is valid — that batch is the feed's liveness
+beat.
+
 ## Exports
 
 `ServiceInfo`, `ServiceDescriptor`, `TopicDescriptor`, `MESH_TOPIC`, `Schema`, `json_schema`,
 `mesh_interception`, `DescriptorSource`, `trace_middleware`, `TraceEvent`, `TraceExporter`,
-`InMemoryTraceExporter`, `parse_traceparent`, `new_trace_id`, `new_span_id`, `MeshFeedSender`,
-`Heartbeat`, `REGISTER_TOPIC`, `HEARTBEAT_TOPIC`, `TRACES_TOPIC`, `ISSUES_TOPIC`.
+`InMemoryTraceExporter`, `QueueTraceExporter`, `parse_traceparent`, `new_trace_id`, `new_span_id`,
+`MeshFeedSender`, `Heartbeat`, `Issue`, `IssueBatch`, `IssueAggregator`, `classify`,
+`issue_fingerprint`, `CLASSIFICATIONS`, `REGISTER_TOPIC`, `HEARTBEAT_TOPIC`, `TRACES_TOPIC`,
+`ISSUES_TOPIC`.
 
 ## See also
 

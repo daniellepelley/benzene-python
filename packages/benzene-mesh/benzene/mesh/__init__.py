@@ -33,9 +33,18 @@ from .descriptor import (
     TopicDescriptor,
 )
 from .interception import DescriptorSource, mesh_interception
+from .issues import (
+    CLASSIFICATIONS,
+    Issue,
+    IssueAggregator,
+    IssueBatch,
+    classify,
+    issue_fingerprint,
+)
 from .schema import Schema, json_schema
 from .trace import (
     InMemoryTraceExporter,
+    QueueTraceExporter,
     TraceEvent,
     TraceExporter,
     new_span_id,
@@ -45,13 +54,18 @@ from .trace import (
 )
 
 __all__ = [
+    "CLASSIFICATIONS",
     "DescriptorSource",
     "HEARTBEAT_TOPIC",
     "Heartbeat",
     "ISSUES_TOPIC",
     "InMemoryTraceExporter",
+    "Issue",
+    "IssueAggregator",
+    "IssueBatch",
     "MESH_TOPIC",
     "MeshFeedSender",
+    "QueueTraceExporter",
     "REGISTER_TOPIC",
     "Schema",
     "ServiceDescriptor",
@@ -60,6 +74,8 @@ __all__ = [
     "TopicDescriptor",
     "TraceEvent",
     "TraceExporter",
+    "classify",
+    "issue_fingerprint",
     "json_schema",
     "mesh_interception",
     "new_span_id",

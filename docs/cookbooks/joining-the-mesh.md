@@ -2,7 +2,7 @@
 
 Take an existing Benzene service — here the order domain, unchanged — and make it show up in a
 **mesh**: it describes itself on the reserved `benzene:mesh` topic, traces every invocation, and
-reports its descriptor, heartbeats, and traces into a collector. None of this touches the handlers;
+reports its descriptor, heartbeats, traces, and issues into a collector. None of this touches the handlers;
 mesh is additive middleware plus an outbound feed.
 
 ## Prerequisites
@@ -125,7 +125,7 @@ feeds = MeshFeedSender(collector_sender)              # any benzene.core Message
 await feeds.register(descriptor)
 
 # Periodically: a heartbeat with the descriptor hash so the collector spots contract drift.
-await feeds.heartbeat(Heartbeat(
+await feeds.publish_heartbeat(Heartbeat(
     service="orders",
     sent_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     instance_id="orders-7f9c",
@@ -135,6 +135,13 @@ await feeds.heartbeat(Heartbeat(
 # Periodically: flush the batched trace events (benzene:mesh:traces -> {"events": [...]}).
 await feeds.publish_traces(list(exporter))
 exporter.clear()
+
+# Periodically: flush deduplicated failure signatures (benzene:mesh:issues). `count` is a delta.
+from benzene.mesh import IssueAggregator
+
+issues = IssueAggregator(service="orders")
+issues.record(topic="orders:place", status="service-unavailable", exception_type="HttpError")
+await feeds.publish_issues(issues.flush())           # flush() resets the window
 ```
 
 ## Adopt only what you need
