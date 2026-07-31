@@ -35,6 +35,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
 | `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + egress) | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` |
 | `benzene-azure` | `benzene.azure` | Azure Functions host (HTTP + Service Bus + Event Hub + egress) | `benzene-core`, `benzene-http` | `Benzene.Azure.Function.*` |
+| `benzene-mesh` | `benzene.mesh` | ServiceDescriptor + `benzene:mesh` endpoint + tracing + collector feeds | `benzene-core` | `Benzene.Mesh` |
 | `benzene-testing` | `benzene.testing` | in-memory test host + fakes (dev/test) | `benzene-core` | `Benzene.Testing` |
 
 Adoption levels, bottom to top:
@@ -45,9 +46,9 @@ Adoption levels, bottom to top:
    transport-neutral `BenzeneMessage` envelope. Everything except a concrete transport.
 3. **Host over HTTP** — `pip install benzene-http`. The same handlers behind a real ASGI server.
 
-The three cloud hosts (`benzene-gcp`, `benzene-aws`, `benzene-azure`) and future cross-cutting
-concerns each sit on top of `benzene-core`, so the stack grows outward without ever forcing an all-
-or-nothing install. See [`docs/packages.md`](docs/packages.md) for the full rationale.
+The three cloud hosts (`benzene-gcp`, `benzene-aws`, `benzene-azure`) and cross-cutting concerns like
+the mesh (`benzene-mesh`) each sit on top of `benzene-core`, so the stack grows outward without ever
+forcing an all-or-nothing install. See [`docs/packages.md`](docs/packages.md) for the full rationale.
 
 ## The core idea in 60 seconds
 
@@ -97,6 +98,7 @@ packages/
   benzene-gcp/       benzene/gcp/       (Cloud Functions host: HTTP + Pub/Sub)
   benzene-aws/       benzene/aws/       (Lambda host: API Gateway + SQS + SNS)
   benzene-azure/     benzene/azure/     (Functions host: HTTP + Service Bus + Event Hub)
+  benzene-mesh/      benzene/mesh/      (ServiceDescriptor, benzene:mesh, tracing, feeds)
   benzene-testing/   benzene/testing/   (in-memory test host + fakes)
 conformance/         language-neutral spec fixtures (shared)
 examples/            runnable multi-transport cloud examples, each dogfood-tested
@@ -114,14 +116,15 @@ nothing needs building — the layers resolve straight off `sys.path`:
 pytest
 
 # run the conformance runner without pytest
-PYTHONPATH=packages/benzene-results:packages/benzene-core:packages/benzene-http \
+PYTHONPATH=packages/benzene-results:packages/benzene-core:packages/benzene-http:packages/benzene-mesh \
   python -m tests.conformance_runner
 ```
 
 Or install the layers editable (what CI does — this also verifies the packaging):
 
 ```bash
-pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http
+pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http \
+             -e packages/benzene-mesh -e packages/benzene-testing
 pip install pytest && pytest -q
 ```
 
@@ -145,8 +148,9 @@ API. None touch the wire envelope, status vocabulary, or HTTP mapping (the inter
 ## Conformance
 
 The language-neutral fixtures from the spec live in [`conformance/`](conformance/) and run two ways
-— the dependency-free `python -m tests.conformance_runner`, and one pytest case per envelope fixture.
-Passing these plus the live cross-language interop checks (send/receive the envelope against a
+— the dependency-free `python -m tests.conformance_runner`, and granular pytest cases (one per
+envelope, mesh-descriptor, and mesh-trace fixture). Passing these plus the live cross-language
+interop checks (send/receive the envelope against a
 running .NET Benzene service) is what "conformant" means — see the spec's
 [porting guide §3](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/porting-guide.md).
 
@@ -155,12 +159,15 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 1. **(done)** Wire contracts + core model + `BenzeneMessage` envelope, conformance-green.
 2. **(done)** An HTTP inbound binding end-to-end (ASGI), including the status-code mapping.
 3. **(done)** Layered, install-what-you-use packages (`benzene-results` / `-core` / `-http`).
-4. **(in progress)** Cloud hosts — the "host anywhere" proof on Python, each a multi-transport,
+4. **(done)** Cloud hosts — the "host anywhere" proof on Python, each a multi-transport,
    dogfood-tested example per the [Port Quality Standards](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/port-quality-standards.md):
    **GCP** (`benzene-gcp`, HTTP + Pub/Sub), **AWS** (`benzene-aws`, API Gateway + SQS + SNS), and
    **Azure** (`benzene-azure`, HTTP + Service Bus + Event Hub) — all done, each with egress.
-5. The mesh module (ServiceDescriptor + `/benzene/spec`) so Python services appear in the mesh UI.
-6. Payload versioning and gRPC.
+5. **(done)** The mesh module (`benzene-mesh`) — the `ServiceDescriptor` (derived from the registry,
+   with per-topic schemas + a contract hash), the reserved `benzene:mesh` endpoint, per-invocation
+   tracing, and the collector feeds — so Python services describe themselves and appear in the mesh.
+   Conformance-green against `mesh-descriptor-cases` and `mesh-trace-cases`.
+6. Next: the collector side (`mesh:query:*` ingest), payload versioning, and gRPC.
 
 ## Documentation
 
