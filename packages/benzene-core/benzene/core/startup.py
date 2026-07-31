@@ -15,24 +15,29 @@ the startup configure the app against a resolved scope.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
 from .dependencies import Container, Scope
+from .envelope import BenzeneMessageApplication
+from .pipeline import Middleware, MiddlewarePipeline
 from .registry import Registry
 
 
 @dataclass
 class AppDefinition:
-    """What a startup produces: the message topic registry and (optionally) an HTTP router.
+    """What a startup produces: the message registry, an optional HTTP router, and any middleware.
 
     ``router`` is typed ``Any`` so this stays a pure ``benzene.core`` type — a message-only app
     leaves it ``None``; an HTTP-capable host receives whatever ``benzene.http`` router the startup
-    built and passes it straight to the host binding.
+    built and passes it straight to the host binding. ``middleware`` is the pipeline the startup
+    wants installed ahead of the message router (cross-cutting concerns such as mesh interception,
+    tracing, or auth), so a host and a test boot the *same* pipeline, not just the same handlers.
     """
 
     registry: Registry | None = None
     router: Any = None
+    middleware: list[Middleware] = field(default_factory=list)
 
 
 class BenzeneStartUp:
@@ -69,3 +74,21 @@ def build_application(
 
     scope = container.create_scope()
     return instance.configure(scope, resolved_config), scope
+
+
+def application_from(definition: AppDefinition) -> BenzeneMessageApplication:
+    """Build the runnable :class:`~benzene.core.BenzeneMessageApplication` from an :class:`AppDefinition`.
+
+    Installs the startup's ``middleware`` ahead of the message router. Every host (and the test
+    harness) builds the app this way, so a startup's cross-cutting middleware — mesh interception,
+    tracing, auth — is exercised identically in deployment and in tests. When only a ``router`` is
+    present, its handler definitions become the registry.
+    """
+    registry = definition.registry
+    if registry is None:
+        registry = Registry()
+        if definition.router is not None:
+            for handler_definition in definition.router.definitions():
+                registry.add_definition(handler_definition)
+    pipeline = MiddlewarePipeline(list(definition.middleware))
+    return BenzeneMessageApplication(registry, pipeline)

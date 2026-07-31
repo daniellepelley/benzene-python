@@ -17,6 +17,7 @@ import pytest
 
 from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
 from benzene.mesh import (
+    HEARTBEAT_TOPIC,
     ISSUES_TOPIC,
     MESH_TOPIC,
     Heartbeat,
@@ -36,10 +37,9 @@ from benzene.mesh import (
     parse_traceparent,
     trace_middleware,
 )
-from benzene.results import Result
 from benzene.testing import FakeMessageSender
 
-from .canonical_handlers import greet, register_canonical, register_with_panic
+from .canonical_handlers import register_canonical, register_with_panic
 from .conformance_runner import (
     CONFORMANCE_DIR,
     _mesh_subset,
@@ -208,6 +208,16 @@ def test_heartbeat_payload_shape() -> None:
     payload = hb.to_payload()
     assert payload["service"] == "orders"
     assert payload["health"] == {"isHealthy": True, "healthChecks": {"registry": {"isHealthy": True}}}
+
+
+def test_publish_heartbeat_sends_the_beat() -> None:
+    fake = FakeMessageSender()
+    feeds = MeshFeedSender(fake)
+    hb = Heartbeat(service="orders", sent_at="2026-07-16T09:14:03Z", descriptor_hash="sha256:abc")
+    asyncio.run(feeds.publish_heartbeat(hb))
+    assert fake.last_topic == HEARTBEAT_TOPIC
+    assert fake.last_message["service"] == "orders"
+    assert fake.last_message["descriptorHash"] == "sha256:abc"
 
 
 # --- issues feed unit tests ----------------------------------------------------------------------

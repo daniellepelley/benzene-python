@@ -113,16 +113,51 @@ response = await app.handle(
 # {"statusCode": "created", "headers": {"content-type": "application/json"}, "body": "..."}
 ```
 
-The version header is `benzene-version` (`VERSION_HEADER`). Helpers `encode_response(result)` and
+The message version is read inbound from the first present header in `VERSION_HEADER_NAMES` —
+`benzene-version` (the canonical `VERSION_HEADER`, written outbound), then `version`, then `x-version`
+(versioning.md §2) — via `resolve_version(headers)`. Helpers `encode_response(result)` and
 `error_payload(result)` produce the response envelope and the problem-details error body
 (`{"status", "detail"}`) respectively.
+
+## Composition root
+
+A `BenzeneStartUp` is the single place an app declares *what it is*, independent of where it is hosted.
+Subclass it and override `configure_services(container, config)` (register the app's services) and
+`configure(scope, config)` (resolve services, wire routes/topics, and return an `AppDefinition`). Every
+host — and the test harness — boots from the *same* startup, so a test exercises exactly what deploys.
+
+`AppDefinition` carries the `registry`, an optional HTTP `router`, and any `middleware` the startup
+wants installed ahead of the message router — so cross-cutting concerns (mesh interception, tracing,
+auth) are part of the composition root, booted identically in deployment and in tests, not wired
+per-host.
+
+```python
+from benzene.core import AppDefinition, BenzeneStartUp, application_from, build_application
+
+class OrdersStartUp(BenzeneStartUp):
+    def configure_services(self, services, config):
+        services.try_add_singleton(OrderService, lambda scope: OrderService())
+
+    def configure(self, services, config) -> AppDefinition:
+        registry = build_orders(services.get_service(OrderService)).registry
+        return AppDefinition(registry=registry, middleware=[my_middleware])
+
+definition, scope = build_application(OrdersStartUp)          # overrides=, config= optional
+app = application_from(definition)                            # registry + middleware -> runnable app
+```
+
+`build_application(startup, *, overrides=(), config=None)` registers the startup's services, applies
+any `overrides` (last-registration-wins — the seam a test uses to substitute a fake), configures the
+app, and returns `(AppDefinition, Scope)`. `application_from(definition)` builds the runnable
+`BenzeneMessageApplication` with the startup's middleware installed ahead of the router.
 
 ## Exports
 
 `BenzeneMessageApplication`, `Container`, `Context`, `DuplicateHandlerError`, `Handler`,
 `HandlerDefinition`, `Lifetime`, `Middleware`, `MiddlewarePipeline`, `Next`, `Registry`, `Scope`,
-`VERSION_HEADER`, `definition_of`, `encode_response`, `error_payload`, `message`, `message_router`,
-`to_jsonable`, `to_request`.
+`ServiceNotRegisteredError`, `AppDefinition`, `BenzeneStartUp`, `VERSION_HEADER`,
+`VERSION_HEADER_NAMES`, `application_from`, `build_application`, `definition_of`, `encode_response`,
+`error_payload`, `message`, `message_router`, `resolve_version`, `to_jsonable`, `to_request`.
 
 ## See also
 

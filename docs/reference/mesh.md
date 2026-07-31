@@ -176,6 +176,12 @@ response = await app.handle({"topic": "benzene:mesh", "headers": {}, "body": ""}
 - Provisioning it is a deployment choice. Don't install it and the endpoint simply doesn't exist, while
   every other mesh feed keeps working.
 
+In a real service, install this (and `trace_middleware`) in your `BenzeneStartUp` by returning it on
+the `AppDefinition`'s `middleware` — then every host and the test harness boot it identically, and you
+can answer it over HTTP by mapping a `GET /benzene/spec` route to `benzene:mesh`. See
+[Joining the mesh](../cookbooks/joining-the-mesh.md) §2b for the composition-root pattern and testing
+it through `create_test_host(...).build_aws()`.
+
 ## Tracing
 
 `trace_middleware()` emits exactly one `TraceEvent` per routed invocation — the topic, the semantic

@@ -33,7 +33,7 @@ from .handler import Handler, HandlerDefinition, definition_of, message
 from .mapping import encode_body, to_camel, to_jsonable, to_request
 from .pipeline import Middleware, MiddlewarePipeline, Next
 from .registry import DuplicateHandlerError, Registry
-from .startup import AppDefinition, BenzeneStartUp, build_application
+from .startup import AppDefinition, BenzeneStartUp, application_from, build_application
 from .router import message_router
 
 __all__ = [
@@ -52,6 +52,7 @@ __all__ = [
     "AppDefinition",
     "BenzeneStartUp",
     "Registry",
+    "application_from",
     "build_application",
     "Scope",
     "ServiceNotRegisteredError",

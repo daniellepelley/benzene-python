@@ -7,7 +7,7 @@ is GCP-specific.
 
 from __future__ import annotations
 
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import Container, MessageSender, application_from, build_application
 from benzene.gcp import GcpFunctionsApp, PubSubMessageSender
 
 from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
@@ -44,4 +44,4 @@ def build_gcp_orders_app(
             services.add_instance(MessageSender, PubSubMessageSender(topic))
 
     definition, _ = build_application(OrdersStartUp, overrides=[overrides])
-    return GcpFunctionsApp(http_router=definition.router, registry=definition.registry)
+    return GcpFunctionsApp(http_router=definition.router, application=application_from(definition))

@@ -104,6 +104,61 @@ assert traces[0].status == "created"
 assert traces[0].correlation_id == "corr-42"          # trace carries the correlation id
 ```
 
+## 2b. Install it in your composition root (so every host — and every test — boots it)
+
+The snippet above hand-builds the pipeline to show the pieces. In a real service you install the mesh
+middleware in your `BenzeneStartUp` instead, by returning it on the `AppDefinition`. Then *every* host
+(and the test harness) boots the same pipeline — you never wire mesh per-cloud, and you can test a
+mesh-enabled service through the front door. Registering the reserved topic on an HTTP route gives you
+a `GET /benzene/spec` URL, answered by the same interceptor:
+
+```python
+# startup.py
+from benzene.core import AppDefinition
+from benzene.mesh import (InMemoryTraceExporter, MESH_TOPIC, ServiceDescriptor, ServiceInfo,
+                          TraceExporter, mesh_interception, trace_middleware)
+from benzene.results import Result
+
+async def _spec(_request):                # /benzene/spec is answered by mesh_interception
+    return Result.not_found("benzene:mesh is handled by mesh_interception")
+
+class MeshOrdersStartUp(OrdersStartUp):
+    def configure_services(self, services, config):
+        super().configure_services(services, config)
+        services.try_add_singleton(TraceExporter, lambda _scope: InMemoryTraceExporter())
+
+    def configure(self, services, config):
+        base = super().configure(services, config)          # the real registry + HTTP router
+        descriptor = ServiceDescriptor.derive(base.registry, ServiceInfo(service="orders",
+                                              service_version="1.4.2", placement={"cloud": "aws"}))
+        base.router.register("GET", "/benzene/spec", MESH_TOPIC, _spec)   # a URL for the descriptor
+        exporter = services.get_service(TraceExporter)
+        return AppDefinition(
+            registry=base.registry,
+            router=base.router,
+            middleware=[trace_middleware(exporter, service="orders"), mesh_interception(descriptor)],
+        )
+```
+
+Now the harness boots the mesh-enabled service like any other — only `build_aws()` names the cloud:
+
+```python
+from benzene.core import MessageSender
+from benzene.mesh import TraceExporter
+from benzene.testing import FakeMessageSender, create_test_host
+
+fake = FakeMessageSender()
+host = (create_test_host(MeshOrdersStartUp)
+        .with_services(lambda s: s.add_instance(MessageSender, fake))
+        .build_aws())                                        # or .build_gcp() / .build_azure()
+
+spec = host.send_http("GET", "/benzene/spec")                # the descriptor, over HTTP
+assert spec.status_code == 200 and json.loads(spec.body)["service"] == "orders"
+
+host.send_sqs("orders:place", {"sku": "ABC"}, headers={"x-correlation-id": "c1"})
+assert host.scope.get_service(TraceExporter)[0].correlation_id == "c1"   # trace, via the root scope
+```
+
 `trace_middleware` joins an inbound `traceparent` trace when present (else starts a fresh one) and
 reads `x-correlation-id` for the business correlation id. Exporter failures are swallowed — tracing
 never breaks the request.

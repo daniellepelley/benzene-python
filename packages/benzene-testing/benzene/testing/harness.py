@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Callable, Mapping
 
-from benzene.core import BenzeneStartUp, Container, build_application
+from benzene.core import BenzeneStartUp, Container, application_from, build_application
 
 
 class TestHostBuilder:
@@ -60,7 +60,7 @@ class TestHostBuilder:
             raise ImportError("build_gcp() requires the 'benzene-gcp' package to be installed") from ex
         definition, scope = self._build()
         host = GcpFunctionsTestHost(
-            GcpFunctionsApp(http_router=definition.router, registry=definition.registry)
+            GcpFunctionsApp(http_router=definition.router, application=application_from(definition))
         )
         host.scope = scope
         return host
@@ -74,7 +74,7 @@ class TestHostBuilder:
             raise ImportError("build_aws() requires the 'benzene-aws' package to be installed") from ex
         definition, scope = self._build()
         host = AwsLambdaTestHost(
-            AwsLambdaApp(http_router=definition.router, registry=definition.registry)
+            AwsLambdaApp(http_router=definition.router, application=application_from(definition))
         )
         host.scope = scope
         return host
@@ -88,7 +88,7 @@ class TestHostBuilder:
             raise ImportError("build_azure() requires the 'benzene-azure' package to be installed") from ex
         definition, scope = self._build()
         host = AzureFunctionsTestHost(
-            AzureFunctionsApp(http_router=definition.router, registry=definition.registry)
+            AzureFunctionsApp(http_router=definition.router, application=application_from(definition))
         )
         host.scope = scope
         return host

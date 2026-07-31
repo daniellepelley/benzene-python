@@ -8,7 +8,7 @@ AWS-specific. The ``orders:created`` subscriber handles the event whether it arr
 from __future__ import annotations
 
 from benzene.aws import AwsLambdaApp, SnsMessageSender
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import Container, MessageSender, application_from, build_application
 
 from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
 
@@ -43,4 +43,4 @@ def build_aws_orders_app(
             services.add_instance(MessageSender, SnsMessageSender(topic_arn))
 
     definition, _ = build_application(OrdersStartUp, overrides=[overrides])
-    return AwsLambdaApp(http_router=definition.router, registry=definition.registry)
+    return AwsLambdaApp(http_router=definition.router, application=application_from(definition))
