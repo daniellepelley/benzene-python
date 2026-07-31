@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Callable
 
 from benzene.core import Handler, HandlerDefinition, definition_of
 
@@ -23,7 +24,7 @@ _HTTP_ROUTES_ATTR = "_benzene_http_routes"
 _PARAM_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
 
-def http_endpoint(method: str, path: str) -> "callable":
+def http_endpoint(method: str, path: str) -> Callable[[Handler], Handler]:
     """Tag an async handler with an HTTP ``(method, path)`` route.
 
     Pairs with :func:`benzene.core.message`, which supplies the topic the route resolves to. Stack

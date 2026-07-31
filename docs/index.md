@@ -49,5 +49,6 @@ in the main Benzene repository:
 
 ## Status
 
-Core + the inbound HTTP binding are implemented and conformance-green. A cloud host, the mesh
-module, and payload versioning are on the [roadmap](../README.md#roadmap).
+The core, the inbound HTTP binding, and the three cloud hosts (GCP, AWS, Azure — each multi-transport
+with egress) are implemented and conformance-green. The mesh module and payload versioning are on the
+[roadmap](../README.md#roadmap).

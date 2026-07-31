@@ -12,10 +12,11 @@ This port is **spec-first**: it implements the language-neutral Benzene specific
 a Python Benzene service and a .NET/Go/TypeScript one speak the same wire contract and show up in the
 same mesh.
 
-> **Status: Core + inbound HTTP binding.** Shipped as three layered packages
-> (`benzene-results`, `benzene-core`, `benzene-http`) that pass the language-neutral **conformance
-> fixtures** (status vocabulary, HTTP status mapping, and the end-to-end envelope cases). A cloud
-> host, the mesh module, and payload versioning are not built yet.
+> **Status: Core + inbound HTTP binding + three cloud hosts.** Shipped as layered packages
+> (`benzene-results`, `benzene-core`, `benzene-http`, the `benzene-gcp` / `benzene-aws` /
+> `benzene-azure` hosts, and `benzene-testing`) that pass the language-neutral **conformance
+> fixtures** (status vocabulary, HTTP status mapping, and the end-to-end envelope cases). The mesh
+> module and payload versioning are not built yet.
 
 ## Layered packages — install only what you use
 
@@ -44,9 +45,9 @@ Adoption levels, bottom to top:
    transport-neutral `BenzeneMessage` envelope. Everything except a concrete transport.
 3. **Host over HTTP** — `pip install benzene-http`. The same handlers behind a real ASGI server.
 
-Future transports (Pub/Sub, SQS/SNS, a cloud host) and cross-cutting concerns will each be their
-own package on top of `benzene-core`, so the stack grows outward without ever forcing an all-or-
-nothing install. See [`docs/packages.md`](docs/packages.md) for the full rationale.
+The three cloud hosts (`benzene-gcp`, `benzene-aws`, `benzene-azure`) and future cross-cutting
+concerns each sit on top of `benzene-core`, so the stack grows outward without ever forcing an all-
+or-nothing install. See [`docs/packages.md`](docs/packages.md) for the full rationale.
 
 ## The core idea in 60 seconds
 
@@ -93,7 +94,12 @@ packages/
   benzene-results/   benzene/results/   (Result, Status)
   benzene-core/      benzene/core/      (pipeline, registry, DI, envelope)
   benzene-http/      benzene/http/      (ASGI binding, status mapping)
+  benzene-gcp/       benzene/gcp/       (Cloud Functions host: HTTP + Pub/Sub)
+  benzene-aws/       benzene/aws/       (Lambda host: API Gateway + SQS + SNS)
+  benzene-azure/     benzene/azure/     (Functions host: HTTP + Service Bus + Event Hub)
+  benzene-testing/   benzene/testing/   (in-memory test host + fakes)
 conformance/         language-neutral spec fixtures (shared)
+examples/            runnable multi-transport cloud examples, each dogfood-tested
 tests/               cross-package tests + the dependency-free conformance runner
 docs/                guides, reference, and the package rationale
 ```

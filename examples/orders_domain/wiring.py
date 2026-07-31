@@ -31,9 +31,9 @@ def build_orders(
 ) -> OrdersWiring:
     """Build the order domain's routes + registry against a store, outbound client, and event log.
 
-    - ``POST /orders``      → ``orders.place``   (creates an order, publishes ``orders.created``)
-    - ``GET  /orders/{id}`` → ``orders.get``
-    - Pub/Sub ``orders.created`` → records the id in ``seen`` (the subscriber side)
+    - ``POST /orders``      → ``orders:place``   (creates an order, publishes ``orders:created``)
+    - ``GET  /orders/{id}`` → ``orders:get``
+    - Pub/Sub ``orders:created`` → records the id in ``seen`` (the subscriber side)
     """
     place = make_place_order(service, sender)
     get = make_get_order(service)

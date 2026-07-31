@@ -82,7 +82,7 @@ from benzene.testing import FakeMessageSender
 
 sender = FakeMessageSender()                      # inject where a real client would go
 ...
-assert sender.last_topic == "orders.created"
+assert sender.last_topic == "orders:created"
 assert sender.last_message.id == created_id
 assert len(sender.sent) == 1                      # each SentMessage has .topic/.message/.headers
 ```

@@ -134,14 +134,24 @@ class AwsLambdaTestHost:
         result = self._app.handle(builder.build())
         return ApiGatewayResponse(result["statusCode"], result.get("headers", {}), result.get("body", ""))
 
-    def send_sqs(self, topic: str, body: Any, message_id: str | None = None) -> dict[str, Any]:
+    def send_sqs(
+        self,
+        topic: str,
+        body: Any,
+        headers: dict[str, str] | None = None,
+        message_id: str | None = None,
+    ) -> dict[str, Any]:
         """Send one SQS message; returns the partial-batch-response ``{"batchItemFailures": [...]}``."""
-        event = SqsEventBuilder().with_message(topic, body, message_id=message_id).build()
+        event = (
+            SqsEventBuilder()
+            .with_message(topic, body, message_id=message_id, headers=headers)
+            .build()
+        )
         return self._app.handle(event)
 
     def send_sqs_event(self, event: dict[str, Any]) -> dict[str, Any]:
         return self._app.handle(event)
 
-    def send_sns(self, topic: str, body: Any) -> None:
-        event = SnsEventBuilder().with_message(topic, body).build()
+    def send_sns(self, topic: str, body: Any, headers: dict[str, str] | None = None) -> None:
+        event = SnsEventBuilder().with_message(topic, body, headers=headers).build()
         self._app.handle(event)

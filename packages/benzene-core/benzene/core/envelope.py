@@ -24,6 +24,12 @@ VERSION_HEADER = "benzene-version"
 
 
 class BenzeneMessageApplication:
+    """The transport-neutral entry point.
+
+    Decodes a request envelope ``{topic, headers, body}``, runs the pipeline (with the message
+    router registered last), and encodes a response envelope ``{statusCode, headers, body}``.
+    """
+
     def __init__(
         self,
         registry: Registry,

@@ -17,6 +17,12 @@ Middleware = Callable[[Context, Next], Awaitable[None]]
 
 
 class MiddlewarePipeline:
+    """An ordered chain of middleware, run exactly once per invocation.
+
+    Register middleware with :meth:`use` (first registered is outermost); drive one context through
+    the chain with :meth:`handle`.
+    """
+
     def __init__(self, middleware: list[Middleware] | None = None) -> None:
         self._middleware: list[Middleware] = list(middleware or [])
 

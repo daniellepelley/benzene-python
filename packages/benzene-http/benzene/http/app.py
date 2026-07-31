@@ -49,6 +49,12 @@ class HttpResponse:
 
 
 class BenzeneHttpApp:
+    """A standard ASGI application hosting Benzene handlers over HTTP (transport-bindings §2).
+
+    Call :meth:`handle` for a mapped :class:`HttpResponse` (convenient in tests), or mount the
+    instance itself as an ASGI app under uvicorn/hypercorn.
+    """
+
     def __init__(
         self,
         router: HttpRouter,

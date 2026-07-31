@@ -10,6 +10,7 @@ import base64
 import json
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlencode
 
 from .functions import GcpFunctionsApp
 from .pubsub import TOPIC_ATTRIBUTE
@@ -80,9 +81,9 @@ class PubSubEventBuilder:
 
 @dataclass
 class GcpHttpResponse:
-    body: str
     status_code: int
     headers: dict[str, str]
+    body: str
 
 
 class GcpFunctionsTestHost:
@@ -97,23 +98,24 @@ class GcpFunctionsTestHost:
         path: str,
         body: Any = None,
         headers: dict[str, str] | None = None,
-        query_string: str = "",
+        query: dict[str, str] | None = None,
     ) -> GcpHttpResponse:
         builder = HttpRequestBuilder(method, path)
         for key, value in (headers or {}).items():
             builder.with_header(key, value)
-        if query_string:
-            builder.with_query(query_string)
+        if query:
+            builder.with_query(urlencode(query))
         if body is not None:
             builder.with_body(body)
         result_body, status, result_headers = self._app.handle_http(builder.build())
-        return GcpHttpResponse(result_body, status, result_headers)
+        return GcpHttpResponse(status, result_headers, result_body)
 
     def send_pubsub(
-        self, topic: str, body: Any = None, attributes: dict[str, str] | None = None
+        self, topic: str, body: Any = None, headers: dict[str, str] | None = None
     ) -> None:
+        """Send a Pub/Sub message on ``topic``; ``headers`` become Pub/Sub message attributes."""
         builder = PubSubEventBuilder(topic)
-        for key, value in (attributes or {}).items():
+        for key, value in (headers or {}).items():
             builder.with_attribute(key, value)
         if body is not None:
             builder.with_body(body)

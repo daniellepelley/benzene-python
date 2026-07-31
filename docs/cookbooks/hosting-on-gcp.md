@@ -22,7 +22,7 @@ from benzene.results import Result
 def make_place_order(service, sender: MessageSender) -> Handler:
     async def place_order(request) -> Result:
         order = service.place(request.sku, request.quantity)
-        await sender.send_message("orders.created", {"id": order.id, "sku": order.sku})
+        await sender.send_message("orders:created", {"id": order.id, "sku": order.sku})
         return Result.created(order)
     return place_order
 ```
@@ -34,12 +34,12 @@ from benzene.core import Registry
 from benzene.http import HttpRouter
 
 router = HttpRouter()
-router.register("POST", "/orders", "orders.place", make_place_order(service, sender))
+router.register("POST", "/orders", "orders:place", make_place_order(service, sender))
 
 registry = Registry()
 for d in router.definitions():
     registry.add_definition(d)
-registry.register("orders.created", make_on_order_created(...))   # the Pub/Sub subscriber
+registry.register("orders:created", make_on_order_created(...))   # the Pub/Sub subscriber
 ```
 
 ## 3. Build the host and expose entry points
@@ -68,9 +68,9 @@ host = GcpFunctionsTestHost(build_app(sender=sender))
 
 response = host.send_http("POST", "/orders", body={"sku": "ABC", "quantity": 2})
 assert response.status_code == 201
-assert sender.last_topic == "orders.created"     # ingress -> handler -> egress
+assert sender.last_topic == "orders:created"     # ingress -> handler -> egress
 
-host.send_pubsub("orders.created", body={"id": "ord-1", "sku": "ABC"})   # exercise the subscriber
+host.send_pubsub("orders:created", body={"id": "ord-1", "sku": "ABC"})   # exercise the subscriber
 ```
 
 ## 5. Deploy

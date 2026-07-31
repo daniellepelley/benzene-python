@@ -15,6 +15,12 @@ class DuplicateHandlerError(Exception):
 
 
 class Registry:
+    """Maps each ``(topic, version)`` pair to at most one handler.
+
+    ``add`` registers a ``@message``-tagged function; ``register`` is the explicit path (no
+    decorator). Registering the same pair twice raises :class:`DuplicateHandlerError` at startup.
+    """
+
     def __init__(self) -> None:
         self._by_key: dict[tuple[str, str], HandlerDefinition] = {}
 
@@ -44,9 +50,15 @@ class Registry:
     def add_definition(self, definition: HandlerDefinition) -> "Registry":
         key = (definition.topic, definition.version)
         if key in self._by_key:
+            where = f"topic {definition.topic!r}" + (
+                f" version {definition.version!r}"
+                if definition.version
+                else " (unversioned)"
+            )
             raise DuplicateHandlerError(
-                f"A handler is already registered for topic {definition.topic!r} "
-                f"version {definition.version!r}."
+                f"A handler is already registered for {where}. Each (topic, version) pair maps to "
+                "exactly one handler — remove the duplicate registration, or give one handler a "
+                "distinct version."
             )
         self._by_key[key] = definition
         return self

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlencode
 
 from .app import AzureFunctionsApp, AzureHttpResponse
 
@@ -71,12 +72,12 @@ class AzureFunctionsTestHost:
         path: str,
         body: Any = None,
         headers: dict[str, str] | None = None,
-        query_string: str = "",
+        query: dict[str, str] | None = None,
     ) -> AzureHttpResponse:
         return self._app.handle_http_request(
             method=method,
             path=path,
-            query_string=query_string,
+            query_string=urlencode(query or {}),
             headers=headers or {},
             body="" if body is None else _body_text(body),
         )

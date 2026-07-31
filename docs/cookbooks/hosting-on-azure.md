@@ -61,12 +61,12 @@ sender = FakeMessageSender()
 host = AzureFunctionsTestHost(build_app(sender=sender))
 
 resp = host.send_http("POST", "/orders", body={"sku": "ABC"})
-assert resp.status_code == 201 and sender.last_topic == "orders.created"   # ingress->handler->egress
+assert resp.status_code == 201 and sender.last_topic == "orders:created"   # ingress->handler->egress
 
-host.send_service_bus("orders.created", {"id": "1", "sku": "A"})
+host.send_service_bus("orders:created", {"id": "1", "sku": "A"})
 host.send_event_hub_batch([
-    event_hub_event("orders.created", {"id": "2", "sku": "B"}),
-    event_hub_event("orders.created", {"id": "3", "sku": "C"}),
+    event_hub_event("orders:created", {"id": "2", "sku": "B"}),
+    event_hub_event("orders:created", {"id": "3", "sku": "C"}),
 ])
 ```
 
