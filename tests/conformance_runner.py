@@ -14,11 +14,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from benzene.core import BenzeneMessageApplication, Registry
+from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
 from benzene.http import from_http, to_http
+from benzene.mesh import (
+    InMemoryTraceExporter,
+    ServiceDescriptor,
+    ServiceInfo,
+    parse_traceparent,
+    trace_middleware,
+)
 from benzene.results import is_successful
 
-from .canonical_handlers import register_canonical
+from .canonical_handlers import register_canonical, register_with_panic
 
 CONFORMANCE_DIR = Path(__file__).resolve().parent.parent / "conformance"
 
@@ -90,8 +97,113 @@ def run_envelope_cases() -> list[str]:
     return failures
 
 
+def _mesh_subset(expected: Any, actual: Any) -> bool:
+    """Mesh subset matching (mesh.md conformance): dicts match by subset; arrays by exact length
+    with per-element subset; an expected empty array matches an actual empty *or absent* array."""
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return False
+        return all(k in actual and _mesh_subset(v, actual[k]) for k, v in expected.items())
+    if isinstance(expected, list):
+        if expected == [] and (actual is None or actual == []):
+            return True
+        if not isinstance(actual, list) or len(actual) != len(expected):
+            return False
+        return all(_mesh_subset(e, a) for e, a in zip(expected, actual))
+    return expected == actual
+
+
+def _mesh_subset_absent_ok(expected: dict, actual: dict) -> bool:
+    """Like ``_mesh_subset`` for dicts, but an expected empty-array value may be absent in ``actual``."""
+    for key, value in expected.items():
+        if isinstance(value, list) and value == [] and key not in actual:
+            continue
+        if key not in actual or not _mesh_subset(value, actual[key]):
+            return False
+    return True
+
+
+def _info_from_fixture(service_info: dict, **overrides: Any) -> ServiceInfo:
+    fields = {
+        "service": service_info["service"],
+        "service_version": service_info.get("serviceVersion"),
+        "placement": service_info.get("placement"),
+    }
+    fields.update(overrides)
+    return ServiceInfo(**fields)
+
+
+def run_mesh_descriptor() -> list[str]:
+    failures: list[str] = []
+    data = _load("mesh-descriptor-cases.json")
+    info = _info_from_fixture(data["serviceInfo"])
+    descriptor = ServiceDescriptor.derive(register_canonical(Registry()), info)
+    payload = descriptor.to_payload()
+
+    if not _mesh_subset_absent_ok(data["expectedDescriptor"], payload):
+        failures.append(f"mesh-descriptor: derived {payload} !⊇ {data['expectedDescriptor']}")
+
+    hash_spec = data["hash"]
+    h = descriptor.descriptor_hash()
+    if not h.startswith(hash_spec["prefix"]):
+        failures.append(f"mesh-descriptor: hash {h!r} lacks prefix {hash_spec['prefix']!r}")
+    if len(h) - len(hash_spec["prefix"]) != hash_spec["hexLength"]:
+        failures.append(f"mesh-descriptor: hash hex length != {hash_spec['hexLength']}")
+    if hash_spec.get("invariantToInstanceId"):
+        other = ServiceDescriptor.derive(
+            register_canonical(Registry()), _info_from_fixture(data["serviceInfo"], instance_id="i-xyz")
+        )
+        if other.descriptor_hash() != h:
+            failures.append("mesh-descriptor: hash not invariant to instanceId")
+    if hash_spec.get("sensitiveToServiceVersion"):
+        other = ServiceDescriptor.derive(
+            register_canonical(Registry()), _info_from_fixture(data["serviceInfo"], service_version="9.9.9")
+        )
+        if other.descriptor_hash() == h:
+            failures.append("mesh-descriptor: hash not sensitive to serviceVersion")
+    if hash_spec.get("sensitiveToTopics"):
+        from .canonical_handlers import greet
+
+        other = ServiceDescriptor.derive(Registry().add(greet), info)
+        if other.descriptor_hash() == h:
+            failures.append("mesh-descriptor: hash not sensitive to the topic set")
+    return failures
+
+
+def run_mesh_trace() -> list[str]:
+    failures: list[str] = []
+    data = _load("mesh-trace-cases.json")
+
+    for row in data["traceparent"]:
+        parsed = parse_traceparent(row["header"])
+        if row["valid"]:
+            if parsed != (row["traceId"], row["parentSpanId"]):
+                failures.append(f"mesh-trace[{row['name']}]: expected join {parsed!r}")
+        elif parsed is not None:
+            failures.append(f"mesh-trace[{row['name']}]: expected fresh trace, got {parsed!r}")
+
+    for case in data["invocations"]:
+        exporter = InMemoryTraceExporter()
+        pipeline = MiddlewarePipeline().use(trace_middleware(exporter, service="conformance"))
+        app = BenzeneMessageApplication(register_with_panic(Registry()), pipeline)
+        asyncio.run(app.handle(case["request"]))
+        if len(exporter) != 1:
+            failures.append(f"mesh-trace[{case['name']}]: expected exactly one event, got {len(exporter)}")
+            continue
+        event = exporter[0].to_payload()
+        if not _mesh_subset(case["expectedEvent"], event):
+            failures.append(f"mesh-trace[{case['name']}]: event {event} !⊇ {case['expectedEvent']}")
+    return failures
+
+
 def run_all() -> list[str]:
-    return run_status_vocabulary() + run_http_mapping() + run_envelope_cases()
+    return (
+        run_status_vocabulary()
+        + run_http_mapping()
+        + run_envelope_cases()
+        + run_mesh_descriptor()
+        + run_mesh_trace()
+    )
 
 
 if __name__ == "__main__":
@@ -101,4 +213,7 @@ if __name__ == "__main__":
         for f in all_failures:
             print("  -", f)
         sys.exit(1)
-    print("CONFORMANCE PASSED — status vocabulary, HTTP mapping, and envelope cases all green.")
+    print(
+        "CONFORMANCE PASSED — status vocabulary, HTTP mapping, envelope, "
+        "and mesh (descriptor + trace) cases all green."
+    )

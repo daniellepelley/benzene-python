@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene-mesh"
+version = "0.0.1"
+description = "Benzene mesh module — ServiceDescriptor self-description, the benzene:mesh endpoint, per-invocation tracing, and collector feeds."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Benzene" }]
+keywords = ["benzene", "mesh", "service-descriptor", "tracing", "observability", "hexagonal"]
+dependencies = ["benzene-core"]
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
+
+# PEP 420 namespace package — see benzene-results/pyproject.toml.
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]
