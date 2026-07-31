@@ -22,9 +22,11 @@ from .context import Context
 from .dependencies import Container, Lifetime, Scope, ServiceNotRegisteredError
 from .envelope import (
     VERSION_HEADER,
+    VERSION_HEADER_NAMES,
     BenzeneMessageApplication,
     encode_response,
     error_payload,
+    resolve_version,
 )
 from .errors import MessageHandlingError
 from .handler import Handler, HandlerDefinition, definition_of, message
@@ -54,12 +56,14 @@ __all__ = [
     "Scope",
     "ServiceNotRegisteredError",
     "VERSION_HEADER",
+    "VERSION_HEADER_NAMES",
     "definition_of",
     "encode_body",
     "encode_response",
     "error_payload",
     "message",
     "message_router",
+    "resolve_version",
     "to_camel",
     "to_jsonable",
     "to_request",

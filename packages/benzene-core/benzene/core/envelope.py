@@ -19,8 +19,24 @@ from .pipeline import MiddlewarePipeline
 from .registry import Registry
 from .router import message_router
 
-#: The header carrying the payload/handler version (draft in the spec; read with an empty default).
+#: The canonical header carrying the payload/handler version (versioning.md §2). Written outbound.
 VERSION_HEADER = "benzene-version"
+
+#: The ordered fallback list read inbound — a peer (.NET/Go/TS) may send any of these; first wins.
+VERSION_HEADER_NAMES: tuple[str, ...] = (VERSION_HEADER, "version", "x-version")
+
+
+def resolve_version(headers: dict[str, str], names: tuple[str, ...] = VERSION_HEADER_NAMES) -> str:
+    """Read the message version from the first present header in ``names`` (versioning.md §2).
+
+    Absent from all of them → ``""`` (the unversioned default). Headers are matched lower-case, as
+    the envelope normalises them.
+    """
+    for name in names:
+        value = headers.get(name)
+        if value:
+            return value
+    return ""
 
 
 class BenzeneMessageApplication:
@@ -48,7 +64,7 @@ class BenzeneMessageApplication:
             k.lower(): v for k, v in (request_envelope.get("headers") or {}).items()
         }
         body = request_envelope.get("body") or ""
-        version = headers.get(VERSION_HEADER, "")
+        version = resolve_version(headers)
 
         parsed = json.loads(body) if body else {}
         scope = self._container.create_scope()
