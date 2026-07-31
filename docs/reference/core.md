@@ -151,6 +151,32 @@ any `overrides` (last-registration-wins — the seam a test uses to substitute a
 app, and returns `(AppDefinition, Scope)`. `application_from(definition)` builds the runnable
 `BenzeneMessageApplication` with the startup's middleware installed ahead of the router.
 
+## Versioning
+
+A message carries its version in a header (versioning.md §2). Inbound, `resolve_version` reads the
+first present of `VERSION_HEADER_NAMES` — `benzene-version` (canonical), then `version`, then
+`x-version` — so a peer in any language reaches the right handler; outbound, write the canonical
+`benzene-version`. Handlers are selected by **exact `(topic, version)`**; a message with no version
+signal is served by the unversioned handler (version `""`), and an unknown version is a `not-found`.
+
+To serve several payload versions of one topic, use the **casting-handler pattern** (versioning.md
+§3.1) — no framework code, just an extra registration per retired version. Keep one shared latest
+implementation and register a thin forwarding handler for each old version that upcasts the request:
+
+```python
+registry.register("orders:place", place_v2, version="v2", request_type=PlaceOrderV2)
+
+def make_place_v1(latest):
+    async def place_v1(request: PlaceOrderV1) -> Result:      # v1's payload shape
+        return await latest(PlaceOrderV2(sku=request.sku, quantity=request.count))  # upcast v1 -> v2
+    return place_v1
+
+registry.register("orders:place", make_place_v1(place_v2), version="v1", request_type=PlaceOrderV1)
+```
+
+A v1 client (`version: v1`, the old `count` field) and a v2 client (`benzene-version: v2`, `quantity`)
+now both reach the one shared `place_v2` implementation.
+
 ## Exports
 
 `BenzeneMessageApplication`, `Container`, `Context`, `DuplicateHandlerError`, `Handler`,
