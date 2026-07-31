@@ -141,6 +141,10 @@ API. None touch the wire envelope, status vocabulary, or HTTP mapping (the inter
   vocabulary — an unknown status is a failure, exactly as the spec says.
 - **Explicit registration over reflection.** Handlers are registered with the `@message` decorator
   or `Registry.register(...)`; there is no assembly scanning.
+- **Middleware is a declarative field, not a `Configure(app)`/`app.Use()` call.** A composition
+  root's cross-cutting middleware is a `middleware: list[Middleware]` field on the `AppDefinition`
+  that `BenzeneStartUp.configure()` returns; `application_from(definition)` installs it ahead of the
+  message router, so a host and a test boot the same pipeline.
 - **Layered PyPI packages, not one-per-C#-project.** The distributions follow the meaningful
   adoption seams (see [`docs/packages.md`](docs/packages.md)); the assembly-only C# splits are folded
   in (e.g. `Benzene.Dependencies` → `benzene.core.dependencies`).

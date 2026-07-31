@@ -15,8 +15,9 @@ still derived from the real order registry (not a toy).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
-from benzene.core import AppDefinition, MessageSender
+from benzene.core import MessageSender
 from benzene.mesh import (
     MESH_TOPIC,
     InMemoryTraceExporter,
@@ -51,9 +52,10 @@ class MeshOrdersStartUp(OrdersStartUp):
         # A convenience HTTP surface for the reserved topic; mesh_interception answers it.
         base.router.register("GET", "/benzene/spec", MESH_TOPIC, _unreachable)
         exporter = services.get_service(TraceExporter)
-        return AppDefinition(
-            registry=base.registry,
-            router=base.router,
+        # Add cross-cutting middleware to whatever the base startup produced — `replace` keeps the
+        # base's registry/router (and any future field) instead of re-threading them by hand.
+        return replace(
+            base,
             middleware=[
                 trace_middleware(exporter, service="orders", instance_id="orders-7f9c"),
                 mesh_interception(descriptor),

@@ -8,7 +8,7 @@ response envelope ``{statusCode, headers, body}``. ``body`` is always a pre-seri
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Mapping
 
 from benzene.results import Result, Status
 
@@ -26,7 +26,7 @@ VERSION_HEADER = "benzene-version"
 VERSION_HEADER_NAMES: tuple[str, ...] = (VERSION_HEADER, "version", "x-version")
 
 
-def resolve_version(headers: dict[str, str], names: tuple[str, ...] = VERSION_HEADER_NAMES) -> str:
+def resolve_version(headers: Mapping[str, str], names: tuple[str, ...] = VERSION_HEADER_NAMES) -> str:
     """Read the message version from the first present header in ``names`` (versioning.md §2).
 
     Absent from all of them → ``""`` (the unversioned default). Headers are matched lower-case, as
