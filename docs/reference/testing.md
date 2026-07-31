@@ -34,7 +34,7 @@ def overrides(services):
 host = create_test_host(OrdersStartUp).with_services(overrides).build_aws()   # or .build_gcp() / .build_azure()
 
 response = host.send_sqs("orders:created", order)   # native event in the front door
-assert response == {"batchItemFailures": []}         # assert on the transport response
+assert response.batch_item_failures == []            # assert on the transport response
 assert fake.last_topic == "orders:created"           # ...and on the client's egress
 ```
 

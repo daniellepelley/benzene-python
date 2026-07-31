@@ -60,7 +60,7 @@ import asyncio
 
 if __name__ == "__main__":
     response = asyncio.run(
-        application.handle_async(
+        application.handle(
             {"topic": "say:hello", "headers": {}, "body": '{"name": "Benzene"}'}
         )
     )

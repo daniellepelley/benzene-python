@@ -45,7 +45,7 @@ resp = host.send_http("POST", "/orders", body={"sku": "ABC"})
 assert resp.status_code == 201 and sender.last_topic == "orders:created"
 
 # SQS + SNS ingress
-assert host.send_sqs("orders:created", {"id": "1", "sku": "A"}) == {"batchItemFailures": []}
+assert host.send_sqs("orders:created", {"id": "1", "sku": "A"}).batch_item_failures == []
 host.send_sns("orders:created", {"id": "2", "sku": "B"})
 
 # SQS partial-batch failure: only the bad record is reported
@@ -53,7 +53,7 @@ event = (SqsEventBuilder()
          .with_message("orders:created", {"id": "3", "sku": "C"}, message_id="m1")
          .with_message("orders:unknown", {}, message_id="m2")
          .build())
-assert host.send_sqs_event(event) == {"batchItemFailures": [{"itemIdentifier": "m2"}]}
+assert host.send_sqs_event(event).batch_item_failures == [{"itemIdentifier": "m2"}]
 ```
 
 ## Deploy (sketch)

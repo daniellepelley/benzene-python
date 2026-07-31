@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 from .app import AzureFunctionsApp, AzureHttpResponse
+
+if TYPE_CHECKING:
+    from benzene.core import Scope
 
 
 def _body_text(value: Any) -> str:
@@ -63,6 +66,9 @@ def event_hub_event(topic: str, body: Any, headers: dict[str, str] | None = None
 class AzureFunctionsTestHost:
     """Wraps an :class:`AzureFunctionsApp` for in-memory tests of each trigger."""
 
+    #: The resolved root scope, set by ``create_test_host(...).build_azure()`` for assertions.
+    scope: "Scope | None" = None
+
     def __init__(self, app: AzureFunctionsApp) -> None:
         self._app = app
 
@@ -74,7 +80,7 @@ class AzureFunctionsTestHost:
         headers: dict[str, str] | None = None,
         query: dict[str, str] | None = None,
     ) -> AzureHttpResponse:
-        return self._app.handle_http_request(
+        return self._app.handle_http(
             method=method,
             path=path,
             query_string=urlencode(query or {}),

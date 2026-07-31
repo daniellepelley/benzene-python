@@ -77,7 +77,7 @@ class AwsLambdaApp:
             failures: list[dict[str, str]] = []
             for record in event.get("Records", []):
                 envelope = sqs_record_envelope(record)
-                response = await self._application.handle_async(envelope)
+                response = await self._application.handle(envelope)
                 if not is_successful(response["statusCode"]):
                     failures.append({"itemIdentifier": record.get("messageId", "")})
             return failures
@@ -89,7 +89,7 @@ class AwsLambdaApp:
         async def run() -> None:
             for record in event.get("Records", []):
                 envelope = sns_record_envelope(record)
-                response = await self._application.handle_async(envelope)
+                response = await self._application.handle(envelope)
                 if not is_successful(response["statusCode"]):
                     raise MessageHandlingError(
                         envelope["topic"], response["statusCode"], response["body"]

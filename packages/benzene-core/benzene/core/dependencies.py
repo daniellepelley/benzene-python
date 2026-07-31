@@ -17,6 +17,23 @@ from enum import Enum
 from typing import Any, Callable
 
 
+class ServiceNotRegisteredError(KeyError):
+    """Raised by :meth:`Scope.get_service` when nothing is registered for a key.
+
+    Subclasses :class:`KeyError` so existing ``except KeyError`` handlers keep working, but the
+    message names the missing key and the next action — register it with ``add_singleton`` /
+    ``add_scoped`` / ``add_transient`` (or override it in a test with ``add_instance``).
+    """
+
+    def __init__(self, key: Any) -> None:
+        self.key = key
+        super().__init__(
+            f"No service registered for {key!r}. Register it on the Container with "
+            "add_singleton/add_scoped/add_transient (or add_instance for a fixed value), "
+            "or override it in a test via with_services(...)."
+        )
+
+
 class Lifetime(Enum):
     SINGLETON = "singleton"
     SCOPED = "scoped"
@@ -94,5 +111,5 @@ class Scope:
     def get_service(self, key: Any) -> Any:
         service = self.try_get_service(key)
         if service is None:
-            raise KeyError(f"No service registered for {key!r}")
+            raise ServiceNotRegisteredError(key)
         return service

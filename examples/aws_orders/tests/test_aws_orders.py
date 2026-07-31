@@ -59,7 +59,7 @@ def test_api_gateway_get_order_round_trip() -> None:
 def test_sqs_order_created_is_handled() -> None:
     host, _, _, seen = make_host()
     result = host.send_sqs(ORDER_CREATED_TOPIC, {"id": "ord-sqs", "sku": "ABC"})
-    assert result == {"batchItemFailures": []}
+    assert result.batch_item_failures == []
     assert seen == ["ord-sqs"]
 
 
@@ -78,5 +78,5 @@ def test_sqs_partial_batch_failure_reports_only_failed_record() -> None:
         .build()
     )
     result = host.send_sqs_event(event)
-    assert result == {"batchItemFailures": [{"itemIdentifier": "m2"}]}
+    assert result.batch_item_failures == [{"itemIdentifier": "m2"}]
     assert seen == ["ok-1"]                                       # the good record still processed

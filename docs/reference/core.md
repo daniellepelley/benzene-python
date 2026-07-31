@@ -107,7 +107,7 @@ Lifetimes: `Lifetime.SINGLETON`, `SCOPED`, `TRANSIENT`. Keys are arbitrary token
 from benzene.core import BenzeneMessageApplication
 
 app = BenzeneMessageApplication(registry)     # optional: pipeline=, container=
-response = await app.handle_async(
+response = await app.handle(
     {"topic": "order:create", "headers": {}, "body": '{"sku": "ABC"}'}
 )
 # {"statusCode": "created", "headers": {"content-type": "application/json"}, "body": "..."}

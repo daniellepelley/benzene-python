@@ -27,7 +27,8 @@ from benzene.azure import AzureFunctionsApp
 app = AzureFunctionsApp(http_router=router, registry=registry)   # shares one pipeline
 ```
 
-- `handle_http_request(method, path, query_string="", headers=None, body="")` → `AzureHttpResponse`.
+- `handle_http(method, path, query_string="", headers=None, body="")` → `AzureHttpResponse`
+  (parallel to GCP's `handle_http`; the signature carries Azure Functions' decomposed request).
 - `handle_service_bus(message)` → `None` (duck-typed `get_body()` + `application_properties`).
 - `handle_event_hub(events)` → `None` (a single event or a list).
 

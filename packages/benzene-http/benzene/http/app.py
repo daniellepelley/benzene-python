@@ -113,7 +113,7 @@ class BenzeneHttpApp:
             "headers": request_headers,
             "body": json.dumps(request_data),
         }
-        response = await self._application.handle_async(envelope)
+        response = await self._application.handle(envelope)
         return HttpResponse(
             status_code=to_http(response["statusCode"]),
             headers=dict(response["headers"]),

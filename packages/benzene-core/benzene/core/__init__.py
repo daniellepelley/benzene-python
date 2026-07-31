@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from .clients import MessageSender
 from .context import Context
-from .dependencies import Container, Lifetime, Scope
+from .dependencies import Container, Lifetime, Scope, ServiceNotRegisteredError
 from .envelope import (
     VERSION_HEADER,
     BenzeneMessageApplication,
@@ -52,6 +52,7 @@ __all__ = [
     "Registry",
     "build_application",
     "Scope",
+    "ServiceNotRegisteredError",
     "VERSION_HEADER",
     "definition_of",
     "encode_body",

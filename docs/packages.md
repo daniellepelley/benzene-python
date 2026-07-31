@@ -60,7 +60,7 @@ async def create_order(request: dict) -> Result:
     return Result.created({"id": "ord_1", "sku": request["sku"]})
 
 app = BenzeneMessageApplication(Registry().add(create_order))
-response = await app.handle_async(
+response = await app.handle(
     {"topic": "order:create", "headers": {}, "body": '{"sku": "ABC"}'}
 )
 ```

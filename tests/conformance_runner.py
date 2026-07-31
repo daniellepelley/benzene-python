@@ -73,7 +73,7 @@ def run_envelope_cases() -> list[str]:
     app = _app()
     data = _load("envelope-cases.json")
     for case in data["cases"]:
-        response = asyncio.run(app.handle_async(case["request"]))
+        response = asyncio.run(app.handle(case["request"]))
         expected = case["expected"]
         name = case["name"]
 

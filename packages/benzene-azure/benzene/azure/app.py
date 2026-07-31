@@ -54,7 +54,7 @@ class AzureFunctionsApp:
         )
 
     # --- HTTP trigger ----------------------------------------------------------------------
-    def handle_http_request(
+    def handle_http(
         self,
         method: str,
         path: str,
@@ -93,7 +93,7 @@ class AzureFunctionsApp:
         asyncio.run(run())
 
     async def _run_or_raise(self, envelope: dict[str, Any]) -> None:
-        response = await self._application.handle_async(envelope)
+        response = await self._application.handle(envelope)
         if not is_successful(response["statusCode"]):
             raise MessageHandlingError(envelope["topic"], response["statusCode"], response["body"])
 
@@ -111,7 +111,7 @@ def http_function(app: AzureFunctionsApp):
 
         parts = urlsplit(getattr(req, "url", "") or "")
         raw = req.get_body()
-        response = app.handle_http_request(
+        response = app.handle_http(
             method=req.method,
             path=parts.path or "/",
             query_string=parts.query,

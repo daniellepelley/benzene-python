@@ -44,7 +44,9 @@ attribute, forward headers as attributes, and use `boto3` (a lazy, optional impo
 ## Testing
 
 `benzene.aws.testing` provides `AwsLambdaTestHost` (`send_http`, `send_sqs`, `send_sqs_event`,
-`send_sns`) and `ApiGatewayRequestBuilder` / `SqsEventBuilder` / `SnsEventBuilder`. See
+`send_sns`) and `ApiGatewayRequestBuilder` / `SqsEventBuilder` / `SnsEventBuilder`. The `send_sqs*`
+calls return an `SqsBatchResponse` — assert on `response.batch_item_failures` (the SQS partial-batch
+protocol), mirroring how `send_http` returns a response object. See
 [Hosting on AWS Lambda](../cookbooks/hosting-on-aws.md) and the runnable
 [`examples/aws_orders`](https://github.com/daniellepelley/benzene-python/tree/main/examples/aws_orders).
 

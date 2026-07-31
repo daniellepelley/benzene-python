@@ -38,7 +38,7 @@ def _envelope_cases() -> list:
 @pytest.mark.parametrize("case", _envelope_cases(), ids=lambda c: c["name"])
 def test_envelope_case(case: dict) -> None:
     app = BenzeneMessageApplication(register_canonical(Registry()))
-    response = asyncio.run(app.handle_async(case["request"]))
+    response = asyncio.run(app.handle(case["request"]))
     expected = case["expected"]
 
     assert response["statusCode"] == expected["statusCode"]

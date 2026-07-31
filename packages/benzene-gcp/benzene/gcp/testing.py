@@ -9,11 +9,14 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 from .functions import GcpFunctionsApp
 from .pubsub import TOPIC_ATTRIBUTE
+
+if TYPE_CHECKING:
+    from benzene.core import Scope
 
 
 class HttpRequestBuilder:
@@ -88,6 +91,9 @@ class GcpHttpResponse:
 
 class GcpFunctionsTestHost:
     """Wraps a :class:`GcpFunctionsApp` for in-memory tests of both triggers."""
+
+    #: The resolved root scope, set by ``create_test_host(...).build_gcp()`` for assertions.
+    scope: "Scope | None" = None
 
     def __init__(self, app: GcpFunctionsApp) -> None:
         self._app = app

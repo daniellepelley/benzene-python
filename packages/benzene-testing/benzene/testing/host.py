@@ -53,7 +53,7 @@ class InMemoryBenzeneHost:
 
     async def send(self, envelope: dict[str, Any]) -> dict[str, Any]:
         """Send a raw ``{topic, headers, body}`` envelope; returns the response envelope."""
-        return await self._app.handle_async(envelope)
+        return await self._app.handle(envelope)
 
     async def send_message(
         self, topic: str, body: Any = None, headers: dict[str, str] | None = None

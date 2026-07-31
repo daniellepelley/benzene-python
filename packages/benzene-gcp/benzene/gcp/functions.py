@@ -70,7 +70,7 @@ class GcpFunctionsApp:
         """Handle a Pub/Sub CloudEvent. Raises on a failure result so Pub/Sub redelivers."""
         message = _pubsub_message(cloud_event)
         envelope = decode_pubsub_message(message)
-        response = asyncio.run(self._application.handle_async(envelope))
+        response = asyncio.run(self._application.handle(envelope))
         if not is_successful(response["statusCode"]):
             raise MessageHandlingError(envelope["topic"], response["statusCode"], response["body"])
 

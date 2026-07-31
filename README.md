@@ -64,7 +64,7 @@ async def hello(request: dict) -> Result:
 app = BenzeneMessageApplication(Registry().add(hello))
 
 # Drive it with a Benzene message envelope (the transport-neutral entry point):
-response = await app.handle_async(
+response = await app.handle(
     {"topic": "say:hello", "headers": {}, "body": '{"name":"world"}'}
 )
 # -> {"statusCode": "ok", "headers": {"content-type": "application/json"},
@@ -124,6 +124,23 @@ Or install the layers editable (what CI does — this also verifies the packagin
 pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http
 pip install pytest && pytest -q
 ```
+
+## Notes for readers of the .NET original
+
+The port is spec-first, not a transliteration, so a few deliberate idiom choices differ from the C#
+API. None touch the wire envelope, status vocabulary, or HTTP mapping (the interop contract):
+
+- **No `Async` suffixes.** Python signals async with `async def`, so the entry point is
+  `await app.handle(envelope)`, not `HandleAsync` — matching `MiddlewarePipeline.handle`,
+  `BenzeneHttpApp.handle`, and every other method in the port.
+- **Statuses are strings, not an enum.** The wire vocabulary is surfaced as `Status.OK` constants
+  and `Result.ok()` / `Result.not_found()` factories (spec §3), so an application can extend the
+  vocabulary — an unknown status is a failure, exactly as the spec says.
+- **Explicit registration over reflection.** Handlers are registered with the `@message` decorator
+  or `Registry.register(...)`; there is no assembly scanning.
+- **Layered PyPI packages, not one-per-C#-project.** The distributions follow the meaningful
+  adoption seams (see [`docs/packages.md`](docs/packages.md)); the assembly-only C# splits are folded
+  in (e.g. `Benzene.Dependencies` → `benzene.core.dependencies`).
 
 ## Conformance
 

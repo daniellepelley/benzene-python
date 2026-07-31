@@ -22,7 +22,7 @@ async def hello(request: dict) -> Result:
 app = BenzeneMessageApplication(Registry().add(hello))
 
 # Drive it with a transport-neutral Benzene message envelope:
-response = await app.handle_async(
+response = await app.handle(
     {"topic": "say:hello", "headers": {}, "body": '{"name": "world"}'}
 )
 # -> {"statusCode": "ok", "headers": {"content-type": "application/json"},

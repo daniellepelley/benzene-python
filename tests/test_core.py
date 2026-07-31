@@ -82,7 +82,7 @@ def test_message_decorator_registers_and_dispatches() -> None:
 
     app = BenzeneMessageApplication(Registry().add(hello))
     response = asyncio.run(
-        app.handle_async({"topic": "say:hello", "headers": {}, "body": '{"name":"benzene"}'})
+        app.handle({"topic": "say:hello", "headers": {}, "body": '{"name":"benzene"}'})
     )
     assert response["statusCode"] == Status.OK
     assert response["body"] == '{"greeting": "Hello benzene"}'
@@ -94,7 +94,7 @@ def test_handler_exception_becomes_service_unavailable() -> None:
         raise RuntimeError("kaboom")
 
     app = BenzeneMessageApplication(Registry().add(boom))
-    response = asyncio.run(app.handle_async({"topic": "boom", "headers": {}, "body": "{}"}))
+    response = asyncio.run(app.handle({"topic": "boom", "headers": {}, "body": "{}"}))
     assert response["statusCode"] == Status.SERVICE_UNAVAILABLE
 
 
@@ -129,7 +129,7 @@ def test_camelcase_payload_round_trips_through_the_envelope() -> None:
     app = BenzeneMessageApplication(Registry().add(echo))
     # Send camelCase in; expect camelCase back out.
     response = asyncio.run(
-        app.handle_async({"topic": "wire:echo", "headers": {}, "body": '{"orderId": "o9", "lineCount": 2}'})
+        app.handle({"topic": "wire:echo", "headers": {}, "body": '{"orderId": "o9", "lineCount": 2}'})
     )
     assert response["statusCode"] == Status.OK
     assert json.loads(response["body"]) == {"orderId": "o9", "lineCount": 2}

@@ -12,9 +12,12 @@ def overrides(services):
 
 host = create_test_host(OrdersStartUp).with_services(overrides).build_aws()
 response = host.send_sqs("orders:created", order)  # native event in the front door
-assert response == {"batchItemFailures": []}       # assert on the transport response
+assert response.batch_item_failures == []          # assert on the transport response
 assert fake.last_topic == "orders:created"         # ...and on the client's egress
 ```
+
+Need a service for an assertion? Every built host exposes the resolved root scope as ``host.scope``,
+so ``host.scope.get_service(OrderService)`` reaches the same instance the handlers ran against.
 
 The cloud packages are imported lazily inside each ``build_*`` so this stays a ``benzene-core``-only
 dependency; ``.build_aws()`` raises a clear error if ``benzene-aws`` isn't installed.
@@ -55,10 +58,12 @@ class TestHostBuilder:
             from benzene.gcp.testing import GcpFunctionsTestHost
         except ImportError as ex:  # pragma: no cover - environment-specific
             raise ImportError("build_gcp() requires the 'benzene-gcp' package to be installed") from ex
-        definition, _ = self._build()
-        return GcpFunctionsTestHost(
+        definition, scope = self._build()
+        host = GcpFunctionsTestHost(
             GcpFunctionsApp(http_router=definition.router, registry=definition.registry)
         )
+        host.scope = scope
+        return host
 
     def build_aws(self):
         """Specialize to an AWS Lambda test host (requires ``benzene-aws``)."""
@@ -67,10 +72,12 @@ class TestHostBuilder:
             from benzene.aws.testing import AwsLambdaTestHost
         except ImportError as ex:  # pragma: no cover - environment-specific
             raise ImportError("build_aws() requires the 'benzene-aws' package to be installed") from ex
-        definition, _ = self._build()
-        return AwsLambdaTestHost(
+        definition, scope = self._build()
+        host = AwsLambdaTestHost(
             AwsLambdaApp(http_router=definition.router, registry=definition.registry)
         )
+        host.scope = scope
+        return host
 
     def build_azure(self):
         """Specialize to an Azure Functions test host (requires ``benzene-azure``)."""
@@ -79,10 +86,12 @@ class TestHostBuilder:
             from benzene.azure.testing import AzureFunctionsTestHost
         except ImportError as ex:  # pragma: no cover - environment-specific
             raise ImportError("build_azure() requires the 'benzene-azure' package to be installed") from ex
-        definition, _ = self._build()
-        return AzureFunctionsTestHost(
+        definition, scope = self._build()
+        host = AzureFunctionsTestHost(
             AzureFunctionsApp(http_router=definition.router, registry=definition.registry)
         )
+        host.scope = scope
+        return host
 
 
 def create_test_host(startup: BenzeneStartUp | type[BenzeneStartUp]) -> TestHostBuilder:

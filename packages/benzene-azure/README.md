@@ -12,7 +12,7 @@ pip install benzene-azure          # add [servicebus] for the real outbound clie
 from benzene.azure import AzureFunctionsApp
 
 app = AzureFunctionsApp(http_router=router, registry=registry)
-# main.py adapts azure.functions request/response types to app.handle_http_request(...),
+# main.py adapts azure.functions request/response types to app.handle_http(...),
 # app.handle_service_bus(msg), app.handle_event_hub(events).
 ```
 

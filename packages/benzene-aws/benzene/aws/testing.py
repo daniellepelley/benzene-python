@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .app import AwsLambdaApp
 from .events import TOPIC_ATTRIBUTE
+
+if TYPE_CHECKING:
+    from benzene.core import Scope
 
 
 def _body(value: Any) -> str:
@@ -110,8 +113,32 @@ class ApiGatewayResponse:
     body: str
 
 
+@dataclass
+class SqsBatchResponse:
+    """The SQS partial-batch response, as an object to assert on (mirrors the HTTP response shape).
+
+    The wire body stays the SQS protocol's ``{"batchItemFailures": [{"itemIdentifier": ...}]}`` — this
+    only wraps it so a test reads ``response.batch_item_failures == []`` (parallel to
+    ``response.status_code`` on the HTTP hosts) instead of indexing a raw dict.
+    """
+
+    batch_item_failures: list[dict[str, str]]
+
+    @property
+    def item_identifiers(self) -> list[str]:
+        """Just the failed message ids (``itemIdentifier``) — the common thing to assert on."""
+        return [f["itemIdentifier"] for f in self.batch_item_failures if "itemIdentifier" in f]
+
+    @classmethod
+    def from_wire(cls, response: dict[str, Any]) -> "SqsBatchResponse":
+        return cls(batch_item_failures=list(response.get("batchItemFailures", [])))
+
+
 class AwsLambdaTestHost:
     """Wraps an :class:`AwsLambdaApp` for in-memory tests of each event source."""
+
+    #: The resolved root scope, set by ``create_test_host(...).build_aws()`` for assertions.
+    scope: "Scope | None" = None
 
     def __init__(self, app: AwsLambdaApp) -> None:
         self._app = app
@@ -140,17 +167,17 @@ class AwsLambdaTestHost:
         body: Any,
         headers: dict[str, str] | None = None,
         message_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Send one SQS message; returns the partial-batch-response ``{"batchItemFailures": [...]}``."""
+    ) -> SqsBatchResponse:
+        """Send one SQS message; returns the partial-batch response (``.batch_item_failures``)."""
         event = (
             SqsEventBuilder()
             .with_message(topic, body, message_id=message_id, headers=headers)
             .build()
         )
-        return self._app.handle(event)
+        return SqsBatchResponse.from_wire(self._app.handle(event))
 
-    def send_sqs_event(self, event: dict[str, Any]) -> dict[str, Any]:
-        return self._app.handle(event)
+    def send_sqs_event(self, event: dict[str, Any]) -> SqsBatchResponse:
+        return SqsBatchResponse.from_wire(self._app.handle(event))
 
     def send_sns(self, topic: str, body: Any, headers: dict[str, str] | None = None) -> None:
         event = SnsEventBuilder().with_message(topic, body, headers=headers).build()

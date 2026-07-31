@@ -42,7 +42,7 @@ class BenzeneMessageApplication:
         # The router is the terminal middleware, registered last.
         self._pipeline.use(message_router(registry))
 
-    async def handle_async(self, request_envelope: dict[str, Any]) -> dict[str, Any]:
+    async def handle(self, request_envelope: dict[str, Any]) -> dict[str, Any]:
         topic = request_envelope.get("topic") or ""
         headers = {
             k.lower(): v for k, v in (request_envelope.get("headers") or {}).items()
