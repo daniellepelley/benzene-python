@@ -22,6 +22,7 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 - **[`benzene.gcp`](reference/gcp.md)** — the Google Cloud Functions host (HTTP + Pub/Sub).
 - **[`benzene.aws`](reference/aws.md)** — the AWS Lambda host (API Gateway + SQS + SNS).
 - **[`benzene.azure`](reference/azure.md)** — the Azure Functions host (HTTP + Service Bus + Event Hub).
+- **[`benzene.mesh`](reference/mesh.md)** — self-description, tracing, and collector feeds for the mesh.
 - **[`benzene.testing`](reference/testing.md)** — the in-memory test host and test doubles.
 
 ## Guides & cookbooks
@@ -32,6 +33,8 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
   SNS, with SNS egress.
 - **[Hosting on Azure Functions](cookbooks/hosting-on-azure.md)** — HTTP + Service Bus + Event Hub
   triggers, with Service Bus egress.
+- **[Joining the mesh](cookbooks/joining-the-mesh.md)** — add self-description, tracing, and collector
+  feeds to a service without touching its handlers.
 - **[Examples](https://github.com/daniellepelley/benzene-python/tree/main/examples)** — runnable,
   multi-transport cloud examples, each with dogfooded tests.
 
@@ -49,6 +52,6 @@ in the main Benzene repository:
 
 ## Status
 
-The core, the inbound HTTP binding, and the three cloud hosts (GCP, AWS, Azure — each multi-transport
-with egress) are implemented and conformance-green. The mesh module and payload versioning are on the
-[roadmap](../README.md#roadmap).
+The core, the inbound HTTP binding, the three cloud hosts (GCP, AWS, Azure — each multi-transport with
+egress), and the mesh module (self-description, tracing, and collector feeds) are implemented and
+conformance-green. Payload versioning is on the [roadmap](../README.md#roadmap).

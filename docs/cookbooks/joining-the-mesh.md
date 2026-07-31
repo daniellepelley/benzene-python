@@ -1,0 +1,164 @@
+# Joining the mesh (self-description + tracing + collector feeds)
+
+Take an existing Benzene service — here the order domain, unchanged — and make it show up in a
+**mesh**: it describes itself on the reserved `benzene:mesh` topic, traces every invocation, and
+reports its descriptor, heartbeats, and traces into a collector. None of this touches the handlers;
+mesh is additive middleware plus an outbound feed.
+
+## Prerequisites
+
+- Python 3.10+
+- `pip install benzene-mesh` (installs `benzene-core`; add `benzene-testing` for the fakes below)
+- An existing service with a `benzene.core` `Registry` — this walkthrough reuses the order domain from
+  the [examples](https://github.com/daniellepelley/benzene-python/tree/main/examples) (`build_orders`).
+
+## 1. Derive the descriptor from the real registry
+
+The descriptor is **derived**, never written by hand — `derive()` reads the registry, so it is always
+the truth of what the service serves. Give it the identity and placement the registry can't know:
+
+```python
+# mesh_wiring.py
+from benzene.mesh import ServiceDescriptor, ServiceInfo
+from orders_domain.wiring import build_orders
+from orders_domain.handlers import OrderService
+
+def build_descriptor(registry) -> ServiceDescriptor:
+    return ServiceDescriptor.derive(
+        registry,
+        ServiceInfo(
+            service="orders",
+            service_version="1.4.2",
+            instance_id="orders-7f9c",
+            placement={"cloud": "aws", "region": "eu-west-1"},
+        ),
+    )
+```
+
+The derived descriptor carries one topic entry per registered topic — for the order domain that is
+`orders:place`, `orders:get`, and `orders:created` — each with the request/response JSON Schema taken
+from the handler's declared types, and a `descriptorHash` over the contract:
+
+```python
+from benzene.testing import FakeMessageSender
+
+registry = build_orders(OrderService(), FakeMessageSender()).registry
+descriptor = build_descriptor(registry)
+
+payload = descriptor.to_payload()
+assert {t["id"] for t in payload["topics"]} == {"orders:place", "orders:get", "orders:created"}
+assert descriptor.descriptor_hash().startswith("sha256:")
+```
+
+## 2. Answer the reserved topic and trace every invocation
+
+Two pieces of middleware. `trace_middleware` goes **outermost** so it times the whole invocation;
+`mesh_interception` goes **before the router** so it short-circuits `benzene:mesh` and lets everything
+else route normally.
+
+```python
+# app.py
+from benzene.core import BenzeneMessageApplication, MiddlewarePipeline
+from benzene.mesh import InMemoryTraceExporter, mesh_interception, trace_middleware
+from benzene.testing import FakeMessageSender
+
+from mesh_wiring import build_descriptor
+from orders_domain.wiring import build_orders
+from orders_domain.handlers import OrderService
+
+sender = FakeMessageSender()                          # a real outbound client in production
+registry = build_orders(OrderService(), sender).registry
+descriptor = build_descriptor(registry)
+
+exporter = InMemoryTraceExporter()                    # your TraceExporter in production
+pipeline = (
+    MiddlewarePipeline()
+    .use(trace_middleware(exporter, service="orders", instance_id="orders-7f9c"))
+    .use(mesh_interception(descriptor))
+)
+app = BenzeneMessageApplication(registry, pipeline)
+```
+
+The reserved topic now returns the descriptor, and a real order both routes and gets traced:
+
+```python
+import asyncio, json
+
+# The reserved topic returns this service's descriptor (status ok).
+mesh = asyncio.run(app.handle({"topic": "benzene:mesh", "headers": {}, "body": ""}))
+assert mesh["statusCode"] == "ok"
+assert json.loads(mesh["body"])["service"] == "orders"
+
+# A real order: the handler runs, egress fires, and the invocation is traced once.
+placed = asyncio.run(app.handle({
+    "topic": "orders:place",
+    "headers": {"x-correlation-id": "corr-42"},
+    "body": '{"sku": "ABC", "quantity": 2}',
+}))
+assert placed["statusCode"] == "created"
+assert sender.last_topic == "orders:created"          # egress proven
+
+traces = [e for e in exporter if e.topic == "orders:place"]
+assert len(traces) == 1
+assert traces[0].status == "created"
+assert traces[0].correlation_id == "corr-42"          # trace carries the correlation id
+```
+
+`trace_middleware` joins an inbound `traceparent` trace when present (else starts a fresh one) and
+reads `x-correlation-id` for the business correlation id. Exporter failures are swallowed — tracing
+never breaks the request.
+
+## 3. Report into a collector
+
+`MeshFeedSender` pushes the feeds to a collector over any outbound `MessageSender`. Each feed is
+independent and fire-and-report: it returns the outbound `Result` so you can log a failure, but it
+never raises and never blocks traffic. Use the same `benzene.core` `MessageSender` you already publish
+events with (Pub/Sub, SNS/SQS, Service Bus, or an HTTP POST of the wire envelope).
+
+```python
+from datetime import datetime, timezone
+from benzene.mesh import Heartbeat, MeshFeedSender
+
+feeds = MeshFeedSender(collector_sender)              # any benzene.core MessageSender
+
+# At startup: register the descriptor (benzene:mesh:register).
+await feeds.register(descriptor)
+
+# Periodically: a heartbeat with the descriptor hash so the collector spots contract drift.
+await feeds.heartbeat(Heartbeat(
+    service="orders",
+    sent_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    instance_id="orders-7f9c",
+    descriptor_hash=descriptor.descriptor_hash(),
+))
+
+# Periodically: flush the batched trace events (benzene:mesh:traces -> {"events": [...]}).
+await feeds.publish_traces(list(exporter))
+exporter.clear()
+```
+
+## Adopt only what you need
+
+Every feed is optional on both sides. Install `mesh_interception` and nothing else to be discoverable
+without tracing; add `trace_middleware` for a trace feed; add `MeshFeedSender` to push into a collector.
+Leave any of them out and the rest of the service is unchanged — an unprovisioned endpoint, an
+unreachable collector, or a failing exporter must never affect service traffic.
+
+## Troubleshooting
+
+- **The descriptor has no topics.** `derive()` reads the `Registry` you pass — build it after wiring
+  your handlers/routes (`build_orders(...).registry`), not from an empty one.
+- **`benzene:mesh` routes to a handler / 404s instead of returning the descriptor.** Register
+  `mesh_interception` in the pipeline *before* the router runs (pass it to the `MiddlewarePipeline`, as
+  above) — the router is the terminal middleware.
+- **Traces missing or double-counted.** Install `trace_middleware` once, outermost. It emits exactly
+  one `TraceEvent` per routed invocation.
+- **The hash changed but the code didn't.** `descriptor_hash()` excludes `instanceId`, `degraded`, and
+  `profile`, but includes `serviceVersion`, `placement`, the topic set, and the schemas — bumping the
+  version or changing a request/response type is meant to change it.
+
+## See also
+
+- [`benzene.mesh` reference](../reference/mesh.md) — every type, signature, and wire shape.
+- [`benzene.core` reference](../reference/core.md), [`benzene.testing` reference](../reference/testing.md).
+- [mesh specification](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/mesh.md).
