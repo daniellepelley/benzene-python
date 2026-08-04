@@ -175,6 +175,31 @@ def test_http_version_segment_is_not_leaked_into_the_request() -> None:
     assert captured == {"q": "1"}  # the query param is present; `version` is not
 
 
+def test_route_static_version_yields_to_any_caller_version_header() -> None:
+    # A route pinned to a static version (no {version} segment) is only a default: the caller may
+    # override it with ANY recognised version header, not just the canonical benzene-version.
+    from benzene.http import BenzeneHttpApp, HttpRouter
+
+    async def v1(_request: dict) -> Result:
+        return Result.ok({"served": "v1"})
+
+    async def v2(_request: dict) -> Result:
+        return Result.ok({"served": "v2"})
+
+    registry = Registry()
+    registry.register("api:echo", v1, version="v1")
+    registry.register("api:echo", v2, version="v2")
+    router = HttpRouter()
+    router.register("GET", "/echo", "api:echo", v1, version="v1")  # static default v1
+    app = BenzeneHttpApp(router, application=BenzeneMessageApplication(registry))
+
+    # No header -> the route's static default handler.
+    assert json.loads(asyncio.run(app.handle("GET", "/echo")).body) == {"served": "v1"}
+    # A fallback header (x-version, not the canonical one) still overrides the static default.
+    overridden = asyncio.run(app.handle("GET", "/echo", headers={"x-version": "v2"}))
+    assert json.loads(overridden.body) == {"served": "v2"}
+
+
 # --- opt-in highest-version selector (versioning.md §3) ------------------------------------------
 
 def _selector_app(selector):

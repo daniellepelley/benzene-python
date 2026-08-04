@@ -32,6 +32,7 @@ from benzene.core import (
     MiddlewarePipeline,
     Registry,
     error_payload,
+    resolve_version,
 )
 from benzene.results import Result, Status
 
@@ -108,10 +109,11 @@ class BenzeneHttpApp:
 
         request_headers = {k.lower(): v for k, v in (headers or {}).items()}
         # Version precedence: a {version} route segment is authoritative; else the route's static
-        # version fills in unless the caller pinned one via a version header (versioning.md §2).
+        # version fills in unless the caller pinned one via any recognised version header — checked
+        # through resolve_version so a fallback header (version/x-version) counts too (versioning.md §2).
         if route_version is not None:
             request_headers[VERSION_HEADER] = route_version
-        elif endpoint.version and VERSION_HEADER not in request_headers:
+        elif endpoint.version and not resolve_version(request_headers):
             request_headers[VERSION_HEADER] = endpoint.version
 
         envelope = {

@@ -15,10 +15,13 @@ from .pipeline import Middleware, Next
 from .registry import Registry, VersionSelector, exact_version
 
 
-def message_router(registry: Registry, select: VersionSelector | None = None) -> Middleware:
-    """Terminal middleware resolving topic → handler. ``select`` chooses the version-selection policy
-    (default: exact ``(topic, version)`` match; pass ``highest_version`` for latest-wins fallback)."""
-    selector = select or exact_version
+def message_router(
+    registry: Registry, version_selector: VersionSelector | None = None
+) -> Middleware:
+    """Terminal middleware resolving topic → handler. ``version_selector`` chooses the
+    version-selection policy — same keyword as :class:`BenzeneMessageApplication` (default: exact
+    ``(topic, version)`` match; pass ``highest_version`` for latest-wins fallback)."""
+    selector = version_selector or exact_version
 
     async def middleware(context: Context, next: Next) -> None:  # noqa: A002 - spec name
         if not context.topic:

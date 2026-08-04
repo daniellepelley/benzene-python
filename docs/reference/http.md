@@ -59,7 +59,13 @@ router.register("GET", "/{version}/orders/{id}", "order:get", get_order)
 ```
 
 The route segment is authoritative over both the route's static version and a caller's version
-header. See [versioning in `benzene.core`](core.md#versioning).
+header. Without a `{version}` segment, a caller's version header (any of the fallback names —
+`benzene-version`, `version`, `x-version`) overrides the route's static version.
+
+`version` is a **reserved path-parameter name**: a `{version}` segment is consumed for handler
+selection and is never delivered to the handler as a request field, so don't use `{version}` for a
+genuine domain field (name it e.g. `{revision}` instead). See
+[versioning in `benzene.core`](core.md#versioning).
 
 ## Status mapping
 

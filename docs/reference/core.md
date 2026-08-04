@@ -163,7 +163,11 @@ authoritative when present, falling back to the headers otherwise (see [`benzene
 message with no version signal is served by the unversioned handler (version `""`), and an unknown
 version is a `not-found`. Pass a `version_selector` to opt into a different policy —
 `highest_version` returns the exact match if present, else the natural-highest registered version
-(`v2` before `v10`); a selector is just a `VersionSelector` callable, so you can supply your own:
+(`v2` before `v10`); a selector is just a `VersionSelector` callable, so you can supply your own.
+(The spec's built-in .NET selector falls back to the highest version; this port defaults to
+exact-only so an unknown version fails loudly rather than silently routing to a newer handler —
+opt into `highest_version` for the .NET-style fallback. The same keyword works on
+`message_router(registry, version_selector=...)`.)
 
 ```python
 from benzene.core import BenzeneMessageApplication, highest_version
