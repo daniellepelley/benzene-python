@@ -29,6 +29,14 @@ from .envelope import (
     resolve_version,
 )
 from .errors import MessageHandlingError
+from .health import (
+    HEALTH_TOPIC,
+    HealthCheck,
+    HealthCheckResult,
+    HealthChecks,
+    HealthReport,
+    health_interception,
+)
 from .handler import Handler, HandlerDefinition, definition_of, message
 from .mapping import encode_body, to_camel, to_jsonable, to_request
 from .pipeline import Middleware, MiddlewarePipeline, Next
@@ -47,8 +55,13 @@ __all__ = [
     "Container",
     "Context",
     "DuplicateHandlerError",
+    "HEALTH_TOPIC",
     "Handler",
     "HandlerDefinition",
+    "HealthCheck",
+    "HealthCheckResult",
+    "HealthChecks",
+    "HealthReport",
     "Lifetime",
     "MessageHandlingError",
     "MessageSender",
@@ -70,6 +83,7 @@ __all__ = [
     "encode_response",
     "error_payload",
     "exact_version",
+    "health_interception",
     "highest_version",
     "message",
     "message_router",

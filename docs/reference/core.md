@@ -193,11 +193,40 @@ registry.register("orders:place", make_place_v1(place_v2), version="v1", request
 A v1 client (`version: v1`, the old `count` field) and a v2 client (`benzene-version: v2`, `quantity`)
 now both reach the one shared `place_v2` implementation.
 
+## Health checks
+
+A service answers the reserved `benzene:healthcheck` topic by running its registered checks (core-
+concepts §). Register named checks on a `HealthChecks` and install `health_interception` before the
+router; it short-circuits the reserved topic (version ignored, like the mesh endpoint):
+
+```python
+from benzene.core import HealthChecks, HealthCheckResult, MiddlewarePipeline, health_interception
+
+checks = (
+    HealthChecks()
+    .add("db", lambda: HealthCheckResult.healthy())          # a bool works too
+    .add("queue", check_queue)                                # sync or async callable
+)
+pipeline = MiddlewarePipeline().use(health_interception(checks))
+```
+
+A check returns a `HealthCheckResult` (or a bool), sync or async; a check that raises counts as
+unhealthy rather than crashing the endpoint. All healthy → status `ok` with the aggregate; any
+unhealthy → `service-unavailable` naming the failed checks. The aggregate
+
+```json
+{"isHealthy": true, "healthChecks": {"db": {"isHealthy": true}, "queue": {"isHealthy": true}}}
+```
+
+is exactly the shape the mesh [`Heartbeat`](mesh.md) reports, so a service runs its checks once and
+feeds both the health endpoint and the heartbeat: `report = await checks.run()`.
+
 ## Exports
 
 `BenzeneMessageApplication`, `Container`, `Context`, `DuplicateHandlerError`, `Handler`,
 `HandlerDefinition`, `Lifetime`, `Middleware`, `MiddlewarePipeline`, `Next`, `Registry`, `Scope`,
-`ServiceNotRegisteredError`, `AppDefinition`, `BenzeneStartUp`, `VERSION_HEADER`,
+`ServiceNotRegisteredError`, `AppDefinition`, `BenzeneStartUp`, `HealthChecks`, `HealthCheck`,
+`HealthCheckResult`, `HealthReport`, `HEALTH_TOPIC`, `health_interception`, `VERSION_HEADER`,
 `VERSION_HEADER_NAMES`, `VersionSelector`, `application_from`, `build_application`, `definition_of`,
 `encode_response`, `error_payload`, `exact_version`, `highest_version`, `message`, `message_router`,
 `resolve_version`, `to_jsonable`, `to_request`.
