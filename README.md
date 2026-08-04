@@ -30,7 +30,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | Install | Import | You get | Depends on | .NET analog |
 |---|---|---|---|---|
 | `benzene-results` | `benzene.results` | `Result` + status vocabulary — the return type of a handler | — (zero deps) | `Benzene.Results` |
-| `benzene-core` | `benzene.core` | pipeline, registry, `@message`, DI, the `BenzeneMessage` envelope | `benzene-results` | `Benzene.Core*` + `Benzene.Dependencies` |
+| `benzene-core` | `benzene.core` | pipeline, registry, `@message`, DI, versioning, health checks, the `BenzeneMessage` envelope | `benzene-results` | `Benzene.Core*` + `Benzene.Dependencies` |
 | `benzene-http` | `benzene.http` | inbound HTTP (ASGI) binding + status mapping | `benzene-core` | `Benzene.Http` |
 | `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
 | `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + egress) | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` |
@@ -178,7 +178,11 @@ running .NET Benzene service) is what "conformant" means — see the spec's
    `highest_version` selector (exact-match stays the default), and the casting-handler pattern (serve
    multiple payload versions with no framework code) — all done and documented. Transparent-casting
    decorators are the one remaining, optional piece.
-7. Later: the collector side (`mesh:query:*` ingest) and gRPC.
+7. **(done)** Operational surfaces — health checks (the reserved `benzene:healthcheck` endpoint,
+   whose `{isHealthy, healthChecks}` aggregate also feeds the mesh heartbeat) and the
+   `benzene-pydantic` request-validation adapter. All the cross-cutting middleware (validation,
+   tracing, health, mesh) installs from one composition root and is testable through the harness.
+8. Later: the collector side (`mesh:query:*` ingest) and gRPC.
 
 ## Documentation
 
