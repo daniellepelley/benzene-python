@@ -18,8 +18,10 @@ from benzene.core import (
     BenzeneMessageApplication,
     Handler,
     Registry,
+    highest_version,
     resolve_version,
 )
+from benzene.core.registry import _natural_key
 from benzene.results import Result
 
 
@@ -171,3 +173,56 @@ def test_http_version_segment_is_not_leaked_into_the_request() -> None:
 
     asyncio.run(app.handle("GET", "/v1/echo", query_string="q=1"))
     assert captured == {"q": "1"}  # the query param is present; `version` is not
+
+
+# --- opt-in highest-version selector (versioning.md §3) ------------------------------------------
+
+def _selector_app(selector):
+    async def v1(_request: dict) -> Result:
+        return Result.ok({"served": "v1"})
+
+    async def v2(_request: dict) -> Result:
+        return Result.ok({"served": "v2"})
+
+    async def v10(_request: dict) -> Result:
+        return Result.ok({"served": "v10"})
+
+    registry = Registry()
+    registry.register("api:thing", v1, version="v1")
+    registry.register("api:thing", v2, version="v2")
+    registry.register("api:thing", v10, version="v10")
+    return BenzeneMessageApplication(registry, version_selector=selector)
+
+
+def _served(app, version: str) -> dict:
+    headers = {"version": version} if version else {}
+    response = asyncio.run(app.handle({"topic": "api:thing", "headers": headers, "body": "{}"}))
+    return json.loads(response["body"]) if response["body"] else {"statusCode": response["statusCode"]}
+
+
+def test_highest_version_falls_back_to_the_latest_when_no_exact_match() -> None:
+    app = _selector_app(highest_version)
+    # v10 is the natural-highest (not v2 by string order), used when the requested version is absent…
+    assert _served(app, "") == {"served": "v10"}
+    # …or unknown.
+    assert _served(app, "v9") == {"served": "v10"}
+
+
+def test_highest_version_still_prefers_an_exact_match() -> None:
+    app = _selector_app(highest_version)
+    assert _served(app, "v1") == {"served": "v1"}
+    assert _served(app, "v2") == {"served": "v2"}
+
+
+def test_default_selector_is_exact_match_only() -> None:
+    app = _selector_app(None)  # default: exact match, no fallback
+    response = asyncio.run(
+        app.handle({"topic": "api:thing", "headers": {"version": "v9"}, "body": "{}"})
+    )
+    assert response["statusCode"] == "not-found"
+
+
+def test_natural_key_orders_versions_numerically() -> None:
+    assert _natural_key("v2") < _natural_key("v10")     # not string order ("v10" < "v2")
+    assert _natural_key("1.9") < _natural_key("1.10")
+    assert sorted(["v10", "v1", "v2"], key=_natural_key) == ["v1", "v2", "v10"]

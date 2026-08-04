@@ -16,7 +16,7 @@ from .context import Context
 from .dependencies import Container
 from .mapping import to_jsonable
 from .pipeline import MiddlewarePipeline
-from .registry import Registry
+from .registry import Registry, VersionSelector
 from .router import message_router
 
 #: The canonical header carrying the payload/handler version (versioning.md §2). Written outbound.
@@ -51,12 +51,14 @@ class BenzeneMessageApplication:
         registry: Registry,
         pipeline: MiddlewarePipeline | None = None,
         container: Container | None = None,
+        *,
+        version_selector: VersionSelector | None = None,
     ) -> None:
         self._registry = registry
         self._container = container or Container()
         self._pipeline = pipeline or MiddlewarePipeline()
         # The router is the terminal middleware, registered last.
-        self._pipeline.use(message_router(registry))
+        self._pipeline.use(message_router(registry, version_selector))
 
     async def handle(self, request_envelope: dict[str, Any]) -> dict[str, Any]:
         topic = request_envelope.get("topic") or ""

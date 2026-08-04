@@ -7,7 +7,14 @@ unversioned handler (version = "") handles it; versioned handlers are selected o
 
 from __future__ import annotations
 
+import re
+from typing import Callable
+
 from .handler import Handler, HandlerDefinition, definition_of
+
+#: How the router resolves a ``(topic, requested version)`` to a handler (versioning.md §3). A
+#: selector is a plain callable, so an application can supply its own policy.
+VersionSelector = Callable[["Registry", str, str], "HandlerDefinition | None"]
 
 
 class DuplicateHandlerError(Exception):
@@ -69,3 +76,39 @@ class Registry:
 
     def definitions(self) -> list[HandlerDefinition]:
         return list(self._by_key.values())
+
+    def versions_of(self, topic: str) -> list[HandlerDefinition]:
+        """Every handler registered for ``topic``, across all versions (registration order)."""
+        return [d for d in self._by_key.values() if d.topic == topic]
+
+
+def exact_version(registry: Registry, topic: str, version: str) -> HandlerDefinition | None:
+    """The default selector: an exact ``(topic, version)`` match (unversioned when ``version`` is '')."""
+    return registry.find(topic, version)
+
+
+def _natural_key(version: str) -> tuple:
+    """A natural-order sort key so ``v2 < v10`` and ``1.9 < 1.10``.
+
+    Splits into digit and non-digit runs; each run is tagged ``(0, int)`` or ``(1, str)`` so ints and
+    strings never compare against each other (which would raise).
+    """
+    return tuple(
+        (0, int(run)) if run.isdigit() else (1, run) for run in re.findall(r"\d+|\D+", version)
+    )
+
+
+def highest_version(registry: Registry, topic: str, version: str) -> HandlerDefinition | None:
+    """An opt-in selector: the exact match if present, else the **highest** available version.
+
+    "Highest" is a natural ordering of the version strings (``v2`` before ``v10``); for a different
+    scheme (e.g. semantic versioning) write your own selector — it is just a callable. Exact match is
+    still preferred, so a pinned version always wins over the fallback.
+    """
+    exact = registry.find(topic, version)
+    if exact is not None:
+        return exact
+    candidates = registry.versions_of(topic)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: _natural_key(d.version))

@@ -12,16 +12,20 @@ from benzene.results import Result
 from .context import Context
 from .mapping import to_request
 from .pipeline import Middleware, Next
-from .registry import Registry
+from .registry import Registry, VersionSelector, exact_version
 
 
-def message_router(registry: Registry) -> Middleware:
+def message_router(registry: Registry, select: VersionSelector | None = None) -> Middleware:
+    """Terminal middleware resolving topic → handler. ``select`` chooses the version-selection policy
+    (default: exact ``(topic, version)`` match; pass ``highest_version`` for latest-wins fallback)."""
+    selector = select or exact_version
+
     async def middleware(context: Context, next: Next) -> None:  # noqa: A002 - spec name
         if not context.topic:
             context.result = Result.validation_error("Topic is required")
             return
 
-        definition = registry.find(context.topic, context.version)
+        definition = selector(registry, context.topic, context.version)
         if definition is None:
             context.result = Result.not_found(
                 f"No handler found for topic {context.topic}"

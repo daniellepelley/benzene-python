@@ -32,7 +32,13 @@ from .errors import MessageHandlingError
 from .handler import Handler, HandlerDefinition, definition_of, message
 from .mapping import encode_body, to_camel, to_jsonable, to_request
 from .pipeline import Middleware, MiddlewarePipeline, Next
-from .registry import DuplicateHandlerError, Registry
+from .registry import (
+    DuplicateHandlerError,
+    Registry,
+    VersionSelector,
+    exact_version,
+    highest_version,
+)
 from .startup import AppDefinition, BenzeneStartUp, application_from, build_application
 from .router import message_router
 
@@ -58,10 +64,13 @@ __all__ = [
     "ServiceNotRegisteredError",
     "VERSION_HEADER",
     "VERSION_HEADER_NAMES",
+    "VersionSelector",
     "definition_of",
     "encode_body",
     "encode_response",
     "error_payload",
+    "exact_version",
+    "highest_version",
     "message",
     "message_router",
     "resolve_version",
