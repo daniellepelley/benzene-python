@@ -23,6 +23,7 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 - **[`benzene.aws`](reference/aws.md)** — the AWS Lambda host (API Gateway + SQS + SNS).
 - **[`benzene.azure`](reference/azure.md)** — the Azure Functions host (HTTP + Service Bus + Event Hub).
 - **[`benzene.mesh`](reference/mesh.md)** — self-description, tracing, and collector feeds for the mesh.
+- **[`benzene.pydantic`](reference/pydantic.md)** — validate handler requests with pydantic models.
 - **[`benzene.testing`](reference/testing.md)** — the in-memory test host and test doubles.
 
 ## Guides & cookbooks

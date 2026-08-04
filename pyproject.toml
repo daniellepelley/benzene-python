@@ -19,6 +19,7 @@ pythonpath = [
     "packages/benzene-core",
     "packages/benzene-http",
     "packages/benzene-mesh",
+    "packages/benzene-pydantic",
     "packages/benzene-testing",
     "packages/benzene-gcp",
     "packages/benzene-aws",

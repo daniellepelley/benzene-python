@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene-pydantic"
+version = "0.0.1"
+description = "Benzene pydantic adapter — validate handler requests with pydantic models, validation errors as validation-error."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Benzene" }]
+keywords = ["benzene", "pydantic", "validation", "middleware", "hexagonal"]
+dependencies = ["benzene-core", "pydantic>=2"]
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
+
+# PEP 420 namespace package — see benzene-results/pyproject.toml.
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]

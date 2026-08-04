@@ -36,6 +36,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + egress) | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` |
 | `benzene-azure` | `benzene.azure` | Azure Functions host (HTTP + Service Bus + Event Hub + egress) | `benzene-core`, `benzene-http` | `Benzene.Azure.Function.*` |
 | `benzene-mesh` | `benzene.mesh` | ServiceDescriptor + `benzene:mesh` endpoint + tracing + collector feeds | `benzene-core` | `Benzene.Mesh` |
+| `benzene-pydantic` | `benzene.pydantic` | validate handler requests with pydantic models | `benzene-core`, `pydantic` | `Benzene.FluentValidation` |
 | `benzene-testing` | `benzene.testing` | in-memory test host + fakes (dev/test) | `benzene-core` | `Benzene.Testing` |
 
 Adoption levels, bottom to top:
@@ -99,6 +100,7 @@ packages/
   benzene-aws/       benzene/aws/       (Lambda host: API Gateway + SQS + SNS)
   benzene-azure/     benzene/azure/     (Functions host: HTTP + Service Bus + Event Hub)
   benzene-mesh/      benzene/mesh/      (ServiceDescriptor, benzene:mesh, tracing, feeds)
+  benzene-pydantic/  benzene/pydantic/  (pydantic request validation)
   benzene-testing/   benzene/testing/   (in-memory test host + fakes)
 conformance/         language-neutral spec fixtures (shared)
 examples/            runnable multi-transport cloud examples, each dogfood-tested

@@ -57,6 +57,11 @@ def to_jsonable(payload: Any) -> Any:
         return [to_jsonable(item) for item in payload]
     if isinstance(payload, dict):
         return {key: to_jsonable(value) for key, value in payload.items()}  # keys verbatim
+    # Duck-typed support for objects that know how to serialize themselves (e.g. a pydantic
+    # BaseModel): dump with aliases so a model's camelCase alias generator reaches the wire.
+    model_dump = getattr(payload, "model_dump", None)
+    if callable(model_dump):
+        return to_jsonable(model_dump(by_alias=True))
     return payload
 
 
