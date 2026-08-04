@@ -163,6 +163,21 @@ assert host.scope.get_service(TraceExporter)[0].correlation_id == "c1"   # trace
 reads `x-correlation-id` for the business correlation id. Exporter failures are swallowed — tracing
 never breaks the request.
 
+A **health endpoint** installs exactly the same way — it is another reserved-topic interceptor. Add a
+`HealthChecks`, put `health_interception(checks)` in the same `middleware` list, and register a
+`GET /benzene/health` route to the `benzene:healthcheck` topic. The health aggregate it returns is the
+same `{isHealthy, healthChecks}` shape the mesh `Heartbeat` reports, so one set of checks feeds both:
+
+```python
+from benzene.core import HEALTH_TOPIC, HealthChecks, health_interception
+
+health = HealthChecks().add("order-store", check_store)          # a bool or HealthCheckResult
+base.router.register("GET", "/benzene/health", HEALTH_TOPIC, _spec)   # answered by the interceptor
+middleware = [trace_middleware(exporter, service="orders"),
+              health_interception(health), mesh_interception(descriptor)]
+# host.send_http("GET", "/benzene/health") -> 200 {"isHealthy": true, "healthChecks": {...}}
+```
+
 ## 3. Report into a collector
 
 `MeshFeedSender` pushes the feeds to a collector over any outbound `MessageSender`. Each feed is

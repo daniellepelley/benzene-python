@@ -1,11 +1,12 @@
-"""Dogfood: a mesh-enabled service booted through the *public* harness (the gold-standard shape).
+"""Dogfood: an *operational* service booted through the *public* harness (the gold-standard shape).
 
-Proves the composition-root middleware seam end to end: a `MeshOrdersStartUp` installs
-`mesh_interception` + `trace_middleware` in its `configure`, and every host builds the app from that
-startup. So `create_test_host(MeshOrdersStartUp).with_services(...).build_aws()` yields a service that
+Proves the composition-root middleware seam end to end: a `MeshOrdersStartUp` installs the whole
+cross-cutting stack — `trace_middleware`, `health_interception`, `mesh_interception` — in its
+`configure`, and every host builds the app from that startup. So
+`create_test_host(MeshOrdersStartUp).with_services(...).build_aws()` yields a service that
 
-- answers `GET /benzene/spec` with its `ServiceDescriptor` (the reserved `benzene:mesh` topic,
-  surfaced over HTTP), and
+- answers `GET /benzene/spec` with its `ServiceDescriptor` (the reserved `benzene:mesh` topic),
+- answers `GET /benzene/health` with its health aggregate (the reserved `benzene:healthcheck` topic), and
 - emits one `TraceEvent` per invocation to an exporter reachable via `host.scope`,
 
 with the *same* setup an adopter would write — only `build_aws()` names the cloud. The descriptor is
@@ -17,7 +18,12 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
-from benzene.core import MessageSender
+from benzene.core import (
+    HEALTH_TOPIC,
+    HealthChecks,
+    MessageSender,
+    health_interception,
+)
 from benzene.mesh import (
     MESH_TOPIC,
     InMemoryTraceExporter,
@@ -35,12 +41,13 @@ from orders_domain.startup import OrdersStartUp
 _SERVICE_INFO = ServiceInfo(service="orders", service_version="1.4.2", placement={"cloud": "aws"})
 
 
-async def _unreachable(_request: dict) -> Result:  # /benzene/spec is answered by mesh_interception
-    return Result.not_found("mesh interception should have handled benzene:mesh")
+async def _intercepted(_request: dict) -> Result:  # the reserved-topic routes are answered by middleware
+    return Result.not_found("a reserved-topic interceptor should have handled this")
 
 
 class MeshOrdersStartUp(OrdersStartUp):
-    """`OrdersStartUp` + mesh — self-description on `GET /benzene/spec` and a trace per invocation."""
+    """`OrdersStartUp` made operational: mesh self-description, a trace per invocation, and a health
+    endpoint — the whole cross-cutting stack installed once, in the composition root."""
 
     def configure_services(self, services, config):  # type: ignore[override]
         super().configure_services(services, config)
@@ -49,8 +56,10 @@ class MeshOrdersStartUp(OrdersStartUp):
     def configure(self, services, config):  # type: ignore[override]
         base = super().configure(services, config)
         descriptor = ServiceDescriptor.derive(base.registry, _SERVICE_INFO)
-        # A convenience HTTP surface for the reserved topic; mesh_interception answers it.
-        base.router.register("GET", "/benzene/spec", MESH_TOPIC, _unreachable)
+        health = HealthChecks().add("order-store", lambda: True)
+        # Convenience HTTP surfaces for the reserved topics; the interceptors answer them.
+        base.router.register("GET", "/benzene/spec", MESH_TOPIC, _intercepted)
+        base.router.register("GET", "/benzene/health", HEALTH_TOPIC, _intercepted)
         exporter = services.get_service(TraceExporter)
         # Add cross-cutting middleware to whatever the base startup produced — `replace` keeps the
         # base's registry/router (and any future field) instead of re-threading them by hand.
@@ -58,6 +67,7 @@ class MeshOrdersStartUp(OrdersStartUp):
             base,
             middleware=[
                 trace_middleware(exporter, service="orders", instance_id="orders-7f9c"),
+                health_interception(health),
                 mesh_interception(descriptor),
             ],
         )
@@ -92,6 +102,15 @@ def test_mesh_enabled_service_answers_benzene_spec_through_the_harness() -> None
     assert body["descriptorHash"].startswith("sha256:")
     # the reserved topic is NOT itself a declared topic in the descriptor
     assert {t["id"] for t in body["topics"]} == {"orders:place", "orders:get", "orders:created"}
+
+
+def test_operational_service_answers_benzene_health_through_the_harness() -> None:
+    host, _ = _host()
+    response = host.send_http("GET", "/benzene/health")
+    assert response.status_code == 200                         # healthy -> ok -> 200
+    body = json.loads(response.body)
+    assert body["isHealthy"] is True
+    assert body["healthChecks"]["order-store"]["isHealthy"] is True
 
 
 def test_mesh_enabled_service_traces_a_real_order_through_the_harness() -> None:
