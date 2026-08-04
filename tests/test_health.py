@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from benzene.core import (
     HEALTH_TOPIC,
     BenzeneMessageApplication,
+    DuplicateHealthCheckError,
     HealthCheckResult,
     HealthChecks,
     MiddlewarePipeline,
@@ -73,6 +76,12 @@ def test_interception_ignores_version_and_passes_other_topics_through() -> None:
     # a non-health topic falls through to the (empty) router -> not-found
     other = _hit(_app(checks), topic="orders:place")
     assert other["statusCode"] == "not-found"
+
+
+def test_duplicate_check_name_is_a_startup_error() -> None:
+    checks = HealthChecks().add("db", lambda: True)
+    with pytest.raises(DuplicateHealthCheckError):
+        checks.add("db", lambda: False)  # same name — a startup error, not a silent overwrite
 
 
 def test_report_payload_matches_the_heartbeat_health_shape() -> None:

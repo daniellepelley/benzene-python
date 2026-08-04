@@ -25,6 +25,14 @@ from .pipeline import Middleware, Next
 HEALTH_TOPIC = "benzene:healthcheck"
 
 
+class DuplicateHealthCheckError(Exception):
+    """Raised when two health checks are registered under the same name.
+
+    Mirrors :class:`~benzene.core.DuplicateHandlerError`: a duplicate registration is a *startup*
+    error, not a silently-dropped check — a health endpoint that quietly lost a check would lie.
+    """
+
+
 @dataclass(frozen=True)
 class HealthCheckResult:
     """One check's outcome: healthy or not, with an optional human-readable detail."""
@@ -76,6 +84,11 @@ class HealthChecks:
         self._checks: dict[str, HealthCheck] = {}
 
     def add(self, name: str, check: HealthCheck) -> "HealthChecks":
+        if name in self._checks:
+            raise DuplicateHealthCheckError(
+                f"A health check named {name!r} is already registered. Each check needs a distinct "
+                "name — rename one, or remove the duplicate registration."
+            )
         self._checks[name] = check
         return self
 

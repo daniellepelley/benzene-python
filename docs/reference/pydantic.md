@@ -43,8 +43,11 @@ async def place(order: PlaceOrder) -> Result:
 ## Responses
 
 A pydantic model returned as a success payload is serialized by `benzene.core`'s wire mapper via
-`model_dump(by_alias=True)`. Give the model a camelCase `alias_generator` to cross the wire in the
-Benzene naming policy, exactly as a dataclass response does:
+`model_dump(by_alias=True)`. Note the asymmetry with a dataclass response: a **dataclass**'s fields
+are auto-camelCased by the wire mapper, but a **pydantic model** is dumped under its own field
+names, so a plain model's `order_id` crosses the wire as `order_id`, not `orderId`. Give the model a
+camelCase `alias_generator` to put it back in the Benzene naming policy, exactly like a dataclass
+response:
 
 ```python
 from pydantic import BaseModel, ConfigDict

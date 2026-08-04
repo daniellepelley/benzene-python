@@ -211,8 +211,10 @@ pipeline = MiddlewarePipeline().use(health_interception(checks))
 ```
 
 A check returns a `HealthCheckResult` (or a bool), sync or async; a check that raises counts as
-unhealthy rather than crashing the endpoint. All healthy → status `ok` with the aggregate; any
-unhealthy → `service-unavailable` naming the failed checks. The aggregate
+unhealthy rather than crashing the endpoint. Registering two checks under the same name is a startup
+error (`DuplicateHealthCheckError`), mirroring the registry — a health endpoint must not silently drop
+a check. All healthy → status `ok` with the aggregate; any unhealthy → `service-unavailable` naming
+the failed checks. The aggregate
 
 ```json
 {"isHealthy": true, "healthChecks": {"db": {"isHealthy": true}, "queue": {"isHealthy": true}}}
@@ -226,7 +228,8 @@ feeds both the health endpoint and the heartbeat: `report = await checks.run()`.
 `BenzeneMessageApplication`, `Container`, `Context`, `DuplicateHandlerError`, `Handler`,
 `HandlerDefinition`, `Lifetime`, `Middleware`, `MiddlewarePipeline`, `Next`, `Registry`, `Scope`,
 `ServiceNotRegisteredError`, `AppDefinition`, `BenzeneStartUp`, `HealthChecks`, `HealthCheck`,
-`HealthCheckResult`, `HealthReport`, `HEALTH_TOPIC`, `health_interception`, `VERSION_HEADER`,
+`HealthCheckResult`, `HealthReport`, `DuplicateHealthCheckError`, `HEALTH_TOPIC`,
+`health_interception`, `VERSION_HEADER`,
 `VERSION_HEADER_NAMES`, `VersionSelector`, `application_from`, `build_application`, `definition_of`,
 `encode_response`, `error_payload`, `exact_version`, `highest_version`, `message`, `message_router`,
 `resolve_version`, `to_jsonable`, `to_request`.

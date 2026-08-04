@@ -31,6 +31,7 @@ from .envelope import (
 from .errors import MessageHandlingError
 from .health import (
     HEALTH_TOPIC,
+    DuplicateHealthCheckError,
     HealthCheck,
     HealthCheckResult,
     HealthChecks,
@@ -55,6 +56,7 @@ __all__ = [
     "Container",
     "Context",
     "DuplicateHandlerError",
+    "DuplicateHealthCheckError",
     "HEALTH_TOPIC",
     "Handler",
     "HandlerDefinition",

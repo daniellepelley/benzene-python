@@ -37,7 +37,8 @@ malformed request never reaches your handler and never crashes the pipeline:
 ```
 
 A pydantic model returned as a success payload is serialized by `benzene.core`'s wire mapper
-(`model_dump(by_alias=True)`), so a model with a camelCase `alias_generator` crosses the wire in the
-Benzene naming policy — the same as a dataclass response.
+(`model_dump(by_alias=True)`). Unlike a dataclass — whose fields the mapper auto-camelCases — a
+pydantic model is dumped under its own field names, so give the model a camelCase `alias_generator`
+to cross the wire in the Benzene naming policy (then it matches a dataclass response).
 
 Contributes the `benzene.pydantic` subpackage to the shared `benzene` namespace.
