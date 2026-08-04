@@ -48,6 +48,19 @@ The handler's request is the JSON body object merged with the query string and t
 path parameters — **path wins, then query, then body**. So `/orders/{id}` delivers `id` as a request
 field even if the body also has one.
 
+### Versioned routes
+
+A `{version}` path segment is treated specially (versioning.md §2): it drives **handler selection**
+rather than becoming a request field. Register one route with the segment and the versioned handlers
+in the message registry, and `/v1/orders` and `/v2/orders` reach the `v1` and `v2` handlers:
+
+```python
+router.register("GET", "/{version}/orders/{id}", "order:get", get_order)
+```
+
+The route segment is authoritative over both the route's static version and a caller's version
+header. See [versioning in `benzene.core`](core.md#versioning).
+
 ## Status mapping
 
 `to_http(status)` and `from_http(code)` implement the wire-contracts §4.1 table:

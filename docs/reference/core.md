@@ -156,8 +156,20 @@ app, and returns `(AppDefinition, Scope)`. `application_from(definition)` builds
 A message carries its version in a header (versioning.md §2). Inbound, `resolve_version` reads the
 first present of `VERSION_HEADER_NAMES` — `benzene-version` (canonical), then `version`, then
 `x-version` — so a peer in any language reaches the right handler; outbound, write the canonical
-`benzene-version`. Handlers are selected by **exact `(topic, version)`**; a message with no version
-signal is served by the unversioned handler (version `""`), and an unknown version is a `not-found`.
+`benzene-version`. Over HTTP a `{version}` route segment (e.g. `/v{version}/orders/{id}`) is
+authoritative when present, falling back to the headers otherwise (see [`benzene.http`](http.md)).
+
+**Selection.** By default handlers are selected by **exact `(topic, version)`** (`exact_version`): a
+message with no version signal is served by the unversioned handler (version `""`), and an unknown
+version is a `not-found`. Pass a `version_selector` to opt into a different policy —
+`highest_version` returns the exact match if present, else the natural-highest registered version
+(`v2` before `v10`); a selector is just a `VersionSelector` callable, so you can supply your own:
+
+```python
+from benzene.core import BenzeneMessageApplication, highest_version
+
+app = BenzeneMessageApplication(registry, version_selector=highest_version)   # latest-wins fallback
+```
 
 To serve several payload versions of one topic, use the **casting-handler pattern** (versioning.md
 §3.1) — no framework code, just an extra registration per retired version. Keep one shared latest
@@ -182,8 +194,9 @@ now both reach the one shared `place_v2` implementation.
 `BenzeneMessageApplication`, `Container`, `Context`, `DuplicateHandlerError`, `Handler`,
 `HandlerDefinition`, `Lifetime`, `Middleware`, `MiddlewarePipeline`, `Next`, `Registry`, `Scope`,
 `ServiceNotRegisteredError`, `AppDefinition`, `BenzeneStartUp`, `VERSION_HEADER`,
-`VERSION_HEADER_NAMES`, `application_from`, `build_application`, `definition_of`, `encode_response`,
-`error_payload`, `message`, `message_router`, `resolve_version`, `to_jsonable`, `to_request`.
+`VERSION_HEADER_NAMES`, `VersionSelector`, `application_from`, `build_application`, `definition_of`,
+`encode_response`, `error_payload`, `exact_version`, `highest_version`, `message`, `message_router`,
+`resolve_version`, `to_jsonable`, `to_request`.
 
 ## See also
 

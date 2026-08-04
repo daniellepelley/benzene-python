@@ -171,10 +171,11 @@ running .NET Benzene service) is what "conformant" means — see the spec's
    with per-topic schemas + a contract hash), the reserved `benzene:mesh` endpoint, per-invocation
    tracing, and the collector feeds — so Python services describe themselves and appear in the mesh.
    Conformance-green against `mesh-descriptor-cases` and `mesh-trace-cases`.
-6. **(in progress)** Payload/handler versioning — the inbound version-header fallback list
-   (`benzene-version` → `version` → `x-version`) and the casting-handler pattern (serve multiple
-   payload versions with no framework code) are done and documented; a highest-version selector,
-   transparent casting decorators, and the HTTP `/v{version}/` route segment are next.
+6. **(done)** Payload/handler versioning — the inbound version-header fallback list
+   (`benzene-version` → `version` → `x-version`), the HTTP `/v{version}/` route segment, an opt-in
+   `highest_version` selector (exact-match stays the default), and the casting-handler pattern (serve
+   multiple payload versions with no framework code) — all done and documented. Transparent-casting
+   decorators are the one remaining, optional piece.
 7. Later: the collector side (`mesh:query:*` ingest) and gRPC.
 
 ## Documentation
