@@ -123,3 +123,51 @@ def test_unknown_version_is_a_not_found() -> None:
         )
     )
     assert response["statusCode"] == "not-found"  # exact-match selection; no v9 handler registered
+
+
+# --- HTTP `/{version}/` route segment drives selection (versioning.md §2) -------------------------
+
+def _versioned_http_app():
+    from benzene.http import BenzeneHttpApp, HttpRouter
+
+    async def echo_v1(_request: dict) -> Result:
+        return Result.ok({"served": "v1"})
+
+    async def echo_v2(_request: dict) -> Result:
+        return Result.ok({"served": "v2"})
+
+    registry = Registry()
+    registry.register("api:echo", echo_v1, version="v1")
+    registry.register("api:echo", echo_v2, version="v2")
+
+    router = HttpRouter()
+    # One route with a {version} segment; the two handler versions live in the message registry.
+    router.register("GET", "/{version}/echo", "api:echo", echo_v1)
+    return BenzeneHttpApp(router, application=BenzeneMessageApplication(registry))
+
+
+@pytest.mark.parametrize("segment,expected", [("v1", "v1"), ("v2", "v2")])
+def test_http_version_route_segment_selects_the_handler(segment: str, expected: str) -> None:
+    response = asyncio.run(_versioned_http_app().handle("GET", f"/{segment}/echo"))
+    assert response.status_code == 200
+    assert json.loads(response.body) == {"served": expected}
+
+
+def test_http_version_segment_is_not_leaked_into_the_request() -> None:
+    # `version` drives selection; it must not also arrive as a request field.
+    captured: dict = {}
+
+    async def echo(request: dict) -> Result:
+        captured.update(request)
+        return Result.ok({})
+
+    from benzene.http import BenzeneHttpApp, HttpRouter
+
+    registry = Registry()
+    registry.register("api:echo", echo, version="v1")
+    router = HttpRouter()
+    router.register("GET", "/{version}/echo", "api:echo", echo)
+    app = BenzeneHttpApp(router, application=BenzeneMessageApplication(registry))
+
+    asyncio.run(app.handle("GET", "/v1/echo", query_string="q=1"))
+    assert captured == {"q": "1"}  # the query param is present; `version` is not

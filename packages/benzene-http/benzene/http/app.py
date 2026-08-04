@@ -85,6 +85,9 @@ class BenzeneHttpApp:
                 Status.NOT_FOUND, f"No route for {method.upper()} {path}"
             )
         endpoint, path_params = match
+        # A ``{version}`` path segment (e.g. /v{version}/orders/{id}) drives handler selection, so
+        # pull it out of the captured params before they merge into the request body (versioning.md §2).
+        route_version = path_params.pop("version", None)
 
         query_data = dict(parse_qsl(query_string or ""))
 
@@ -104,8 +107,11 @@ class BenzeneHttpApp:
             request_data = {**base, **query_data, **path_params}
 
         request_headers = {k.lower(): v for k, v in (headers or {}).items()}
-        # The route's version drives handler selection unless the caller pinned one explicitly.
-        if endpoint.version and VERSION_HEADER not in request_headers:
+        # Version precedence: a {version} route segment is authoritative; else the route's static
+        # version fills in unless the caller pinned one via a version header (versioning.md §2).
+        if route_version is not None:
+            request_headers[VERSION_HEADER] = route_version
+        elif endpoint.version and VERSION_HEADER not in request_headers:
             request_headers[VERSION_HEADER] = endpoint.version
 
         envelope = {
