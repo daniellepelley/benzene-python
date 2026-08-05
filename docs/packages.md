@@ -13,6 +13,7 @@ Python equivalent.
 | [`benzene-results`](https://pypi.org/project/benzene-results/) | `benzene.results` | `Result` and the status vocabulary — the return type of every handler | nothing |
 | [`benzene-core`](https://pypi.org/project/benzene-core/) | `benzene.core` | handler registry + `@message`, the middleware pipeline, per-invocation DI, and the transport-neutral `BenzeneMessage` envelope | `benzene-results` |
 | [`benzene-http`](https://pypi.org/project/benzene-http/) | `benzene.http` | the inbound HTTP (ASGI) binding and the Benzene↔HTTP status mapping | `benzene-core` |
+| [`benzene-grpc`](https://pypi.org/project/benzene-grpc/) | `benzene.grpc` | the Benzene↔gRPC status mapping + `benzene-status` trailer rule (transport pending) | `benzene-core` |
 | [`benzene-gcp`](https://pypi.org/project/benzene-gcp/) | `benzene.gcp` | the Google Cloud Functions host (HTTP + Pub/Sub bindings, Pub/Sub outbound client) | `benzene-core`, `benzene-http` |
 | [`benzene-aws`](https://pypi.org/project/benzene-aws/) | `benzene.aws` | the AWS Lambda host (API Gateway + SQS + SNS bindings, SNS/SQS outbound clients) | `benzene-core`, `benzene-http` |
 | [`benzene-azure`](https://pypi.org/project/benzene-azure/) | `benzene.azure` | the Azure Functions host (HTTP + Service Bus + Event Hub bindings, Service Bus outbound client) | `benzene-core`, `benzene-http` |

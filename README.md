@@ -32,6 +32,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-results` | `benzene.results` | `Result` + status vocabulary — the return type of a handler | — (zero deps) | `Benzene.Results` |
 | `benzene-core` | `benzene.core` | pipeline, registry, `@message`, DI, versioning, health checks, the `BenzeneMessage` envelope | `benzene-results` | `Benzene.Core*` + `Benzene.Dependencies` |
 | `benzene-http` | `benzene.http` | inbound HTTP (ASGI) binding + status mapping | `benzene-core` | `Benzene.Http` |
+| `benzene-grpc` | `benzene.grpc` | Benzene↔gRPC status mapping + `benzene-status` trailer rule | `benzene-core` | `Benzene.Grpc` |
 | `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
 | `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + egress) | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` |
 | `benzene-azure` | `benzene.azure` | Azure Functions host (HTTP + Service Bus + Event Hub + egress) | `benzene-core`, `benzene-http` | `Benzene.Azure.Function.*` |
@@ -96,6 +97,7 @@ packages/
   benzene-results/   benzene/results/   (Result, Status)
   benzene-core/      benzene/core/      (pipeline, registry, DI, envelope)
   benzene-http/      benzene/http/      (ASGI binding, status mapping)
+  benzene-grpc/      benzene/grpc/      (Benzene<->gRPC status mapping)
   benzene-gcp/       benzene/gcp/       (Cloud Functions host: HTTP + Pub/Sub)
   benzene-aws/       benzene/aws/       (Lambda host: API Gateway + SQS + SNS)
   benzene-azure/     benzene/azure/     (Functions host: HTTP + Service Bus + Event Hub)
@@ -187,7 +189,10 @@ running .NET Benzene service) is what "conformant" means — see the spec's
    deriving providers, consumer edges from trace parentage, per-instance health + hash-drift, and
    `missingFeeds`, plus the optional issue feed (delta-merge by fingerprint). Conformance-green
    against `mesh-collector-cases` **and** `mesh-issue-cases`.
-9. Later: gRPC transport binding, and transparent-casting decorators for versioning.
+9. **(in progress)** gRPC — the Benzene↔gRPC status mapping (`benzene-grpc`, wire-contracts §4.2) and
+   the `benzene-status` trailer rule are done and conformance-green against `grpc-status-mapping`; the
+   server/client transport over `grpcio` is the next step.
+10. Later: the gRPC transport binding, and transparent-casting decorators for versioning.
 
 ## Documentation
 

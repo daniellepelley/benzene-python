@@ -19,6 +19,7 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
   middleware pipeline, dependency injection, the outbound client port, and the `BenzeneMessage`
   envelope.
 - **[`benzene.http`](reference/http.md)** — the inbound HTTP (ASGI) transport binding.
+- **[`benzene.grpc`](reference/grpc.md)** — the Benzene↔gRPC status mapping and trailer rule.
 - **[`benzene.gcp`](reference/gcp.md)** — the Google Cloud Functions host (HTTP + Pub/Sub).
 - **[`benzene.aws`](reference/aws.md)** — the AWS Lambda host (API Gateway + SQS + SNS).
 - **[`benzene.azure`](reference/azure.md)** — the Azure Functions host (HTTP + Service Bus + Event Hub).

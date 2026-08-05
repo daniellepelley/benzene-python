@@ -17,6 +17,7 @@ testpaths = ["tests", "examples"]
 pythonpath = [
     "packages/benzene-results",
     "packages/benzene-core",
+    "packages/benzene-grpc",
     "packages/benzene-http",
     "packages/benzene-mesh",
     "packages/benzene-pydantic",
