@@ -73,7 +73,14 @@ class BenzeneMessageApplication:
         context = Context(topic, parsed, headers, scope, version)
 
         await self._pipeline.handle(context)
-        return encode_response(context.result)
+        response = encode_response(context.result)
+        # Echo the resolved version back (wire-contracts §2.1 lists benzene-version as an outbound
+        # header; versioning.md §4.2 "respond in the same version the request declared"). Only when
+        # the request actually declared one, so unversioned traffic is byte-for-byte unchanged and a
+        # consumer that sees the header can trust the body is that version (e.g. a downcast reply).
+        if version:
+            response["headers"][VERSION_HEADER] = version
+        return response
 
 
 def error_payload(result: Result[Any]) -> dict[str, Any]:

@@ -412,3 +412,28 @@ def test_casting_handler_does_not_downcast_a_failure_payload() -> None:
     )
     result = asyncio.run(handler(PlaceOrderV1(sku="A", count=1)))
     assert result.status == "bad-request" and result.payload == {"unmapped": True}  # untouched
+
+
+# --- the response echoes the resolved version (wire-contracts §2.1, versioning.md §4.2) -----------
+# A response carries the version it was served/downcast to in the outbound `benzene-version` header,
+# so a consumer knows which schema the body is — but only when the request declared a version, so
+# unversioned traffic (and every conformance case) is byte-for-byte unchanged.
+
+
+def test_response_echoes_the_declared_version() -> None:
+    response = asyncio.run(
+        _transparent_orders_app().handle(
+            {"topic": "orders:place", "headers": {"version": "v1"}, "body": '{"sku": "A", "count": 1}'}
+        )
+    )
+    # Even though the caller used the `version` fallback header, the reply writes the canonical one.
+    assert response["headers"]["benzene-version"] == "v1"
+
+
+def test_unversioned_response_has_no_version_header() -> None:
+    async def handler(_request: dict) -> Result:
+        return Result.ok({"ok": True})
+
+    app = BenzeneMessageApplication(Registry().register("api:thing", handler))
+    response = asyncio.run(app.handle({"topic": "api:thing", "headers": {}, "body": "{}"}))
+    assert "benzene-version" not in response["headers"]  # nothing declared -> nothing echoed

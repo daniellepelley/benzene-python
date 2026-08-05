@@ -158,6 +158,10 @@ first present of `VERSION_HEADER_NAMES` — `benzene-version` (canonical), then 
 `x-version` — so a peer in any language reaches the right handler; outbound, write the canonical
 `benzene-version`. Over HTTP a `{version}` route segment (e.g. `/v{version}/orders/{id}`) is
 authoritative when present, falling back to the headers otherwise (see [`benzene.http`](http.md)).
+When a request declared a version, the response echoes it in the canonical `benzene-version` header
+(wire-contracts §2.1; versioning.md §4.2, "respond in the same version"), so a consumer knows which
+schema the body is — a downcast reply says so. An unversioned request gets no such header, leaving
+that traffic untouched.
 
 **Selection.** By default handlers are selected by **exact `(topic, version)`** (`exact_version`): a
 message with no version signal is served by the unversioned handler (version `""`), and an unknown
