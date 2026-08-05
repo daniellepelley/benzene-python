@@ -183,9 +183,10 @@ running .NET Benzene service) is what "conformant" means — see the spec's
    Conformance-green against `mesh-descriptor-cases` and `mesh-trace-cases`.
 6. **(done)** Payload/handler versioning — the inbound version-header fallback list
    (`benzene-version` → `version` → `x-version`), the HTTP `/v{version}/` route segment, an opt-in
-   `highest_version` selector (exact-match stays the default), and the casting-handler pattern (serve
-   multiple payload versions with no framework code) — all done and documented. Transparent-casting
-   decorators are the one remaining, optional piece.
+   `highest_version` selector (exact-match stays the default), the casting-handler pattern (serve
+   multiple payload versions with no framework code), and **transparent casting** — a `SchemaCasters`
+   registry (one-step casts between payload types, chained by BFS) with `casting_handler` upcasting the
+   request and downcasting the response — all done and documented.
 7. **(done)** Operational surfaces — health checks (the reserved `benzene:healthcheck` endpoint,
    whose `{isHealthy, healthChecks}` aggregate also feeds the mesh heartbeat) and the
    `benzene-pydantic` request-validation adapter. All the cross-cutting middleware (validation,
@@ -204,8 +205,10 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     and a `GrpcMessageSender`, proven with a real in-process server round-trip.
 11. **(done)** Outbound HTTP — `HttpMessageSender` publishes a message to another Benzene service over
     HTTP and maps the response back (the reverse direction of the HTTP binding).
-12. Later: transparent-casting decorators for versioning (the casting-handler pattern already covers the
-    need idiomatically).
+12. **(done)** Transparent-casting decorators for versioning — `SchemaCasters` (one-step casts between
+    payload types, composed by breadth-first search, direct preferred) + `casting_handler`, which
+    upcasts an older request to the canonical type and downcasts the response back, so a handler serves
+    a retired version in one registration instead of a hand-written forwarder.
 
 ## Documentation
 

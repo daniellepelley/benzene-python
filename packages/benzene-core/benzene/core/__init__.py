@@ -17,6 +17,7 @@ the ``benzene.core`` subpackage to the shared ``benzene`` namespace.
 
 from __future__ import annotations
 
+from .casting import Cast, NoCastPathError, SchemaCasters, casting_handler
 from .clients import MessageSender
 from .context import Context
 from .dependencies import Container, Lifetime, Scope, ServiceNotRegisteredError
@@ -67,9 +68,13 @@ from .router import message_router
 
 __all__ = [
     "BenzeneMessageApplication",
+    "Cast",
     "Container",
     "Context",
     "CorrelationIdMessageSender",
+    "NoCastPathError",
+    "SchemaCasters",
+    "casting_handler",
     "DEFAULT_RETRYABLE",
     "DuplicateHandlerError",
     "DuplicateHealthCheckError",

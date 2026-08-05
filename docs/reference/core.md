@@ -193,6 +193,43 @@ registry.register("orders:place", make_place_v1(place_v2), version="v1", request
 A v1 client (`version: v1`, the old `count` field) and a v2 client (`benzene-version: v2`, `quantity`)
 now both reach the one shared `place_v2` implementation.
 
+**Transparent casting** (versioning.md §4) removes the per-version forwarder. Register the one-step
+casts *between types* on a `SchemaCasters` — shared across topics — and `casting_handler` builds the
+forwarder, upcasting the request in and downcasting the response out. Casts compose: register a step
+from each version to the next and a longer hop is found by breadth-first search (a direct cast always
+wins over a chain), so a new version only needs a cast from the one before it:
+
+```python
+from benzene.core import SchemaCasters, casting_handler
+
+casters = (
+    SchemaCasters()
+    .cast_between(PlaceOrderV1, PlaceOrderV2, lambda v1: PlaceOrderV2(v1.sku, v1.count))   # request up
+    .cast_between(OrderPlacedV2, OrderPlacedV1, lambda v2: OrderPlacedV1(v2.id))           # response down
+)
+
+registry.register("orders:place", place_v2, version="v2",
+                  request_type=PlaceOrderV2, response_type=OrderPlacedV2)
+registry.register("orders:place",                                    # v1 served transparently
+                  casting_handler(place_v2, casters, to=PlaceOrderV2, response_to=OrderPlacedV1),
+                  version="v1", request_type=PlaceOrderV1, response_type=OrderPlacedV1)
+```
+
+`place_v2` only ever sees the canonical type. A failure result (no payload) passes straight through,
+and an unregistered cast raises `NoCastPathError` at call time — a loud configuration error, not a
+silent mis-route.
+
+> **Spec note (documented bend).** The .NET reference's Mechanism B (§4) serves *any* incoming version
+> off a **single** registration: a request-mapper decorator reads the version and upcasts before the
+> handler. That model presumes non-exact routing — an unrecognised version is accepted and cast rather
+> than rejected — which is incompatible with this port's fail-loud default (an unknown version is a
+> `not-found`, versioning.md §3). So the port delivers §4's substance — a shared `SchemaCasters`
+> registry, shortest-path chaining, and a handler that only ever sees the canonical type — through
+> **one explicit registration per served version** instead of a global mapper. Each served version
+> stays a deliberate, discoverable line; `casting_handler` just collapses it to one. Casters are keyed
+> by payload *type* (not by `(version, topic)` as the spec's `ISchemaCasters` is), so one registry is
+> shared across every topic. The wire contract is unaffected: a v1 caller still gets a v1-shaped body.
+
 ## Health checks
 
 A service answers the reserved `benzene:healthcheck` topic by running its registered checks (core-
@@ -276,7 +313,8 @@ client = with_retry(with_correlation_id(sender), attempts=5)   # wraps any Messa
 `encode_response`, `error_payload`, `exact_version`, `highest_version`, `message`, `message_router`,
 `resolve_version`, `read_message_metadata`, `MetadataKeys`, `DEFAULT_METADATA_KEYS`,
 `DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `MessageSender`, `with_retry`, `with_correlation_id`,
-`RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `to_jsonable`, `to_request`.
+`RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `SchemaCasters`,
+`casting_handler`, `Cast`, `NoCastPathError`, `to_jsonable`, `to_request`.
 
 ## See also
 

@@ -56,6 +56,8 @@ in the main Benzene repository:
 
 ## Status
 
-The core, the inbound HTTP binding, the three cloud hosts (GCP, AWS, Azure — each multi-transport with
-egress), and the mesh module (self-description, tracing, and collector feeds) are implemented and
-conformance-green. Payload versioning is on the [roadmap](../README.md#roadmap).
+The core, the inbound HTTP binding, the gRPC binding, the three cloud hosts (GCP, AWS, Azure — each
+multi-transport with egress), the mesh module (self-description, tracing, and collector feeds), and
+payload/handler versioning (header fallback, HTTP `/v{version}/` segment, opt-in `highest_version`
+selection, the casting-handler pattern, and transparent casting) are implemented and conformance-green.
+Every language-neutral conformance fixture passes; see the [roadmap](../README.md#roadmap).

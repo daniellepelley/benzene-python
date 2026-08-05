@@ -251,3 +251,164 @@ def test_natural_key_orders_versions_numerically() -> None:
     assert _natural_key("v2") < _natural_key("v10")     # not string order ("v10" < "v2")
     assert _natural_key("1.9") < _natural_key("1.10")
     assert sorted(["v10", "v1", "v2"], key=_natural_key) == ["v1", "v2", "v10"]
+
+
+# --- transparent casting (versioning.md §4): register the casts, not the forwarders --------------
+# The §3.1 pattern above hand-writes a forwarding handler per version. Transparent casting registers
+# the one-step casts *between types* once; `casting_handler` builds the forwarder, upcasting the
+# request in and downcasting the response out. Casts compose (BFS), so a new version only needs a
+# cast from the one before it.
+
+
+@dataclass
+class OrderPlacedV2:
+    id: str
+    quantity: int
+
+
+@dataclass
+class OrderPlacedV1:
+    id: str  # v1's response never carried the quantity
+
+
+@dataclass
+class PlaceOrderV0:
+    sku: str  # v0 had no count at all; it defaults to 1 on the way up to v1
+
+
+def _order_casters() -> "SchemaCasters":
+    from benzene.core import SchemaCasters
+
+    return (
+        SchemaCasters()
+        # request upcasts (older -> canonical)
+        .cast_between(PlaceOrderV0, PlaceOrderV1, lambda v0: PlaceOrderV1(sku=v0.sku, count=1))
+        .cast_between(PlaceOrderV1, PlaceOrderV2, lambda v1: PlaceOrderV2(sku=v1.sku, quantity=v1.count))
+        # response downcast (canonical -> older)
+        .cast_between(OrderPlacedV2, OrderPlacedV1, lambda v2: OrderPlacedV1(id=v2.id))
+    )
+
+
+def test_schema_casters_apply_a_direct_cast() -> None:
+    casters = _order_casters()
+    up = casters.cast(PlaceOrderV1(sku="A", count=3), PlaceOrderV2)
+    assert up == PlaceOrderV2(sku="A", quantity=3)
+
+
+def test_schema_casters_chain_multiple_steps_by_bfs() -> None:
+    # No direct V0 -> V2 cast is registered; it is found via V0 -> V1 -> V2.
+    casters = _order_casters()
+    assert casters.cast(PlaceOrderV0(sku="A"), PlaceOrderV2) == PlaceOrderV2(sku="A", quantity=1)
+
+
+def test_schema_casters_prefer_a_direct_cast_over_a_chain() -> None:
+    from benzene.core import SchemaCasters
+
+    calls: list[str] = []
+    casters = (
+        SchemaCasters()
+        .cast_between(PlaceOrderV0, PlaceOrderV1, lambda v0: (calls.append("chain"), PlaceOrderV1(v0.sku))[1])
+        .cast_between(PlaceOrderV1, PlaceOrderV2, lambda v1: PlaceOrderV2(v1.sku, v1.count))
+        .cast_between(PlaceOrderV0, PlaceOrderV2, lambda v0: (calls.append("direct"), PlaceOrderV2(v0.sku))[1])
+    )
+    casters.cast(PlaceOrderV0(sku="A"), PlaceOrderV2)
+    assert calls == ["direct"]  # the one-step edge wins over the two-step path
+
+
+def test_schema_casters_return_a_matching_value_untouched() -> None:
+    casters = _order_casters()
+    already = PlaceOrderV2(sku="A", quantity=9)
+    assert casters.cast(already, PlaceOrderV2) is already  # no cast needed, no copy
+
+
+def test_schema_casters_raise_a_clear_error_with_no_path() -> None:
+    from benzene.core import NoCastPathError, SchemaCasters
+
+    casters = SchemaCasters()  # nothing registered
+    with pytest.raises(NoCastPathError, match="No cast path from PlaceOrderV1 to PlaceOrderV2"):
+        casters.cast(PlaceOrderV1(sku="A"), PlaceOrderV2)
+
+
+def _transparent_orders_app() -> BenzeneMessageApplication:
+    from benzene.core import casting_handler
+
+    async def place_v2(request: PlaceOrderV2) -> Result:
+        return Result.created(OrderPlacedV2(id=f"ord-{request.sku}", quantity=request.quantity))
+
+    casters = _order_casters()
+    registry = Registry()
+    registry.register("orders:place", place_v2, version="v2",
+                      request_type=PlaceOrderV2, response_type=OrderPlacedV2)
+    # v1 and v0 are served transparently — one line each, no hand-written forwarder.
+    registry.register(
+        "orders:place",
+        casting_handler(place_v2, casters, to=PlaceOrderV2, response_to=OrderPlacedV1),
+        version="v1", request_type=PlaceOrderV1, response_type=OrderPlacedV1,
+    )
+    registry.register(
+        "orders:place",
+        casting_handler(place_v2, casters, to=PlaceOrderV2, response_to=OrderPlacedV1),
+        version="v0", request_type=PlaceOrderV0, response_type=OrderPlacedV1,
+    )
+    return BenzeneMessageApplication(registry)
+
+
+def _transparent_place(headers: dict[str, str], body: str) -> dict:
+    response = asyncio.run(
+        _transparent_orders_app().handle({"topic": "orders:place", "headers": headers, "body": body})
+    )
+    return {"status": response["statusCode"], "body": json.loads(response["body"]) if response["body"] else None}
+
+
+def test_casting_handler_upcasts_request_and_downcasts_response() -> None:
+    # A v1 caller sends `count`; the handler sees v2 (`quantity`) and returns OrderPlacedV2, which is
+    # downcast to OrderPlacedV1 (no `quantity`) on the way out.
+    out = _transparent_place({"version": "v1"}, '{"sku": "A", "count": 3}')
+    assert out == {"status": "created", "body": {"id": "ord-A"}}  # downcast dropped `quantity`
+
+
+def test_casting_handler_composes_a_two_step_upcast() -> None:
+    # v0 -> v1 -> v2 upcast is found by chaining; the handler still only knows v2.
+    out = _transparent_place({"version": "v0"}, '{"sku": "Z"}')
+    assert out == {"status": "created", "body": {"id": "ord-Z"}}
+
+
+def test_canonical_version_is_untouched_by_casting() -> None:
+    # The v2 handler keeps its native response type (quantity present).
+    out = _transparent_place({"benzene-version": "v2"}, '{"sku": "A", "quantity": 5}')
+    assert out == {"status": "created", "body": {"id": "ord-A", "quantity": 5}}
+
+
+def test_casting_handler_passes_a_failure_through_unchanged() -> None:
+    from benzene.core import SchemaCasters, casting_handler
+
+    async def rejects(_request: PlaceOrderV2) -> Result:
+        return Result.bad_request("nope")
+
+    # No response cast is even consulted for a failure (there is no payload to downcast).
+    handler = casting_handler(
+        rejects,
+        SchemaCasters().cast_between(PlaceOrderV1, PlaceOrderV2, lambda v1: PlaceOrderV2(v1.sku, v1.count)),
+        to=PlaceOrderV2,
+        response_to=OrderPlacedV1,
+    )
+    result = asyncio.run(handler(PlaceOrderV1(sku="A", count=1)))
+    assert result.status == "bad-request" and result.errors == ("nope",)
+
+
+def test_casting_handler_does_not_downcast_a_failure_payload() -> None:
+    from benzene.core import SchemaCasters, casting_handler
+
+    # A failure that happens to carry a payload of an uncastable type: since encode_response never
+    # serialises a failure payload, casting_handler must leave it alone rather than raise NoCastPathError.
+    async def rejects(_request: PlaceOrderV2) -> Result:
+        return Result(status="bad-request", payload={"unmapped": True}, errors=("nope",))
+
+    handler = casting_handler(
+        rejects,
+        SchemaCasters().cast_between(PlaceOrderV1, PlaceOrderV2, lambda v1: PlaceOrderV2(v1.sku, v1.count)),
+        to=PlaceOrderV2,
+        response_to=OrderPlacedV1,  # would have no path from {"unmapped": True} -> OrderPlacedV1
+    )
+    result = asyncio.run(handler(PlaceOrderV1(sku="A", count=1)))
+    assert result.status == "bad-request" and result.payload == {"unmapped": True}  # untouched
