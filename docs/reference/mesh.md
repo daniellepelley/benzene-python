@@ -284,8 +284,8 @@ The collector topic constants and their bodies (the cross-language contract):
 - `MeshFeedSender.publish_traces(events)` — send an iterable of `TraceEvent`s as `{"events": [...]}`.
 - `MeshFeedSender.publish_issues(batch)` — send an `IssueBatch`.
 
-The module ships the **sender** half (a service reporting in). The collector that ingests these feeds
-and answers `mesh:query:*` is a separate concern.
+`MeshFeedSender` is the **sender** half (a service reporting in); the **receiver** is `MeshCollector`
+(below).
 
 ### `Heartbeat`
 
@@ -334,14 +334,46 @@ await feeds.publish_issues(issues.flush())           # count is a DELTA; flush()
 never a cumulative total. Flushing an empty aggregator is valid — that batch is the feed's liveness
 beat.
 
+## The collector — `MeshCollector`
+
+A collector is the receiving side: **an ordinary Benzene service** that ingests the feeds and renders
+the fleet. `collector_registry(collector)` wires a `MeshCollector` onto a registry, so you run it
+through a `BenzeneMessageApplication` like any other service:
+
+```python
+from benzene.core import BenzeneMessageApplication
+from benzene.mesh import MeshCollector, collector_registry
+
+app = BenzeneMessageApplication(collector_registry(MeshCollector()))
+await app.handle({"topic": "benzene:mesh:register", "headers": {}, "body": descriptor_json})
+fleet = await app.handle({"topic": "benzene:mesh:query:fleet", "headers": {}, "body": "{}"})
+```
+
+It ingests `benzene:mesh:register` / `:heartbeat` / `:traces` / `:issues` and answers four read
+models — `benzene:mesh:query:fleet` / `:service` / `:topic` / `:trace`. The catalog it derives (per
+mesh.md §§4–6, pinned by `mesh-collector-cases.json`):
+
+- **Providers** come from `register`; re-registration **replaces** a service's topics wholesale.
+- **Consumer edges** are derived from trace parentage — an event whose parent span belongs to a
+  *different* service makes that service a consumer of the event's topic.
+- **Health** aggregates a service's heartbeat instances (`healthy` / `degraded` / `unhealthy` /
+  `unknown`), and a per-instance `hashMatches` surfaces a descriptor-hash drift.
+- **`missingFeeds`** names which of `descriptor` / `health` / `traces` a service hasn't reported, so a
+  partial fleet renders as reduced rather than absent.
+
+`service` is required on `register` and `heartbeat` (→ `bad-request`); an unknown service / topic /
+trace query is `not-found`; the query read models are one collector's shapes (the spec pins them only
+as the observable surface for the ingest rules). Sender feeds live in `benzene.mesh` (`MeshFeedSender`).
+
 ## Exports
 
 `ServiceInfo`, `ServiceDescriptor`, `TopicDescriptor`, `MESH_TOPIC`, `Schema`, `json_schema`,
 `mesh_interception`, `DescriptorSource`, `trace_middleware`, `TraceEvent`, `TraceExporter`,
 `InMemoryTraceExporter`, `QueueTraceExporter`, `parse_traceparent`, `new_trace_id`, `new_span_id`,
 `MeshFeedSender`, `Heartbeat`, `Issue`, `IssueBatch`, `IssueAggregator`, `classify`,
-`issue_fingerprint`, `CLASSIFICATIONS`, `REGISTER_TOPIC`, `HEARTBEAT_TOPIC`, `TRACES_TOPIC`,
-`ISSUES_TOPIC`.
+`issue_fingerprint`, `CLASSIFICATIONS`, `MeshCollector`, `collector_registry`, `CollectorBadRequest`,
+`CollectorNotFound`, `REGISTER_TOPIC`, `HEARTBEAT_TOPIC`, `TRACES_TOPIC`, `ISSUES_TOPIC`,
+`QUERY_FLEET_TOPIC`, `QUERY_SERVICE_TOPIC`, `QUERY_TOPIC_TOPIC`, `QUERY_TRACE_TOPIC`.
 
 ## See also
 

@@ -19,6 +19,16 @@ Mirrors .NET's ``Benzene.Mesh``. Contributes the ``benzene.mesh`` subpackage to 
 from __future__ import annotations
 
 from .collector import (
+    QUERY_FLEET_TOPIC,
+    QUERY_SERVICE_TOPIC,
+    QUERY_TOPIC_TOPIC,
+    QUERY_TRACE_TOPIC,
+    CollectorBadRequest,
+    CollectorNotFound,
+    MeshCollector,
+    collector_registry,
+)
+from .feeds import (
     HEARTBEAT_TOPIC,
     ISSUES_TOPIC,
     REGISTER_TOPIC,
@@ -55,6 +65,8 @@ from .trace import (
 
 __all__ = [
     "CLASSIFICATIONS",
+    "CollectorBadRequest",
+    "CollectorNotFound",
     "DescriptorSource",
     "HEARTBEAT_TOPIC",
     "Heartbeat",
@@ -64,9 +76,15 @@ __all__ = [
     "IssueAggregator",
     "IssueBatch",
     "MESH_TOPIC",
+    "MeshCollector",
     "MeshFeedSender",
+    "QUERY_FLEET_TOPIC",
+    "QUERY_SERVICE_TOPIC",
+    "QUERY_TOPIC_TOPIC",
+    "QUERY_TRACE_TOPIC",
     "QueueTraceExporter",
     "REGISTER_TOPIC",
+    "collector_registry",
     "Schema",
     "ServiceDescriptor",
     "ServiceInfo",

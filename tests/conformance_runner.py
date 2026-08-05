@@ -18,8 +18,10 @@ from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
 from benzene.http import from_http, to_http
 from benzene.mesh import (
     InMemoryTraceExporter,
+    MeshCollector,
     ServiceDescriptor,
     ServiceInfo,
+    collector_registry,
     parse_traceparent,
     trace_middleware,
 )
@@ -196,6 +198,29 @@ def run_mesh_trace() -> list[str]:
     return failures
 
 
+def run_mesh_collector() -> list[str]:
+    failures: list[str] = []
+    data = _load("mesh-collector-cases.json")
+    for case in data["cases"]:
+        # Each case runs its steps in order against one fresh collector.
+        app = BenzeneMessageApplication(collector_registry(MeshCollector()))
+        for index, step in enumerate(case["steps"]):
+            response = asyncio.run(app.handle(step["request"]))
+            expected = step["expected"]
+            name = f"{case['name']}[{index}]"
+            if response["statusCode"] != expected["statusCode"]:
+                failures.append(
+                    f"collector[{name}]: statusCode {response['statusCode']!r}, "
+                    f"expected {expected['statusCode']!r}"
+                )
+                continue
+            if "body" in expected:
+                body = json.loads(response["body"]) if response["body"] else {}
+                if not _mesh_subset(expected["body"], body):
+                    failures.append(f"collector[{name}]: body {body} !⊇ {expected['body']}")
+    return failures
+
+
 def run_all() -> list[str]:
     return (
         run_status_vocabulary()
@@ -203,6 +228,7 @@ def run_all() -> list[str]:
         + run_envelope_cases()
         + run_mesh_descriptor()
         + run_mesh_trace()
+        + run_mesh_collector()
     )
 
 
@@ -215,5 +241,5 @@ if __name__ == "__main__":
         sys.exit(1)
     print(
         "CONFORMANCE PASSED — status vocabulary, HTTP mapping, envelope, "
-        "and mesh (descriptor + trace) cases all green."
+        "and mesh (descriptor + trace + collector) cases all green."
     )

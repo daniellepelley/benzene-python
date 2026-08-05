@@ -35,7 +35,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
 | `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + egress) | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` |
 | `benzene-azure` | `benzene.azure` | Azure Functions host (HTTP + Service Bus + Event Hub + egress) | `benzene-core`, `benzene-http` | `Benzene.Azure.Function.*` |
-| `benzene-mesh` | `benzene.mesh` | ServiceDescriptor + `benzene:mesh` endpoint + tracing + collector feeds | `benzene-core` | `Benzene.Mesh` |
+| `benzene-mesh` | `benzene.mesh` | ServiceDescriptor + `benzene:mesh` endpoint + tracing + collector feeds + a `MeshCollector` | `benzene-core` | `Benzene.Mesh.Wire` + `Benzene.Mesh.Collector` |
 | `benzene-pydantic` | `benzene.pydantic` | validate handler requests with pydantic models | `benzene-core`, `pydantic` | `Benzene.FluentValidation` |
 | `benzene-testing` | `benzene.testing` | in-memory test host + fakes (dev/test) | `benzene-core` | `Benzene.Testing` |
 
@@ -155,7 +155,7 @@ API. None touch the wire envelope, status vocabulary, or HTTP mapping (the inter
 
 The language-neutral fixtures from the spec live in [`conformance/`](conformance/) and run two ways
 — the dependency-free `python -m tests.conformance_runner`, and granular pytest cases (one per
-envelope, mesh-descriptor, and mesh-trace fixture). Passing these plus the live cross-language
+envelope, mesh-descriptor, mesh-trace, and mesh-collector fixture). Passing these plus the live cross-language
 interop checks (send/receive the envelope against a
 running .NET Benzene service) is what "conformant" means — see the spec's
 [porting guide §3](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/porting-guide.md).
@@ -182,7 +182,11 @@ running .NET Benzene service) is what "conformant" means — see the spec's
    whose `{isHealthy, healthChecks}` aggregate also feeds the mesh heartbeat) and the
    `benzene-pydantic` request-validation adapter. All the cross-cutting middleware (validation,
    tracing, health, mesh) installs from one composition root and is testable through the harness.
-8. Later: the collector side (`mesh:query:*` ingest) and gRPC.
+8. **(done)** The mesh **collector** — `MeshCollector`, an ordinary Benzene service that ingests the
+   register/heartbeat/traces/issues feeds and answers `benzene:mesh:query:*` (fleet/service/topic/trace),
+   deriving providers, consumer edges from trace parentage, per-instance health + hash-drift, and
+   `missingFeeds`. Conformance-green against `mesh-collector-cases`.
+9. Later: gRPC transport binding, and transparent-casting decorators for versioning.
 
 ## Documentation
 
