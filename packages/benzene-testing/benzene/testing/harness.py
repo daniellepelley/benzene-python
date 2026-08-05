@@ -79,6 +79,24 @@ class TestHostBuilder:
         host.scope = scope
         return host
 
+    def build_grpc(self):
+        """Specialize to a gRPC test host (requires ``benzene-grpc[transport]`` — grpcio).
+
+        The gRPC binding serves every topic as a generic unary method, so there is no router to
+        mount: the whole registry is driven through one :class:`BenzeneGrpcHandler`, in memory.
+        """
+        try:
+            from benzene.grpc import BenzeneGrpcHandler
+            from benzene.grpc.testing import GrpcTestHost
+        except ImportError as ex:  # pragma: no cover - environment-specific
+            raise ImportError(
+                "build_grpc() requires 'benzene-grpc[transport]' (grpcio) to be installed"
+            ) from ex
+        definition, scope = self._build()
+        host = GrpcTestHost(BenzeneGrpcHandler(application_from(definition)))
+        host.scope = scope
+        return host
+
     def build_azure(self):
         """Specialize to an Azure Functions test host (requires ``benzene-azure``)."""
         try:

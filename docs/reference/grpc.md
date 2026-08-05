@@ -77,6 +77,20 @@ result = await sender.send_message("orders:place", {"sku": "A"}, headers={"x-cor
   The blocking gRPC call runs on a worker thread, so it never blocks the event loop.
 - `method_for(topic)` / `topic_for(method)` are the method-path convention if you need them directly.
 
+## Testing
+
+`create_test_host(StartUp).with_services(...).build_grpc()` drives the real `BenzeneGrpcHandler` in
+memory — the same one-specialization-step harness as the cloud hosts, no socket:
+
+```python
+host = create_test_host(OrdersStartUp).with_services(overrides).build_grpc()
+reply = host.send_grpc("orders:place", body={"sku": "A"}, headers={"x-correlation-id": "c1"})
+assert reply.status == "created"     # the benzene-status trailer, verbatim; reply.code has the StatusCode
+```
+
+`send_grpc` builds the native ingress (method = topic, headers = metadata, bytes body) and returns a
+`GrpcResponse(status, payload, code, details)`. See [`benzene.testing`](testing.md).
+
 > **Spec note (documented bend).** The method-path scheme `/benzene.Benzene/<topic>` is this port's
 > convention, not a wire contract. The gRPC binding catalog in transport-bindings §2 is *informative*
 > and describes .NET's explicit *(route → topic)* registrations; the Python port instead serves every

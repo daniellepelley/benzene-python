@@ -12,11 +12,13 @@ The domain's `POST /orders` / `GET /orders/{id}` HTTP routes map to the `orders:
 topics here — no route table, one handler. Only [`host.py`](host.py) is gRPC-specific; the handlers
 and topics live in `orders_domain` and are reused unchanged by the cloud examples.
 
-## Run the tests (no cloud, but a real gRPC hop)
+## Run the tests (no cloud needed)
 
-The test boots the app from `OrdersStartUp`, serves it on an in-process `grpc.Server` (ephemeral
-port), and dials it with the actual `GrpcMessageSender` — a genuine gRPC round trip, faking only the
-outbound edge:
+The suite dogfoods the shared harness exactly like the cloud examples — `create_test_host(OrdersStartUp)
+.with_services(...).build_grpc()` then `host.send_grpc(topic, body=...)` drives the real
+`BenzeneGrpcHandler` in memory (no socket), faking only the outbound edge. One test at the bottom also
+opens a real `grpc.Server` + channel to prove the `GrpcMessageSender` **client** binding works over a
+live socket — the transport half the in-memory harness doesn't touch.
 
 ```bash
 pip install 'benzene-grpc[transport]'   # grpcio

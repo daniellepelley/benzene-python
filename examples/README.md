@@ -25,10 +25,11 @@ capability, put the handler in `orders_domain` and wire it from the hosts rather
 |---|---|---|---|
 | [`grpc_orders/`](grpc_orders) | gRPC server | gRPC unary (method = topic) + faked egress | `benzene-grpc[transport]` |
 
-The gRPC example mounts the *same* `orders_domain` on a real in-process `grpc.Server`; its test dials
-that server with the actual `GrpcMessageSender` client, so it is a genuine gRPC round trip rather than
-an in-memory harness. Because the binding serves every topic as one generic method, the domain's
-`POST /orders` / `GET /orders/{id}` routes are reached as the `orders:place` / `orders:get` topics.
+The gRPC example mounts the *same* `orders_domain` on the gRPC binding and tests it through the shared
+harness like every cloud (`create_test_host(...).build_grpc()` + `send_grpc`), plus one real-socket
+test that proves the `GrpcMessageSender` client over a live channel. Because the binding serves every
+topic as one generic method, the domain's `POST /orders` / `GET /orders/{id}` routes are reached as the
+`orders:place` / `orders:get` topics.
 
 ## Running the tests
 

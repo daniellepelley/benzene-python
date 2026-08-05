@@ -41,7 +41,10 @@ assert fake.last_topic == "orders:created"           # ...and on the client's eg
 - `create_test_host(StartUp)` → a `TestHostBuilder`; `.with_services(fn)` overrides registrations
   (last wins — the seam for fakes), `.with_config(dict)` layers configuration.
 - `.build_gcp()` / `.build_aws()` / `.build_azure()` specialize to that cloud's test host (a lazy
-  import of the cloud package). Everything before the `build_*` call is transport- and cloud-neutral.
+  import of the cloud package); `.build_grpc()` specializes to the gRPC binding (requires
+  `benzene-grpc[transport]`), driving the real handler in memory via `host.send_grpc(topic, body=...)`
+  — method = topic, headers = metadata, no socket. Everything before the `build_*` call is transport-
+  and cloud-neutral.
 
 The composition root itself is core (`benzene.core`): implement `BenzeneStartUp.configure_services`
 (register services) and `configure` (resolve them and wire routes/topics into an `AppDefinition`);
