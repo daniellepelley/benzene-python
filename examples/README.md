@@ -19,6 +19,17 @@ capability, put the handler in `orders_domain` and wire it from the hosts rather
 | [`aws_orders/`](aws_orders) | AWS Lambda | API Gateway (HTTP) + SQS + SNS + SNS egress | `benzene-aws` |
 | [`azure_orders/`](azure_orders) | Azure Functions | HTTP + Service Bus + Event Hub + Service Bus egress | `benzene-azure` |
 
+## Non-cloud host
+
+| Example | Host | Transports | Package |
+|---|---|---|---|
+| [`grpc_orders/`](grpc_orders) | gRPC server | gRPC unary (method = topic) + faked egress | `benzene-grpc[transport]` |
+
+The gRPC example mounts the *same* `orders_domain` on a real in-process `grpc.Server`; its test dials
+that server with the actual `GrpcMessageSender` client, so it is a genuine gRPC round trip rather than
+an in-memory harness. Because the binding serves every topic as one generic method, the domain's
+`POST /orders` / `GET /orders/{id}` routes are reached as the `orders:place` / `orders:get` topics.
+
 ## Running the tests
 
 All example tests run as part of the normal suite (they're on `testpaths`):
