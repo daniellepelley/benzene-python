@@ -20,13 +20,19 @@ jobs:
       - name: Install layered packages (editable) + pytest
         # Installing all local paths in one command lets pip satisfy the inter-package dependencies
         # (core -> results, http -> core, testing -> core, gcp -> core+http) from the workspace
-        # rather than PyPI. This also verifies the PEP 420 namespace packaging.
+        # rather than PyPI. This also verifies the PEP 420 namespace packaging. Every package is
+        # installed so its tests actually run as a gate — grpc with the [transport] extra (pulls
+        # grpcio) and pydantic (a dependency of benzene-pydantic) mean the gRPC transport/example and
+        # the pydantic-validation tests run here rather than skipping on a missing optional dependency.
         run: |
           python -m pip install --upgrade pip
           pip install \
             -e packages/benzene-results \
             -e packages/benzene-core \
             -e packages/benzene-http \
+            -e 'packages/benzene-grpc[transport]' \
+            -e packages/benzene-mesh \
+            -e packages/benzene-pydantic \
             -e packages/benzene-testing \
             -e packages/benzene-gcp \
             -e packages/benzene-aws \
