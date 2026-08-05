@@ -247,6 +247,18 @@ Wire keys: `traceId`, `spanId`, `service`, `topic`, `status` (always present) pl
 - `new_trace_id()` — a fresh 16-byte lowercase-hex trace-id. `new_span_id()` — a fresh 8-byte
   lowercase-hex span-id.
 
+### Outbound propagation
+
+`trace_middleware` records the current invocation's trace in a `contextvar`, so an outbound call made
+*during* the invocation can forward it (mesh.md §3):
+
+- `current_traceparent()` — the W3C `traceparent` (`00-<traceId>-<spanId>-01`) for the invocation
+  currently running, or `None` outside a trace.
+- `with_trace_propagation(sender)` (class `TracePropagatingMessageSender`) — wraps a `MessageSender` so
+  each published message carries the current `traceparent`; the downstream service then joins the same
+  trace and the collector derives the consumer edge. A `traceparent` the caller already set is left
+  untouched. Compose it with the core client decorators: `with_retry(with_trace_propagation(sender))`.
+
 ## Collector feeds
 
 `MeshFeedSender` pushes a service's mesh feeds to a collector over an outbound
@@ -375,10 +387,11 @@ is unexplained. Conformance-green against both `mesh-collector-cases` and `mesh-
 `ServiceInfo`, `ServiceDescriptor`, `TopicDescriptor`, `MESH_TOPIC`, `Schema`, `json_schema`,
 `mesh_interception`, `DescriptorSource`, `trace_middleware`, `TraceEvent`, `TraceExporter`,
 `InMemoryTraceExporter`, `QueueTraceExporter`, `parse_traceparent`, `new_trace_id`, `new_span_id`,
+`current_traceparent`, `with_trace_propagation`, `TracePropagatingMessageSender`,
 `MeshFeedSender`, `Heartbeat`, `Issue`, `IssueBatch`, `IssueAggregator`, `classify`,
-`issue_fingerprint`, `CLASSIFICATIONS`, `MeshCollector`, `collector_registry`, `CollectorBadRequest`,
-`CollectorNotFound`, `REGISTER_TOPIC`, `HEARTBEAT_TOPIC`, `TRACES_TOPIC`, `ISSUES_TOPIC`,
-`QUERY_FLEET_TOPIC`, `QUERY_SERVICE_TOPIC`, `QUERY_TOPIC_TOPIC`, `QUERY_TRACE_TOPIC`.
+`issue_fingerprint`, `CLASSIFICATIONS`, `MeshCollector`, `collector_registry`, `CollectorError`,
+`CollectorBadRequest`, `CollectorNotFound`, `REGISTER_TOPIC`, `HEARTBEAT_TOPIC`, `TRACES_TOPIC`,
+`ISSUES_TOPIC`, `QUERY_FLEET_TOPIC`, `QUERY_SERVICE_TOPIC`, `QUERY_TOPIC_TOPIC`, `QUERY_TRACE_TOPIC`.
 
 ## See also
 

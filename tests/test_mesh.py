@@ -31,11 +31,13 @@ from benzene.mesh import (
     TRACES_TOPIC,
     TraceEvent,
     classify,
+    current_traceparent,
     issue_fingerprint,
     json_schema,
     mesh_interception,
     parse_traceparent,
     trace_middleware,
+    with_trace_propagation,
 )
 from benzene.testing import FakeMessageSender
 
@@ -305,3 +307,35 @@ def test_queue_exporter_is_lossy_when_full() -> None:
     for topic in ("a", "b", "c"):
         exporter.export(_event(topic))  # never blocks; oldest is dropped
     assert [e.topic for e in exporter.drain()] == ["b", "c"]
+
+
+# --- outbound trace propagation ------------------------------------------------------------------
+
+def test_current_traceparent_is_none_outside_a_trace() -> None:
+    assert current_traceparent() is None
+
+
+def test_outbound_call_forwards_the_current_traceparent() -> None:
+    captured: dict = {}
+
+    class _FakeSender:
+        async def send_message(self, topic, message, headers=None):
+            captured.update(headers or {})
+            return Result.ok()
+
+    outbound = with_trace_propagation(_FakeSender())
+
+    async def handler(_request: dict) -> Result:
+        await outbound.send_message("downstream:topic", {"n": 1})  # published mid-invocation
+        return Result.ok()
+
+    pipeline = MiddlewarePipeline().use(trace_middleware(InMemoryTraceExporter(), service="svc"))
+    app = BenzeneMessageApplication(Registry().register("do:thing", handler), pipeline)
+
+    inbound = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    asyncio.run(app.handle({"topic": "do:thing", "headers": {"traceparent": inbound}, "body": "{}"}))
+
+    assert "traceparent" in captured
+    # same trace id as the inbound header (this service joined it), a fresh span for this hop
+    assert captured["traceparent"].split("-")[1] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert current_traceparent() is None  # the contextvar is reset after the invocation

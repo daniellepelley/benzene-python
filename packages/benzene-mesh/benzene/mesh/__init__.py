@@ -58,10 +58,13 @@ from .trace import (
     QueueTraceExporter,
     TraceEvent,
     TraceExporter,
+    TracePropagatingMessageSender,
+    current_traceparent,
     new_span_id,
     new_trace_id,
     parse_traceparent,
     trace_middleware,
+    with_trace_propagation,
 )
 
 __all__ = [
@@ -94,7 +97,10 @@ __all__ = [
     "TopicDescriptor",
     "TraceEvent",
     "TraceExporter",
+    "TracePropagatingMessageSender",
     "classify",
+    "current_traceparent",
+    "with_trace_propagation",
     "issue_fingerprint",
     "json_schema",
     "mesh_interception",

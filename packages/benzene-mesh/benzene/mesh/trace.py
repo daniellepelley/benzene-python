@@ -13,6 +13,7 @@ may fail, slow, or block the invocation.
 from __future__ import annotations
 
 import collections
+import contextvars
 import os
 import re
 import time
@@ -21,7 +22,22 @@ from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
 from benzene.core import Context, Middleware, Next
-from benzene.results import Status
+from benzene.results import Result, Status
+
+# The trace the current invocation is inside — (trace_id, span_id) — set by the trace middleware so an
+# outbound call can forward it (contextvars carry it across awaits within the same task; §3 propagation).
+_CURRENT_TRACE: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
+    "benzene_current_trace", default=None
+)
+
+
+def current_traceparent() -> str | None:
+    """The W3C ``traceparent`` for the invocation currently running, or ``None`` outside a trace."""
+    trace = _CURRENT_TRACE.get()
+    if trace is None:
+        return None
+    trace_id, span_id = trace
+    return f"00-{trace_id}-{span_id}-01"
 
 _HEX = re.compile(r"[0-9a-f]+")
 _ALL_ZERO = re.compile(r"0+")
@@ -169,9 +185,11 @@ def trace_middleware(
         started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         start = time.perf_counter()
 
+        token = _CURRENT_TRACE.set((trace_id, span_id))  # so outbound calls can forward this span
         try:
             await next()
         finally:
+            _CURRENT_TRACE.reset(token)
             status = context.result.status if context.result is not None else Status.UNEXPECTED_ERROR
             event = TraceEvent(
                 trace_id=trace_id,
@@ -192,3 +210,31 @@ def trace_middleware(
                 pass
 
     return middleware
+
+
+class TracePropagatingMessageSender:
+    """Wraps a :class:`~benzene.core.MessageSender`, forwarding the current ``traceparent`` (mesh.md §3).
+
+    When a handler running under :func:`trace_middleware` publishes a message, this injects
+    ``traceparent: 00-<traceId>-<spanId>-01`` for the invocation's span, so the downstream service joins
+    the same trace and the collector can derive the consumer edge. A ``traceparent`` the caller already
+    set is left untouched; outside a trace, nothing is added.
+    """
+
+    def __init__(self, inner: Any, *, header: str = "traceparent") -> None:
+        self._inner = inner
+        self._header = header
+
+    async def send_message(
+        self, topic: str, message: Any, headers: dict[str, str] | None = None
+    ) -> Result:
+        out = dict(headers or {})
+        traceparent = current_traceparent()
+        if traceparent and not any(key.lower() == self._header.lower() for key in out):
+            out[self._header] = traceparent
+        return await self._inner.send_message(topic, message, out)
+
+
+def with_trace_propagation(inner: Any, **options: Any) -> TracePropagatingMessageSender:
+    """Sugar for :class:`TracePropagatingMessageSender`."""
+    return TracePropagatingMessageSender(inner, **options)
