@@ -19,7 +19,7 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Mapping
+from typing import Any, Awaitable, Callable, Mapping, TypeAlias
 
 from benzene.core import encode_body
 from benzene.results import Result, Status, is_successful
@@ -39,7 +39,7 @@ class HttpReply:
 HttpTransport = Callable[[str, dict[str, str], str], Awaitable[HttpReply]]
 
 #: How a topic becomes a URL: a base URL (``{base}/{topic}``), a ``{topic: url}`` map, or a callable.
-UrlFor = "str | Mapping[str, str] | Callable[[str], str]"
+UrlFor: TypeAlias = "str | Mapping[str, str] | Callable[[str], str]"
 
 
 class HttpMessageSender:
@@ -53,7 +53,7 @@ class HttpMessageSender:
 
     def __init__(
         self,
-        url_for: "str | Mapping[str, str] | Callable[[str], str]",
+        url_for: UrlFor,
         *,
         transport: HttpTransport | None = None,
         topic_header: str = "topic",

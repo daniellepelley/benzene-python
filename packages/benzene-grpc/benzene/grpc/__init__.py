@@ -15,10 +15,18 @@ from __future__ import annotations
 
 from .status import BENZENE_STATUS_TRAILER, from_grpc, to_grpc
 
-try:  # the server/client transport needs grpcio (the [transport] extra); the mapping never does.
+# The server/client transport needs grpcio (the [transport] extra); the mapping above never does.
+# Guard on grpcio specifically so a real import error *inside* the transport modules surfaces as
+# itself, rather than being mistaken for a missing optional dependency.
+try:
+    import grpc as _grpc  # noqa: F401
+except ImportError:  # pragma: no cover - exercised only without grpcio installed
+    _grpc = None  # type: ignore[assignment]
+
+if _grpc is not None:
     from .client import GrpcMessageSender
     from .server import BenzeneGrpcHandler, add_benzene_handler, method_for, topic_for
-except ImportError:  # pragma: no cover - exercised only without grpcio installed
+else:
 
     def _needs_grpc(*_args, **_kwargs):
         raise ImportError(

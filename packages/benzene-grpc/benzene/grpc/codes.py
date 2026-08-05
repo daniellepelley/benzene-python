@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import grpc
 
-from benzene.results import Status
+from .status import from_grpc, to_grpc
 
-from .status import to_grpc
-
-# gRPC status-code name (what to_grpc emits) -> the grpc.StatusCode member.
+# gRPC status-code name (what to_grpc emits / from_grpc reads) <-> the grpc.StatusCode member.
 _NAME_TO_CODE: dict[str, grpc.StatusCode] = {
     "OK": grpc.StatusCode.OK,
     "InvalidArgument": grpc.StatusCode.INVALID_ARGUMENT,
@@ -30,22 +28,7 @@ _NAME_TO_CODE: dict[str, grpc.StatusCode] = {
     "DataLoss": grpc.StatusCode.DATA_LOSS,
 }
 
-# grpc.StatusCode member -> Benzene status, for the client's fallback when no benzene-status trailer.
-_CODE_TO_STATUS: dict[grpc.StatusCode, str] = {
-    grpc.StatusCode.OK: Status.OK,
-    grpc.StatusCode.INVALID_ARGUMENT: Status.BAD_REQUEST,
-    grpc.StatusCode.UNAUTHENTICATED: Status.UNAUTHORIZED,
-    grpc.StatusCode.PERMISSION_DENIED: Status.FORBIDDEN,
-    grpc.StatusCode.NOT_FOUND: Status.NOT_FOUND,
-    grpc.StatusCode.ALREADY_EXISTS: Status.CONFLICT,
-    grpc.StatusCode.UNIMPLEMENTED: Status.NOT_IMPLEMENTED,
-    grpc.StatusCode.UNAVAILABLE: Status.SERVICE_UNAVAILABLE,
-    grpc.StatusCode.CANCELLED: Status.SERVICE_UNAVAILABLE,
-    grpc.StatusCode.RESOURCE_EXHAUSTED: Status.TOO_MANY_REQUESTS,
-    grpc.StatusCode.DEADLINE_EXCEEDED: Status.TIMEOUT,
-    grpc.StatusCode.DATA_LOSS: Status.UNEXPECTED_ERROR,
-    grpc.StatusCode.INTERNAL: Status.UNEXPECTED_ERROR,
-}
+_CODE_TO_NAME: dict[grpc.StatusCode, str] = {code: name for name, code in _NAME_TO_CODE.items()}
 
 
 def status_to_code(status: str) -> grpc.StatusCode:
@@ -54,5 +37,9 @@ def status_to_code(status: str) -> grpc.StatusCode:
 
 
 def code_to_status(code: grpc.StatusCode) -> str:
-    """A ``grpc.StatusCode`` → a Benzene status (client fallback when no ``benzene-status`` trailer)."""
-    return _CODE_TO_STATUS.get(code, Status.UNEXPECTED_ERROR)
+    """A ``grpc.StatusCode`` → a Benzene status (client fallback when no ``benzene-status`` trailer).
+
+    Delegates to the single, name-based reverse table in :mod:`benzene.grpc.status`, so the two
+    directions of the wire mapping have one source of truth.
+    """
+    return from_grpc(_CODE_TO_NAME.get(code, ""))

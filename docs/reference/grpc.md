@@ -77,6 +77,15 @@ result = await sender.send_message("orders:place", {"sku": "A"}, headers={"x-cor
   The blocking gRPC call runs on a worker thread, so it never blocks the event loop.
 - `method_for(topic)` / `topic_for(method)` are the method-path convention if you need them directly.
 
+> **Spec note (documented bend).** The method-path scheme `/benzene.Benzene/<topic>` is this port's
+> convention, not a wire contract. The gRPC binding catalog in transport-bindings §2 is *informative*
+> and describes .NET's explicit *(route → topic)* registrations; the Python port instead serves every
+> topic through one generic handler, which is the idiomatic gRPC-Python shape. Two Benzene *Python*
+> services interoperate over gRPC out of the box; talking gRPC to a binding that uses a different
+> method path (e.g. a .NET service's `/package.Service/Method`) means agreeing the path on both sides.
+> This is a binding (tier-D) detail — the envelope, headers, status vocabulary, and `benzene-status`
+> trailer are unaffected.
+
 ## Exports
 
 `to_grpc`, `from_grpc`, `BENZENE_STATUS_TRAILER`, `add_benzene_handler`, `BenzeneGrpcHandler`,
