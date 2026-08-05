@@ -35,6 +35,8 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
   SNS, with SNS egress.
 - **[Hosting on Azure Functions](cookbooks/hosting-on-azure.md)** — HTTP + Service Bus + Event Hub
   triggers, with Service Bus egress.
+- **[Calling other services](cookbooks/calling-other-services.md)** — outbound `MessageSender` clients
+  and cross-cutting decorators (retry, correlation id, trace propagation) that compose over one port.
 - **[Joining the mesh](cookbooks/joining-the-mesh.md)** — add self-description, tracing, and collector
   feeds to a service without touching its handlers.
 - **[Examples](https://github.com/daniellepelley/benzene-python/tree/main/examples)** — runnable,

@@ -16,6 +16,7 @@ from typing import Optional
 import pytest
 
 from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
+from benzene.results import Result
 from benzene.mesh import (
     HEARTBEAT_TOPIC,
     ISSUES_TOPIC,
@@ -339,3 +340,31 @@ def test_outbound_call_forwards_the_current_traceparent() -> None:
     # same trace id as the inbound header (this service joined it), a fresh span for this hop
     assert captured["traceparent"].split("-")[1] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert current_traceparent() is None  # the contextvar is reset after the invocation
+
+
+def test_composed_outbound_stack_shares_one_correlation_id_across_retries() -> None:
+    from benzene.core import with_correlation_id, with_retry
+
+    calls: list[dict] = []
+
+    class _FlakySender:
+        async def send_message(self, topic, message, headers=None):
+            calls.append(dict(headers or {}))
+            return Result.service_unavailable("transient") if len(calls) == 1 else Result.ok()
+
+    # correlation-id OUTSIDE retry -> the id is stable across attempts (the cookbook's order)
+    outbound = with_correlation_id(with_retry(with_trace_propagation(_FlakySender()), attempts=3))
+
+    async def handler(_request: dict) -> Result:
+        return await outbound.send_message("downstream:topic", {})
+
+    pipeline = MiddlewarePipeline().use(trace_middleware(InMemoryTraceExporter(), service="svc"))
+    app = BenzeneMessageApplication(Registry().register("do:thing", handler), pipeline)
+    inbound = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    response = asyncio.run(app.handle({"topic": "do:thing", "headers": {"traceparent": inbound}, "body": "{}"}))
+
+    assert response["statusCode"] == "ok"                    # retry recovered
+    assert len(calls) == 2                                   # one retry
+    ids = {call["x-correlation-id"] for call in calls}
+    assert len(ids) == 1                                     # ONE correlation id across both attempts
+    assert all(c["traceparent"].split("-")[1] == "4bf92f3577b34da6a3ce929d0e0e4736" for c in calls)
