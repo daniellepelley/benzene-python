@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlencode
 
+from benzene.core import read_message_metadata
+
 TOPIC_ATTRIBUTE = "topic"
 
 
@@ -57,10 +59,8 @@ def api_gateway_request(event: dict[str, Any]) -> dict[str, Any]:
 def sqs_record_envelope(record: dict[str, Any]) -> dict[str, Any]:
     """Map one SQS record to a Benzene envelope. Topic from the ``topic`` message attribute."""
     attributes = record.get("messageAttributes") or {}
-    headers = {
-        str(k): str(v.get("stringValue", "")) for k, v in attributes.items()
-    }
-    topic = headers.pop(TOPIC_ATTRIBUTE, "")
+    metadata = {k: v.get("stringValue", "") for k, v in attributes.items()}
+    topic, headers = read_message_metadata(metadata)
     return {"topic": topic, "headers": headers, "body": record.get("body") or ""}
 
 
@@ -68,6 +68,6 @@ def sns_record_envelope(record: dict[str, Any]) -> dict[str, Any]:
     """Map one SNS record to a Benzene envelope. Topic from the ``topic`` message attribute."""
     sns = record.get("Sns") or {}
     attributes = sns.get("MessageAttributes") or {}
-    headers = {str(k): str(v.get("Value", "")) for k, v in attributes.items()}
-    topic = headers.pop(TOPIC_ATTRIBUTE, "")
+    metadata = {k: v.get("Value", "") for k, v in attributes.items()}
+    topic, headers = read_message_metadata(metadata)
     return {"topic": topic, "headers": headers, "body": sns.get("Message") or ""}

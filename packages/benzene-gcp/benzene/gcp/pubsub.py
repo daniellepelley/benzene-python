@@ -15,7 +15,7 @@ from __future__ import annotations
 import base64
 from typing import Any, Callable
 
-from benzene.core import encode_body
+from benzene.core import encode_body, read_message_metadata
 from benzene.results import Result, Status
 
 #: Message-attribute name carrying the Benzene topic (the cross-port convention).
@@ -24,9 +24,7 @@ TOPIC_ATTRIBUTE = "topic"
 
 def decode_pubsub_message(message: dict[str, Any]) -> dict[str, Any]:
     """Decode a Pub/Sub ``message`` dict into a Benzene envelope ``{topic, headers, body}``."""
-    attributes = {str(k): str(v) for k, v in (message.get("attributes") or {}).items()}
-    topic = attributes.get(TOPIC_ATTRIBUTE, "")
-    headers = {k: v for k, v in attributes.items() if k != TOPIC_ATTRIBUTE}
+    topic, headers = read_message_metadata(message.get("attributes"))
 
     raw = message.get("data")
     if raw is None:

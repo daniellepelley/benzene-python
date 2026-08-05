@@ -40,6 +40,13 @@ from .health import (
 )
 from .handler import Handler, HandlerDefinition, definition_of, message
 from .mapping import encode_body, to_camel, to_jsonable, to_request
+from .metadata import (
+    DEFAULT_METADATA_KEYS,
+    DEFAULT_TOPIC_KEY,
+    DEFAULT_VERSION_KEY,
+    MetadataKeys,
+    read_message_metadata,
+)
 from .pipeline import Middleware, MiddlewarePipeline, Next
 from .registry import (
     DuplicateHandlerError,
@@ -67,9 +74,14 @@ __all__ = [
     "Lifetime",
     "MessageHandlingError",
     "MessageSender",
+    "DEFAULT_METADATA_KEYS",
+    "DEFAULT_TOPIC_KEY",
+    "DEFAULT_VERSION_KEY",
+    "MetadataKeys",
     "Middleware",
     "MiddlewarePipeline",
     "Next",
+    "read_message_metadata",
     "AppDefinition",
     "BenzeneStartUp",
     "Registry",

@@ -14,7 +14,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
+from benzene.core import (
+    BenzeneMessageApplication,
+    MetadataKeys,
+    MiddlewarePipeline,
+    Registry,
+    read_message_metadata,
+    resolve_version,
+)
 from benzene.http import from_http, to_http
 from benzene.mesh import (
     InMemoryTraceExporter,
@@ -227,11 +234,39 @@ def run_mesh_collector() -> list[str]:
     )
 
 
+def run_transport_metadata() -> list[str]:
+    """Topic + header resolution from native metadata (wire-contracts §2)."""
+    failures: list[str] = []
+    data = _load("transport-metadata-cases.json")
+
+    def check(case: dict, keys: MetadataKeys) -> None:
+        topic, headers = read_message_metadata(case["metadata"], keys)
+        expected = case["expected"]
+        name = case["name"]
+        if "topic" in expected and topic != expected["topic"]:
+            failures.append(f"metadata[{name}]: topic {topic!r}, expected {expected['topic']!r}")
+        for key, value in expected.get("headers", {}).items():
+            if headers.get(key) != value:
+                failures.append(f"metadata[{name}]: header {key}={headers.get(key)!r}, expected {value!r}")
+        for key in expected.get("headersExclude", []):
+            if key.lower() in headers:
+                failures.append(f"metadata[{name}]: header {key!r} should be excluded")
+        if "version" in expected and resolve_version(headers) != expected["version"]:
+            failures.append(f"metadata[{name}]: version {resolve_version(headers)!r}, expected {expected['version']!r}")
+
+    for case in data.get("metadataCases", []):
+        check(case, MetadataKeys())
+    for case in data.get("overrideCases", []):
+        check(case, MetadataKeys(topic=case["metadataKeys"]["topic"]))
+    return failures
+
+
 def run_all() -> list[str]:
     return (
         run_status_vocabulary()
         + run_http_mapping()
         + run_envelope_cases()
+        + run_transport_metadata()
         + run_mesh_descriptor()
         + run_mesh_trace()
         + run_mesh_collector()
@@ -246,6 +281,6 @@ if __name__ == "__main__":
             print("  -", f)
         sys.exit(1)
     print(
-        "CONFORMANCE PASSED — status vocabulary, HTTP mapping, envelope, "
+        "CONFORMANCE PASSED — status vocabulary, HTTP mapping, envelope, transport metadata, "
         "and mesh (descriptor + trace + collector + issues) cases all green."
     )

@@ -156,8 +156,9 @@ API. None touch the wire envelope, status vocabulary, or HTTP mapping (the inter
 ## Conformance
 
 The language-neutral fixtures from the spec live in [`conformance/`](conformance/) and run two ways
-— the dependency-free `python -m tests.conformance_runner`, and granular pytest cases (one per
-envelope, mesh-descriptor, mesh-trace, and mesh-collector fixture). Passing these plus the live cross-language
+— the dependency-free `python -m tests.conformance_runner`, and granular pytest cases. **Every
+language-neutral fixture is green**: status vocabulary, HTTP + gRPC status mappings, the envelope,
+transport metadata, and all four mesh fixtures (descriptor, trace, collector, issues). Passing these plus the live cross-language
 interop checks (send/receive the envelope against a
 running .NET Benzene service) is what "conformant" means — see the spec's
 [porting guide §3](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/porting-guide.md).

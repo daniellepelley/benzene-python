@@ -223,6 +223,26 @@ the failed checks. The aggregate
 is exactly the shape the mesh [`Heartbeat`](mesh.md) reports, so a service runs its checks once and
 feeds both the health endpoint and the heartbeat: `report = await checks.run()`.
 
+## Transport metadata
+
+Every message transport that carries Benzene metadata natively (SQS/SNS attributes, Pub/Sub
+attributes, Service Bus / Event Hub application properties, …) exposes a string→string channel. Each
+binding turns that native channel into a plain `dict` and calls `read_message_metadata`, which resolves
+the reserved **topic** key out of it and returns the rest as headers (wire-contracts §2):
+
+```python
+from benzene.core import read_message_metadata, MetadataKeys
+
+topic, headers = read_message_metadata({"topic": "orders:place", "x-correlation-id": "c1"})
+# topic == "orders:place"; headers == {"x-correlation-id": "c1"}
+```
+
+The reserved names are **a single injectable value** (`MetadataKeys`, defaults `topic` /
+`benzene-version`), not a literal each binding hard-codes — the defaults carry interop, and an override
+applies to inbound bindings and outbound clients alike. Keys are matched case-insensitively and
+returned lower-cased; a non-reserved key never routes; `benzene-version` stays among the headers for
+`resolve_version` to read. The three cloud hosts share this one resolver.
+
 ## Exports
 
 `BenzeneMessageApplication`, `Container`, `Context`, `DuplicateHandlerError`, `Handler`,
@@ -232,7 +252,8 @@ feeds both the health endpoint and the heartbeat: `report = await checks.run()`.
 `health_interception`, `VERSION_HEADER`,
 `VERSION_HEADER_NAMES`, `VersionSelector`, `application_from`, `build_application`, `definition_of`,
 `encode_response`, `error_payload`, `exact_version`, `highest_version`, `message`, `message_router`,
-`resolve_version`, `to_jsonable`, `to_request`.
+`resolve_version`, `read_message_metadata`, `MetadataKeys`, `DEFAULT_METADATA_KEYS`,
+`DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `to_jsonable`, `to_request`.
 
 ## See also
 

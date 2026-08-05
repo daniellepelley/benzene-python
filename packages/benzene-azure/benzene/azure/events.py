@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from benzene.core import read_message_metadata
+
 TOPIC_PROPERTY = "topic"
 
 
@@ -50,13 +52,13 @@ def _get_body(message: Any) -> Any:
 
 def decode_service_bus(message: Any) -> dict[str, Any]:
     """Map a Service Bus message → a Benzene envelope. Topic from ``application_properties``."""
-    headers = _properties(message, "application_properties", "properties")
-    topic = headers.pop(TOPIC_PROPERTY, "")
+    metadata = _properties(message, "application_properties", "properties")
+    topic, headers = read_message_metadata(metadata)
     return {"topic": topic, "headers": headers, "body": body_to_text(_get_body(message))}
 
 
 def decode_event_hub_event(event: Any) -> dict[str, Any]:
     """Map an Event Hub event → a Benzene envelope. Topic from ``properties``."""
-    headers = _properties(event, "properties", "application_properties")
-    topic = headers.pop(TOPIC_PROPERTY, "")
+    metadata = _properties(event, "properties", "application_properties")
+    topic, headers = read_message_metadata(metadata)
     return {"topic": topic, "headers": headers, "body": body_to_text(_get_body(event))}
