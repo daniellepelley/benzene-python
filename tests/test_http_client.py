@@ -1,0 +1,90 @@
+"""The outbound HTTP client — mapping, URL resolution, and an inbound↔outbound round-trip."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from benzene.core import MessageSender, message
+from benzene.http import BenzeneHttpApp, HttpMessageSender, HttpReply, HttpRouter, http_endpoint
+from benzene.results import Result
+
+
+def _sender(reply: HttpReply, captured: dict | None = None) -> HttpMessageSender:
+    async def transport(url: str, headers: dict, body: str) -> HttpReply:
+        if captured is not None:
+            captured.update(url=url, headers=headers, body=body)
+        return reply
+
+    return HttpMessageSender("https://svc.example", transport=transport)
+
+
+def test_it_is_a_message_sender() -> None:
+    assert isinstance(_sender(HttpReply(200)), MessageSender)  # structurally satisfies the port
+
+
+def test_success_response_maps_to_a_result() -> None:
+    result = asyncio.run(_sender(HttpReply(201, '{"id": "o1"}')).send_message("orders:place", {"sku": "A"}))
+    assert result.status == "created"
+    assert result.payload == {"id": "o1"}
+
+
+def test_failure_response_maps_status_and_detail() -> None:
+    reply = HttpReply(404, '{"status": "not-found", "detail": "no such order"}')
+    result = asyncio.run(_sender(reply).send_message("orders:get", {"id": "x"}))
+    assert result.status == "not-found"
+    assert result.errors == ("no such order",)
+
+
+def test_it_forwards_headers_and_the_topic() -> None:
+    captured: dict = {}
+    asyncio.run(
+        _sender(HttpReply(200), captured).send_message(
+            "orders:place", {"sku": "A"}, headers={"x-correlation-id": "c1"}
+        )
+    )
+    assert captured["url"] == "https://svc.example/orders:place"  # base + topic
+    assert captured["headers"]["x-correlation-id"] == "c1"
+    assert captured["headers"]["topic"] == "orders:place"          # topic travels as metadata
+    assert json.loads(captured["body"]) == {"sku": "A"}
+
+
+@pytest.mark.parametrize(
+    "url_for,expected",
+    [
+        ("https://svc/", "https://svc/orders:place"),
+        ({"orders:place": "https://svc/orders"}, "https://svc/orders"),
+        (lambda t: f"https://svc/v1/{t}", "https://svc/v1/orders:place"),
+    ],
+)
+def test_url_resolution(url_for, expected) -> None:
+    captured: dict = {}
+
+    async def transport(url, headers, body):
+        captured["url"] = url
+        return HttpReply(200)
+
+    sender = HttpMessageSender(url_for, transport=transport)
+    asyncio.run(sender.send_message("orders:place", {}))
+    assert captured["url"] == expected
+
+
+def test_round_trip_through_the_real_inbound_binding() -> None:
+    # Dogfood: the outbound sender POSTs into a real BenzeneHttpApp; only the transport is faked.
+    @http_endpoint("POST", "/orders")
+    @message("orders:place")
+    async def place(request: dict) -> Result:
+        return Result.created({"sku": request["sku"], "accepted": True})
+
+    inbound = BenzeneHttpApp(HttpRouter().add(place))
+
+    async def transport(url: str, headers: dict, body: str) -> HttpReply:
+        response = await inbound.handle("POST", url, headers=headers, body=body)  # url is the path
+        return HttpReply(response.status_code, response.body)
+
+    sender = HttpMessageSender({"orders:place": "/orders"}, transport=transport)
+    result = asyncio.run(sender.send_message("orders:place", {"sku": "ABC"}))
+    assert result.status == "created"                       # 201 mapped back through from_http
+    assert result.payload == {"sku": "ABC", "accepted": True}

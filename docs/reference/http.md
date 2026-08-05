@@ -95,10 +95,31 @@ Two ways to invoke it:
   (`status_code`, `headers`, `body`) — convenient in tests.
 - `await app(scope, receive, send)` — the raw ASGI entry point for uvicorn/hypercorn.
 
+## Outbound — `HttpMessageSender`
+
+The reverse direction: a `MessageSender` that publishes a message to another Benzene service over HTTP
+POST and maps the response back via `from_http` (transport-bindings §2). It forwards the Benzene
+headers as HTTP headers (plus the reserved `topic`), so correlation ids and trace context propagate.
+
+```python
+from benzene.http import HttpMessageSender
+
+sender = HttpMessageSender("https://orders.svc")          # topic -> {base}/{topic}
+result = await sender.send_message("orders:place", {"sku": "A"}, headers={"x-correlation-id": "c1"})
+# a 201 -> result.status == "created"; the response body becomes result.payload
+```
+
+- `HttpMessageSender(url_for, *, transport=None, topic_header="topic")` — `url_for` resolves a topic to
+  a URL: a **base URL** (topic appended as a path segment), a **`{topic: url}` map**, or a **`topic ->
+  url` callable**.
+- `transport` is the injectable HTTP call — `async (url, headers, body) -> HttpReply` — so a test drives
+  it with a fake and no network. The default (`stdlib_transport()`) uses `urllib` on a worker thread, so
+  the sender needs **no extra dependency**; inject an `httpx`-backed transport for pooling in production.
+
 ## Exports
 
 `BenzeneHttpApp`, `HttpResponse`, `HttpRouter`, `HttpEndpoint`, `http_endpoint`, `routes_of`,
-`to_http`, `from_http`.
+`to_http`, `from_http`, `HttpMessageSender`, `HttpReply`, `HttpTransport`, `stdlib_transport`.
 
 ## See also
 
