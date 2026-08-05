@@ -1,12 +1,13 @@
 # `benzene.grpc`
 
 The gRPC edge of the Benzene wire contract: the **Benzene ↔ gRPC status mapping** (wire-contracts.md
-§4.2) and the `benzene-status` trailer rule. **Distribution: `benzene-grpc` (depends on
-`benzene-core`).** This is the foundation of a gRPC transport binding; the server/client transport
-over `grpcio` builds on top and is the next step.
+§4.2), the `benzene-status` trailer rule, and the **server/client transport** over `grpcio`.
+**Distribution: `benzene-grpc` (depends on `benzene-core`; the transport adds the `[transport]`
+extra).**
 
 ```bash
-pip install benzene-grpc
+pip install benzene-grpc              # the status mapping (no grpcio)
+pip install 'benzene-grpc[transport]' # + the gRPC server/client transport
 ```
 
 ## Status mapping
@@ -45,9 +46,41 @@ from_grpc("OK", trailer="created")   # -> "created"   (the trailer wins verbatim
 `BENZENE_STATUS_TRAILER` is the trailer key (`"benzene-status"`). Pinned by
 `grpc-status-mapping.json`.
 
+## The transport (`[transport]` extra)
+
+A Benzene gRPC service is a **generic** gRPC handler: the method name *is* the topic (the `grpc` topic
+source is "method"), so one handler serves every topic. Each unary call carries the message body as its
+bytes and the Benzene headers as request metadata.
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+import grpc
+from benzene.core import BenzeneMessageApplication
+from benzene.grpc import add_benzene_handler, GrpcMessageSender
+
+# Server: serve every topic as a unary method
+server = grpc.server(ThreadPoolExecutor(max_workers=8))
+add_benzene_handler(server, BenzeneMessageApplication(registry))
+server.add_insecure_port("[::]:50051"); server.start()
+
+# Client: a MessageSender over a channel
+sender = GrpcMessageSender(grpc.insecure_channel("localhost:50051"))
+result = await sender.send_message("orders:place", {"sku": "A"}, headers={"x-correlation-id": "c1"})
+```
+
+- `add_benzene_handler(server, application)` registers a `BenzeneGrpcHandler` on a `grpc.Server`. The
+  response carries the mapped `StatusCode` and — on success and failure alike — a `benzene-status`
+  trailer with the raw status, so a status like `created` (which maps to gRPC `OK`) survives the round
+  trip exactly.
+- `GrpcMessageSender(channel)` is a `MessageSender`: it calls `/benzene.Benzene/<topic>`, forwards the
+  headers as metadata, and maps the outcome back (the trailer wins verbatim, else the code is mapped).
+  The blocking gRPC call runs on a worker thread, so it never blocks the event loop.
+- `method_for(topic)` / `topic_for(method)` are the method-path convention if you need them directly.
+
 ## Exports
 
-`to_grpc`, `from_grpc`, `BENZENE_STATUS_TRAILER`.
+`to_grpc`, `from_grpc`, `BENZENE_STATUS_TRAILER`, `add_benzene_handler`, `BenzeneGrpcHandler`,
+`GrpcMessageSender`, `method_for`, `topic_for`.
 
 ## See also
 

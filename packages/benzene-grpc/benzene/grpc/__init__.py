@@ -15,4 +15,30 @@ from __future__ import annotations
 
 from .status import BENZENE_STATUS_TRAILER, from_grpc, to_grpc
 
-__all__ = ["BENZENE_STATUS_TRAILER", "from_grpc", "to_grpc"]
+try:  # the server/client transport needs grpcio (the [transport] extra); the mapping never does.
+    from .client import GrpcMessageSender
+    from .server import BenzeneGrpcHandler, add_benzene_handler, method_for, topic_for
+except ImportError:  # pragma: no cover - exercised only without grpcio installed
+
+    def _needs_grpc(*_args, **_kwargs):
+        raise ImportError(
+            "The Benzene gRPC transport requires grpcio — install it with "
+            "'pip install benzene-grpc[transport]'."
+        )
+
+    GrpcMessageSender = _needs_grpc  # type: ignore[assignment]
+    BenzeneGrpcHandler = _needs_grpc  # type: ignore[assignment]
+    add_benzene_handler = _needs_grpc  # type: ignore[assignment]
+    method_for = _needs_grpc  # type: ignore[assignment]
+    topic_for = _needs_grpc  # type: ignore[assignment]
+
+__all__ = [
+    "BENZENE_STATUS_TRAILER",
+    "BenzeneGrpcHandler",
+    "GrpcMessageSender",
+    "add_benzene_handler",
+    "from_grpc",
+    "method_for",
+    "to_grpc",
+    "topic_for",
+]

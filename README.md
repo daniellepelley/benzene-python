@@ -32,7 +32,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-results` | `benzene.results` | `Result` + status vocabulary — the return type of a handler | — (zero deps) | `Benzene.Results` |
 | `benzene-core` | `benzene.core` | pipeline, registry, `@message`, DI, versioning, health checks, the `BenzeneMessage` envelope | `benzene-results` | `Benzene.Core*` + `Benzene.Dependencies` |
 | `benzene-http` | `benzene.http` | inbound HTTP (ASGI) binding + status mapping | `benzene-core` | `Benzene.Http` |
-| `benzene-grpc` | `benzene.grpc` | Benzene↔gRPC status mapping + `benzene-status` trailer rule | `benzene-core` | `Benzene.Grpc` |
+| `benzene-grpc` | `benzene.grpc` | Benzene↔gRPC status mapping + trailer rule + server/client transport (`[transport]`) | `benzene-core` (+ `grpcio`) | `Benzene.Grpc` |
 | `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
 | `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + egress) | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` |
 | `benzene-azure` | `benzene.azure` | Azure Functions host (HTTP + Service Bus + Event Hub + egress) | `benzene-core`, `benzene-http` | `Benzene.Azure.Function.*` |
@@ -167,7 +167,8 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 
 > **Every language-neutral conformance fixture is green** — status vocabulary, HTTP + gRPC status
 > mappings, the envelope, transport metadata, and all four mesh fixtures (descriptor, trace, collector,
-> issues). The one substantial feature still ahead is the gRPC *transport* (the status mapping is done).
+> issues) — and every transport binding in the spec now has an implementation (HTTP, the three clouds,
+> and gRPC), inbound and outbound.
 
 1. **(done)** Wire contracts + core model + `BenzeneMessage` envelope, conformance-green.
 2. **(done)** An HTTP inbound binding end-to-end (ASGI), including the status-code mapping.
@@ -197,10 +198,14 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 9. **(done)** The single injectable **transport-metadata** resolver (`read_message_metadata` /
    `MetadataKeys`, wire-contracts §2) — reserved-topic + header resolution shared by all three cloud
    hosts. Conformance-green against `transport-metadata-cases`.
-10. **(in progress)** gRPC — the Benzene↔gRPC status mapping (`benzene-grpc`, wire-contracts §4.2) and
-    the `benzene-status` trailer rule are done and conformance-green against `grpc-status-mapping`; the
-    server/client transport over `grpcio` is the next step.
-11. Later: the gRPC transport binding, and transparent-casting decorators for versioning.
+10. **(done)** gRPC (`benzene-grpc`) — the Benzene↔gRPC status mapping + `benzene-status` trailer
+    (conformance-green against `grpc-status-mapping`), **and** the server/client transport over `grpcio`
+    (the `[transport]` extra): a generic handler serving every topic as a unary method (method = topic),
+    and a `GrpcMessageSender`, proven with a real in-process server round-trip.
+11. **(done)** Outbound HTTP — `HttpMessageSender` publishes a message to another Benzene service over
+    HTTP and maps the response back (the reverse direction of the HTTP binding).
+12. Later: transparent-casting decorators for versioning (the casting-handler pattern already covers the
+    need idiomatically).
 
 ## Documentation
 

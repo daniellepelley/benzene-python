@@ -13,6 +13,10 @@ authors = [{ name = "Benzene" }]
 keywords = ["benzene", "grpc", "status", "middleware", "hexagonal"]
 dependencies = ["benzene-core"]
 
+[project.optional-dependencies]
+# Only the server/client transport needs grpcio; the status mapping is dependency-free.
+transport = ["grpcio>=1.60"]
+
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"
 Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"

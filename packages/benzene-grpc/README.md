@@ -26,10 +26,27 @@ preference to re-deriving from the code:
 from_grpc("OK", trailer="created")   # -> "created"  (the trailer wins verbatim)
 ```
 
-gRPC status codes are represented by their canonical **names** as strings (`"OK"`,
-`"InvalidArgument"`, …), so the mapping needs no `grpcio` dependency — a transport binding translates
-these to `grpc.StatusCode` members at its edge. That server/client transport is the next step; this
-package is the conformance-pinned mapping it will build on (`grpc-status-mapping.json`).
+The mapping needs no `grpcio` dependency (codes are canonical name strings). The **server/client
+transport** builds on it and adds the `[transport]` extra:
 
-Mirrors .NET's `Benzene.Grpc`, and contributes the `benzene.grpc` subpackage to the shared `benzene`
-namespace.
+```bash
+pip install 'benzene-grpc[transport]'
+```
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+import grpc
+from benzene.core import BenzeneMessageApplication
+from benzene.grpc import add_benzene_handler, GrpcMessageSender
+
+server = grpc.server(ThreadPoolExecutor(max_workers=8))
+add_benzene_handler(server, BenzeneMessageApplication(registry))   # every topic -> a unary method
+server.add_insecure_port("[::]:50051"); server.start()
+
+sender = GrpcMessageSender(grpc.insecure_channel("localhost:50051"))   # a MessageSender
+result = await sender.send_message("orders:place", {"sku": "A"})
+```
+
+The method name *is* the topic; the `benzene-status` trailer preserves the exact status across the
+codes that collapse to one gRPC code. Mirrors .NET's `Benzene.Grpc`, and contributes the `benzene.grpc`
+subpackage to the shared `benzene` namespace.
