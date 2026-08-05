@@ -39,6 +39,8 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
   and cross-cutting decorators (retry, correlation id, trace propagation) that compose over one port.
 - **[Joining the mesh](cookbooks/joining-the-mesh.md)** — add self-description, tracing, and collector
   feeds to a service without touching its handlers.
+- **[Evolving a handler's payload](cookbooks/evolving-payloads.md)** — carry a version across services,
+  register versioned handlers, and serve every version off one implementation with transparent casting.
 - **[Examples](https://github.com/daniellepelley/benzene-python/tree/main/examples)** — runnable,
   multi-transport cloud examples, each with dogfooded tests.
 
