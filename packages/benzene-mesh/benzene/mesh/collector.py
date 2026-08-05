@@ -8,8 +8,8 @@ collector runs through the normal pipeline (it dogfoods the framework it collect
 
 Derivation rules that are normative (mesh.md §4):
 
-- ``service`` is required on register and heartbeat → ``bad-request`` when missing; a traces batch of
-  any size (including empty) is accepted.
+- ``service`` is required on register, heartbeat, and issues → ``bad-request`` when missing; a traces
+  or issues batch of any size (including empty) is accepted.
 - Re-registration **replaces** a service's registration wholesale — a redeploy that drops a topic
   drops its provider edge.
 - **Consumer edges are derived from trace parentage**: an event whose parent span belongs to a
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from benzene.core import Handler, Registry
 from benzene.results import Result, is_successful
@@ -40,12 +40,21 @@ QUERY_TRACE_TOPIC = "benzene:mesh:query:trace"
 # it is only "missing" when a failure needs explaining (see `_missing_feeds`).
 _FEEDS = ("descriptor", "health", "traces", "issues")
 
+# Merged issue exemplars keep the newest few (mesh.md §4.1).
+_MAX_EXEMPLARS = 3
+# Issue fields the collector aggregates itself — everything else is "latest-wins" on merge.
+_AGGREGATED_ISSUE_FIELDS = frozenset({"count", "exemplarTraceIds", "firstSeen", "lastSeen"})
 
-class CollectorBadRequest(Exception):
+
+class CollectorError(Exception):
+    """Base for a collector ingest/query failure — catch this to handle either kind at once."""
+
+
+class CollectorBadRequest(CollectorError):
     """A malformed ingest/query (e.g. a required identifier missing) → ``bad-request``."""
 
 
-class CollectorNotFound(Exception):
+class CollectorNotFound(CollectorError):
     """A query for an unknown service / topic / trace → ``not-found``."""
 
 
@@ -137,18 +146,24 @@ class MeshCollector:
         return {"accepted": accepted}
 
     def _merge_issue(self, fingerprint: str, issue: dict[str, Any]) -> None:
+        incoming_exemplars = list(issue.get("exemplarTraceIds", []))
         existing = self._issues.get(fingerprint)
         if existing is None:
             merged = dict(issue)
             merged["count"] = int(issue.get("count", 0))
-            merged["exemplarTraceIds"] = list(issue.get("exemplarTraceIds", []))
+            merged["exemplarTraceIds"] = incoming_exemplars[-_MAX_EXEMPLARS:]  # keep the newest
             self._issues[fingerprint] = merged
             return
-        # Merge by fingerprint (mesh.md §4.1): count is a delta, exemplars accrue, timestamps span.
+        # Merge by fingerprint (mesh.md §4.1): count is a delta; firstSeen/lastSeen span; exemplars keep
+        # the newest ≤3; every other field is latest-wins (identity fields are fingerprint-pinned).
+        for key, value in issue.items():
+            if key not in _AGGREGATED_ISSUE_FIELDS:
+                existing[key] = value
         existing["count"] += int(issue.get("count", 0))
-        for trace_id in issue.get("exemplarTraceIds", []):
-            if trace_id not in existing["exemplarTraceIds"]:
-                existing["exemplarTraceIds"].append(trace_id)
+        combined = existing["exemplarTraceIds"] + [
+            trace_id for trace_id in incoming_exemplars if trace_id not in existing["exemplarTraceIds"]
+        ]
+        existing["exemplarTraceIds"] = combined[-_MAX_EXEMPLARS:]
         if "firstSeen" in issue:
             existing["firstSeen"] = min(existing.get("firstSeen", issue["firstSeen"]), issue["firstSeen"])
         if "lastSeen" in issue:
@@ -285,7 +300,10 @@ def _require(body: dict[str, Any], key: str) -> str:
     return str(value)
 
 
-def _ingest_handler(method) -> Handler:
+_CollectorMethod = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def _ingest_handler(method: _CollectorMethod) -> Handler:
     async def handler(request: dict[str, Any]) -> Result:
         try:
             return Result.ok(method(request))
@@ -295,7 +313,7 @@ def _ingest_handler(method) -> Handler:
     return handler
 
 
-def _query_handler(method) -> Handler:
+def _query_handler(method: _CollectorMethod) -> Handler:
     async def handler(request: dict[str, Any]) -> Result:
         try:
             return Result.ok(method(request))

@@ -361,9 +361,9 @@ mesh.md §§4–6, pinned by `mesh-collector-cases.json`):
 - **`missingFeeds`** names which of `descriptor` / `health` / `traces` a service hasn't reported, so a
   partial fleet renders as reduced rather than absent.
 
-`service` is required on `register` and `heartbeat` (→ `bad-request`); an unknown service / topic /
-trace query is `not-found`; the query read models are one collector's shapes (the spec pins them only
-as the observable surface for the ingest rules). Sender feeds live in `benzene.mesh` (`MeshFeedSender`).
+`service` is required on `register`, `heartbeat`, and `issues` (→ `bad-request`); an unknown service /
+topic / trace query is `not-found`; the query read models are one collector's shapes (the spec pins
+them only as the observable surface for the ingest rules). Sender feeds live in `benzene.mesh` (`MeshFeedSender`).
 
 The optional **issues** feed is supported too: `benzene:mesh:issues` batches merge by `fingerprint`
 (`count` is a delta — occurrences accrue, exemplars accumulate), a malformed entry is skipped rather

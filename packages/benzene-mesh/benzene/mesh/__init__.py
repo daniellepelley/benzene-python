@@ -24,6 +24,7 @@ from .collector import (
     QUERY_TOPIC_TOPIC,
     QUERY_TRACE_TOPIC,
     CollectorBadRequest,
+    CollectorError,
     CollectorNotFound,
     MeshCollector,
     collector_registry,
@@ -66,6 +67,7 @@ from .trace import (
 __all__ = [
     "CLASSIFICATIONS",
     "CollectorBadRequest",
+    "CollectorError",
     "CollectorNotFound",
     "DescriptorSource",
     "HEARTBEAT_TOPIC",

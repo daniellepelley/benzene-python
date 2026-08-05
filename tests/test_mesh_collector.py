@@ -107,6 +107,19 @@ def test_issues_merge_by_fingerprint_with_delta_counts() -> None:
     assert issue["exemplarTraceIds"] == ["trace-1", "trace-2"]
 
 
+def test_issue_merge_keeps_newest_three_exemplars_and_latest_fields() -> None:
+    c = MeshCollector()
+    fp = "cccc3333cccc3333cccc3333cccc3333"
+    for i in range(5):  # five batches, each a new exemplar
+        c.ingest_issues({"service": "orders", "issues": [
+            {"fingerprint": fp, "topic": "t", "status": "service-unavailable", "count": 1,
+             "transport": f"transport-{i}", "exemplarTraceIds": [f"trace-{i}"]}]})
+    issue = next(i for i in c.query_fleet({})["issues"] if i["fingerprint"] == fp)
+    assert issue["count"] == 5
+    assert issue["exemplarTraceIds"] == ["trace-2", "trace-3", "trace-4"]  # newest ≤3 (mesh.md §4.1)
+    assert issue["transport"] == "transport-4"                              # other fields latest-wins
+
+
 def test_invalid_issue_entries_are_skipped_not_rejected() -> None:
     c = MeshCollector()
     accepted = c.ingest_issues({"service": "orders", "issues": [
