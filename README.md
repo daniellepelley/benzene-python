@@ -165,6 +165,10 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 
 ## Roadmap
 
+> **Every language-neutral conformance fixture is green** — status vocabulary, HTTP + gRPC status
+> mappings, the envelope, transport metadata, and all four mesh fixtures (descriptor, trace, collector,
+> issues). The one substantial feature still ahead is the gRPC *transport* (the status mapping is done).
+
 1. **(done)** Wire contracts + core model + `BenzeneMessage` envelope, conformance-green.
 2. **(done)** An HTTP inbound binding end-to-end (ASGI), including the status-code mapping.
 3. **(done)** Layered, install-what-you-use packages (`benzene-results` / `-core` / `-http`).
@@ -190,10 +194,13 @@ running .NET Benzene service) is what "conformant" means — see the spec's
    deriving providers, consumer edges from trace parentage, per-instance health + hash-drift, and
    `missingFeeds`, plus the optional issue feed (delta-merge by fingerprint). Conformance-green
    against `mesh-collector-cases` **and** `mesh-issue-cases`.
-9. **(in progress)** gRPC — the Benzene↔gRPC status mapping (`benzene-grpc`, wire-contracts §4.2) and
-   the `benzene-status` trailer rule are done and conformance-green against `grpc-status-mapping`; the
-   server/client transport over `grpcio` is the next step.
-10. Later: the gRPC transport binding, and transparent-casting decorators for versioning.
+9. **(done)** The single injectable **transport-metadata** resolver (`read_message_metadata` /
+   `MetadataKeys`, wire-contracts §2) — reserved-topic + header resolution shared by all three cloud
+   hosts. Conformance-green against `transport-metadata-cases`.
+10. **(in progress)** gRPC — the Benzene↔gRPC status mapping (`benzene-grpc`, wire-contracts §4.2) and
+    the `benzene-status` trailer rule are done and conformance-green against `grpc-status-mapping`; the
+    server/client transport over `grpcio` is the next step.
+11. Later: the gRPC transport binding, and transparent-casting decorators for versioning.
 
 ## Documentation
 
