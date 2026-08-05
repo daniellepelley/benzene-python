@@ -243,6 +243,28 @@ applies to inbound bindings and outbound clients alike. Keys are matched case-in
 returned lower-cased; a non-reserved key never routes; `benzene-version` stays among the headers for
 `resolve_version` to read. The three cloud hosts share this one resolver.
 
+## Outbound clients
+
+An outbound client is a `MessageSender` — `async send_message(topic, message, headers) -> Result` — the
+port a handler depends on to publish, implemented per transport (`benzene.http`'s `HttpMessageSender`,
+`benzene.grpc`'s `GrpcMessageSender`, the cloud packages' SNS/Pub/Sub/Service Bus clients). Cross-cutting
+client behaviours are **decorators over that one interface**, so they are transport-agnostic and compose:
+
+```python
+from benzene.core import with_retry, with_correlation_id
+
+client = with_retry(with_correlation_id(sender), attempts=5)   # wraps any MessageSender
+```
+
+- `with_retry(sender, *, attempts=3, retry_on=DEFAULT_RETRYABLE, backoff=None)` — re-sends while the
+  result is a *transient* failure (`service-unavailable` / `timeout` / `too-many-requests` by default); a
+  success or a real failure (a `not-found` won't get better by retrying) returns at once. `backoff` is an
+  optional `async (attempt) -> None` hook.
+- `with_correlation_id(sender, *, header="x-correlation-id", new_id=None)` — injects a correlation-id
+  header when the caller didn't set one, so every outbound message is followable across services.
+
+(`RetryingMessageSender` / `CorrelationIdMessageSender` are the classes the sugar returns.)
+
 ## Exports
 
 `BenzeneMessageApplication`, `Container`, `Context`, `DuplicateHandlerError`, `Handler`,
@@ -253,7 +275,8 @@ returned lower-cased; a non-reserved key never routes; `benzene-version` stays a
 `VERSION_HEADER_NAMES`, `VersionSelector`, `application_from`, `build_application`, `definition_of`,
 `encode_response`, `error_payload`, `exact_version`, `highest_version`, `message`, `message_router`,
 `resolve_version`, `read_message_metadata`, `MetadataKeys`, `DEFAULT_METADATA_KEYS`,
-`DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `to_jsonable`, `to_request`.
+`DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `MessageSender`, `with_retry`, `with_correlation_id`,
+`RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `to_jsonable`, `to_request`.
 
 ## See also
 

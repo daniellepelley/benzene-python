@@ -40,6 +40,13 @@ from .health import (
 )
 from .handler import Handler, HandlerDefinition, definition_of, message
 from .mapping import encode_body, to_camel, to_jsonable, to_request
+from .outbound import (
+    DEFAULT_RETRYABLE,
+    CorrelationIdMessageSender,
+    RetryingMessageSender,
+    with_correlation_id,
+    with_retry,
+)
 from .metadata import (
     DEFAULT_METADATA_KEYS,
     DEFAULT_TOPIC_KEY,
@@ -62,8 +69,13 @@ __all__ = [
     "BenzeneMessageApplication",
     "Container",
     "Context",
+    "CorrelationIdMessageSender",
+    "DEFAULT_RETRYABLE",
     "DuplicateHandlerError",
     "DuplicateHealthCheckError",
+    "RetryingMessageSender",
+    "with_correlation_id",
+    "with_retry",
     "HEALTH_TOPIC",
     "Handler",
     "HandlerDefinition",
