@@ -36,8 +36,9 @@ QUERY_SERVICE_TOPIC = "benzene:mesh:query:service"
 QUERY_TOPIC_TOPIC = "benzene:mesh:query:topic"
 QUERY_TRACE_TOPIC = "benzene:mesh:query:trace"
 
-# The three feeds a service can report, in the order they are listed in `missingFeeds`.
-_FEEDS = ("descriptor", "health", "traces")
+# The feeds a service can report, in the order they are listed in `missingFeeds`. `issues` is special:
+# it is only "missing" when a failure needs explaining (see `_missing_feeds`).
+_FEEDS = ("descriptor", "health", "traces", "issues")
 
 
 class CollectorBadRequest(Exception):
@@ -61,6 +62,7 @@ class _Service:
     descriptor_hash: str | None = None
     provided: list[str] = field(default_factory=list)  # topic ids this service currently provides
     instances: dict[str, _Instance] = field(default_factory=dict)
+    reported_issues: bool = False  # has sent any issues batch (even empty) — the feed's liveness
 
 
 @dataclass
@@ -81,6 +83,7 @@ class MeshCollector:
         self._topics: set[str] = set()  # every topic ever seen (registered or traced); grows only
         self._events: list[_Event] = []
         self._span_owner: dict[str, str] = {}  # span id -> the service that emitted it
+        self._issues: dict[str, dict[str, Any]] = {}  # fingerprint -> merged issue
 
     # --- ingest ----------------------------------------------------------------------------
     def ingest_register(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -122,9 +125,34 @@ class MeshCollector:
         return {"accepted": len(events)}
 
     def ingest_issues(self, body: dict[str, Any]) -> dict[str, Any]:
-        _require(body, "service")
-        issues = body.get("issues") or []
-        return {"accepted": len(issues)}
+        service = _require(body, "service")
+        self._service(service).reported_issues = True  # even an empty batch is a liveness assertion
+        accepted = 0
+        for issue in body.get("issues") or []:
+            fingerprint = issue.get("fingerprint")
+            if not fingerprint:
+                continue  # skip an unidentifiable entry, never reject the batch for it
+            self._merge_issue(str(fingerprint), issue)
+            accepted += 1
+        return {"accepted": accepted}
+
+    def _merge_issue(self, fingerprint: str, issue: dict[str, Any]) -> None:
+        existing = self._issues.get(fingerprint)
+        if existing is None:
+            merged = dict(issue)
+            merged["count"] = int(issue.get("count", 0))
+            merged["exemplarTraceIds"] = list(issue.get("exemplarTraceIds", []))
+            self._issues[fingerprint] = merged
+            return
+        # Merge by fingerprint (mesh.md §4.1): count is a delta, exemplars accrue, timestamps span.
+        existing["count"] += int(issue.get("count", 0))
+        for trace_id in issue.get("exemplarTraceIds", []):
+            if trace_id not in existing["exemplarTraceIds"]:
+                existing["exemplarTraceIds"].append(trace_id)
+        if "firstSeen" in issue:
+            existing["firstSeen"] = min(existing.get("firstSeen", issue["firstSeen"]), issue["firstSeen"])
+        if "lastSeen" in issue:
+            existing["lastSeen"] = max(existing.get("lastSeen", issue["lastSeen"]), issue["lastSeen"])
 
     # --- queries ---------------------------------------------------------------------------
     def query_fleet(self, _body: dict[str, Any]) -> dict[str, Any]:
@@ -137,7 +165,7 @@ class MeshCollector:
             }
             for topic in sorted(self._topics)
         ]
-        return {"services": services, "topics": topics}
+        return {"services": services, "topics": topics, "issues": list(self._issues.values())}
 
     def query_service(self, body: dict[str, Any]) -> dict[str, Any]:
         name = _require(body, "service")
@@ -225,10 +253,16 @@ class MeshCollector:
         return "degraded"
 
     def _missing_feeds(self, record: _Service) -> list[str]:
+        has_failure = any(
+            event.service == record.name and not is_successful(event.status)
+            for event in self._events
+        )
         present = {
             "descriptor": record.has_descriptor,
             "health": bool(record.instances),
             "traces": self._invocations_by(record.name) > 0,
+            # `issues` is only "missing" when a failure needs explaining and no issue feed arrived.
+            "issues": record.reported_issues or not has_failure,
         }
         return [feed for feed in _FEEDS if not present[feed]]
 

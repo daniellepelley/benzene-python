@@ -365,6 +365,11 @@ mesh.md §§4–6, pinned by `mesh-collector-cases.json`):
 trace query is `not-found`; the query read models are one collector's shapes (the spec pins them only
 as the observable surface for the ingest rules). Sender feeds live in `benzene.mesh` (`MeshFeedSender`).
 
+The optional **issues** feed is supported too: `benzene:mesh:issues` batches merge by `fingerprint`
+(`count` is a delta — occurrences accrue, exemplars accumulate), a malformed entry is skipped rather
+than rejecting the batch, and `issues` appears in a service's `missingFeeds` only when a failing trace
+is unexplained. Conformance-green against both `mesh-collector-cases` and `mesh-issue-cases`.
+
 ## Exports
 
 `ServiceInfo`, `ServiceDescriptor`, `TopicDescriptor`, `MESH_TOPIC`, `Schema`, `json_schema`,

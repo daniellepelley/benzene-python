@@ -198,11 +198,11 @@ def run_mesh_trace() -> list[str]:
     return failures
 
 
-def run_mesh_collector() -> list[str]:
+def run_collector_fixture(filename: str) -> list[str]:
+    """Run a collector step-fixture (each case's steps against one fresh collector)."""
     failures: list[str] = []
-    data = _load("mesh-collector-cases.json")
+    data = _load(filename)
     for case in data["cases"]:
-        # Each case runs its steps in order against one fresh collector.
         app = BenzeneMessageApplication(collector_registry(MeshCollector()))
         for index, step in enumerate(case["steps"]):
             response = asyncio.run(app.handle(step["request"]))
@@ -210,15 +210,21 @@ def run_mesh_collector() -> list[str]:
             name = f"{case['name']}[{index}]"
             if response["statusCode"] != expected["statusCode"]:
                 failures.append(
-                    f"collector[{name}]: statusCode {response['statusCode']!r}, "
+                    f"{filename}[{name}]: statusCode {response['statusCode']!r}, "
                     f"expected {expected['statusCode']!r}"
                 )
                 continue
             if "body" in expected:
                 body = json.loads(response["body"]) if response["body"] else {}
                 if not _mesh_subset(expected["body"], body):
-                    failures.append(f"collector[{name}]: body {body} !⊇ {expected['body']}")
+                    failures.append(f"{filename}[{name}]: body {body} !⊇ {expected['body']}")
     return failures
+
+
+def run_mesh_collector() -> list[str]:
+    return run_collector_fixture("mesh-collector-cases.json") + run_collector_fixture(
+        "mesh-issue-cases.json"
+    )
 
 
 def run_all() -> list[str]:
@@ -241,5 +247,5 @@ if __name__ == "__main__":
         sys.exit(1)
     print(
         "CONFORMANCE PASSED — status vocabulary, HTTP mapping, envelope, "
-        "and mesh (descriptor + trace + collector) cases all green."
+        "and mesh (descriptor + trace + collector + issues) cases all green."
     )

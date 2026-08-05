@@ -13,15 +13,19 @@ from benzene.mesh import MeshCollector, collector_registry
 from .conformance_runner import CONFORMANCE_DIR, _mesh_subset, run_mesh_collector
 
 
-def _collector_cases() -> list:
-    return json.loads((CONFORMANCE_DIR / "mesh-collector-cases.json").read_text())["cases"]
+def _cases(fixture: str) -> list:
+    return json.loads((CONFORMANCE_DIR / fixture).read_text())["cases"]
 
 
 def test_mesh_collector_conforms() -> None:
-    assert run_mesh_collector() == []
+    assert run_mesh_collector() == []  # collector + issue fixtures
 
 
-@pytest.mark.parametrize("case", _collector_cases(), ids=lambda c: c["name"])
+@pytest.mark.parametrize(
+    "case",
+    _cases("mesh-collector-cases.json") + _cases("mesh-issue-cases.json"),
+    ids=lambda c: c["name"],
+)
 def test_collector_case(case: dict) -> None:
     app = BenzeneMessageApplication(collector_registry(MeshCollector()))
     for step in case["steps"]:
@@ -89,3 +93,34 @@ def test_missing_feeds_and_anonymous_service() -> None:
     front = c.query_service({"service": "frontdoor"})
     assert front["invocations"] == 1
     assert front["missingFeeds"] == ["descriptor", "health"]
+
+
+def test_issues_merge_by_fingerprint_with_delta_counts() -> None:
+    c = MeshCollector()
+    fp = "aaaa1111aaaa1111aaaa1111aaaa1111"
+    c.ingest_issues({"service": "orders", "issues": [
+        {"fingerprint": fp, "topic": "order:create", "status": "service-unavailable", "count": 2, "exemplarTraceIds": ["trace-1"]}]})
+    c.ingest_issues({"service": "orders", "issues": [
+        {"fingerprint": fp, "topic": "order:create", "status": "service-unavailable", "count": 3, "exemplarTraceIds": ["trace-2"]}]})
+    issue = next(i for i in c.query_fleet({})["issues"] if i["fingerprint"] == fp)
+    assert issue["count"] == 5                              # deltas merge: 2 + 3
+    assert issue["exemplarTraceIds"] == ["trace-1", "trace-2"]
+
+
+def test_invalid_issue_entries_are_skipped_not_rejected() -> None:
+    c = MeshCollector()
+    accepted = c.ingest_issues({"service": "orders", "issues": [
+        {"fingerprint": "", "topic": "order:create", "status": "bad-request", "count": 1},   # skipped
+        {"fingerprint": "bbbb", "topic": "order:create", "status": "bad-request", "count": 1}]})
+    assert accepted == {"accepted": 1}                     # one valid, one skipped, batch accepted
+
+
+def test_issues_feed_absence_flagged_only_when_a_failure_needs_explaining() -> None:
+    c = MeshCollector()
+    c.ingest_traces({"events": [{"traceId": "t", "spanId": "s", "service": "orders",
+                                 "topic": "order:create", "status": "service-unavailable"}]})
+    orders = next(s for s in c.query_fleet({})["services"] if s["service"] == "orders")
+    assert orders["missingFeeds"] == ["descriptor", "health", "issues"]  # unexplained failure
+    c.ingest_issues({"service": "orders", "issues": []})   # a liveness beat clears the flag
+    orders = next(s for s in c.query_fleet({})["services"] if s["service"] == "orders")
+    assert orders["missingFeeds"] == ["descriptor", "health"]
