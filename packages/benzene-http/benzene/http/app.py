@@ -155,7 +155,10 @@ class BenzeneHttpApp:
             except (ValueError, TypeError):
                 envelope = None
             if not isinstance(envelope, dict):
-                return self._error(Status.BAD_REQUEST, "Request body is not a valid message envelope")
+                return self._error(
+                    Status.BAD_REQUEST,
+                    "Request body must be a JSON message envelope: {topic, headers, body}",
+                )
             response = await self._application.handle(
                 {
                     "topic": envelope.get("topic") or "",
@@ -175,7 +178,7 @@ class BenzeneHttpApp:
             )
 
         # R5 — /benzene/spec: the derived spec document (topics + payload schemas from the registry).
-        if verb == "GET" and path == std.spec_path:
+        if std.spec is not None and verb == "GET" and path == std.spec_path:
             spec = std.resolved_spec()
             if spec is not None:
                 return HttpResponse(

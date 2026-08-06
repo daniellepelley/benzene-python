@@ -18,9 +18,8 @@ service that moves these paths documents the move.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
 
-from benzene.core import HealthChecks, ServiceSpec
+from benzene.core import HealthChecks, ServiceSpec, SpecSource
 
 #: The default well-known path prefix (design-principles §5.2).
 DEFAULT_PREFIX = "/benzene"
@@ -39,7 +38,7 @@ class StandardPaths:
     prefix: str = DEFAULT_PREFIX
     invoke: bool = True
     health: HealthChecks | None = None
-    spec: "ServiceSpec | Callable[[], ServiceSpec] | None" = None
+    spec: SpecSource | None = None
 
     @property
     def invoke_path(self) -> str:
@@ -53,6 +52,6 @@ class StandardPaths:
     def spec_path(self) -> str:
         return f"{self.prefix}/spec"
 
-    def resolved_spec(self) -> "ServiceSpec | None":
+    def resolved_spec(self) -> ServiceSpec | None:
         """The current spec document, calling the source if it is a callable."""
         return self.spec() if callable(self.spec) else self.spec
