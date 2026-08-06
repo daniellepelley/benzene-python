@@ -12,6 +12,8 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 - **[Packages & adoption levels](packages.md)** — how Benzene is split into layered PyPI packages,
   why, and which ones to install.
 - **[Publishing](publishing.md)** — how the ten packages are released to PyPI (trusted publishing).
+- **[Cloud Service Profile conformance](cloud-service-profile.md)** — how the port satisfies the
+  profile's R1–R8, mapped to the API and the test that proves each.
 
 ## Reference
 
