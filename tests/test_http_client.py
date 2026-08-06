@@ -70,6 +70,62 @@ def test_url_resolution(url_for, expected) -> None:
     assert captured["url"] == expected
 
 
+def test_url_map_missing_topic_raises_a_clear_error() -> None:
+    sender = HttpMessageSender({"orders:place": "https://svc/orders"}, transport=_never)
+    with pytest.raises(KeyError, match="No URL configured for topic 'orders:get'"):
+        asyncio.run(sender.send_message("orders:get", {}))
+
+
+def test_non_json_success_body_passes_through_as_text() -> None:
+    # A 2xx whose body is not JSON becomes the payload verbatim (the _parse fallback).
+    result = asyncio.run(_sender(HttpReply(200, "pong")).send_message("ping", {}))
+    assert result.status == "ok"
+    assert result.payload == "pong"
+
+
+async def _never(url: str, headers: dict, body: str) -> HttpReply:  # transport that must not be called
+    raise AssertionError("transport should not be reached")
+
+
+def test_stdlib_transport_posts_and_maps_status_over_a_real_socket() -> None:
+    # Exercise the zero-dependency default transport against a real local HTTP server (no mocking):
+    # a 2xx round-trips the body, and a 4xx comes back as a mapped HttpReply, not an exception.
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from benzene.http import stdlib_transport
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
+            payload = self.rfile.read(int(self.headers.get("content-length", 0)))
+            if self.path == "/ok":
+                self.send_response(201)
+                self.end_headers()
+                self.wfile.write(b'{"echo": ' + payload + b"}")
+            else:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b'{"status": "not-found", "detail": "nope"}')
+
+        def log_message(self, *_args) -> None:  # silence the default stderr logging
+            pass
+
+    server = HTTPServer(("localhost", 0), Handler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        transport = stdlib_transport()
+        ok = asyncio.run(transport(f"http://localhost:{port}/ok", {"content-type": "application/json"}, "5"))
+        assert ok.status_code == 201
+        assert json.loads(ok.body) == {"echo": 5}
+        missing = asyncio.run(transport(f"http://localhost:{port}/missing", {}, "{}"))
+        assert missing.status_code == 404  # HTTPError mapped to a reply, not raised
+        assert json.loads(missing.body)["detail"] == "nope"
+    finally:
+        server.shutdown()
+
+
 def test_round_trip_through_the_real_inbound_binding() -> None:
     # Dogfood: the outbound sender POSTs into a real BenzeneHttpApp; only the transport is faked.
     @http_endpoint("POST", "/orders")

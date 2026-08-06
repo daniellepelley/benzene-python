@@ -119,6 +119,34 @@ def test_dataclass_request_is_read_case_insensitively() -> None:
     assert to_request(MultiWord, {"order_id": "o2", "LINECOUNT": 5}) == MultiWord("o2", 5)
 
 
+def test_to_request_passes_a_matching_instance_through_untouched() -> None:
+    already = MultiWord("o1", 3)
+    assert to_request(MultiWord, already) is already  # right type already: no copy, no re-map
+    assert to_request(None, {"raw": 1}) == {"raw": 1}  # no declared type: the raw payload
+
+
+def test_to_request_maps_a_dict_onto_a_non_dataclass_type() -> None:
+    class Point:  # a plain class (not a dataclass) constructed from kwargs
+        def __init__(self, x: int, y: int) -> None:
+            self.x, self.y = x, y
+
+    point = to_request(Point, {"x": 1, "y": 2})
+    assert (point.x, point.y) == (1, 2)
+
+    class Wrapper:  # **data fails (no such kwargs) -> falls back to passing the dict positionally
+        def __init__(self, data: dict) -> None:
+            self.data = data
+
+    wrapped = to_request(Wrapper, {"a": 1})
+    assert wrapped.data == {"a": 1}
+
+
+def test_to_jsonable_passes_scalars_and_none_through() -> None:
+    assert to_jsonable(None) is None
+    assert to_jsonable(7) == 7
+    assert to_jsonable("x") == "x"
+
+
 def test_camelcase_payload_round_trips_through_the_envelope() -> None:
     @message("wire:echo", request_type=MultiWord)
     async def echo(request: MultiWord) -> Result:
