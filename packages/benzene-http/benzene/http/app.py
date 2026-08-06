@@ -68,10 +68,9 @@ class BenzeneHttpApp:
     ) -> None:
         self._router = router
         if application is None:
-            registry = Registry()
-            for definition in router.definitions():
-                registry.add_definition(definition)
-            application = BenzeneMessageApplication(registry, pipeline, container)
+            application = BenzeneMessageApplication(
+                Registry.from_definitions(router), pipeline, container
+            )
         self._application = application
         #: The Cloud Service Profile well-known surfaces (/benzene/invoke|health|spec), if enabled.
         self._standard = standard_paths

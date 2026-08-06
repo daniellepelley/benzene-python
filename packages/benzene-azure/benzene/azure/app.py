@@ -46,9 +46,7 @@ class AzureFunctionsApp:
     ) -> None:
         if application is None:
             if registry is None:
-                registry = Registry()
-                for definition in (http_router.definitions() if http_router else []):
-                    registry.add_definition(definition)
+                registry = Registry.from_definitions(http_router) if http_router else Registry()
             application = BenzeneMessageApplication(registry)
         self._application = application
         self._http_app = (

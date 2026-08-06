@@ -33,6 +33,10 @@ class StandardPaths:
     each enabled by supplying their source — a :class:`~benzene.core.HealthChecks` and a
     :class:`~benzene.core.ServiceSpec` (or a callable returning one, re-derived per request) — and are
     simply absent (their path 404s) when not supplied, matching the spec's "declined → no output".
+
+    Declare it on :class:`~benzene.core.AppDefinition` (``standard_paths=StandardPaths(...)``) to
+    expose the surfaces from every HTTP-capable host *and* the test harness off one declaration, or
+    pass it straight to :class:`BenzeneHttpApp` to turn them on for a single host.
     """
 
     prefix: str = DEFAULT_PREFIX

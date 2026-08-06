@@ -59,6 +59,7 @@ from .pipeline import Middleware, MiddlewarePipeline, Next
 from .registry import (
     DuplicateHandlerError,
     Registry,
+    SupportsDefinitions,
     VersionSelector,
     exact_version,
     highest_version,
@@ -111,6 +112,7 @@ __all__ = [
     "AppDefinition",
     "BenzeneStartUp",
     "Registry",
+    "SupportsDefinitions",
     "application_from",
     "build_application",
     "Scope",

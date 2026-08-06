@@ -50,6 +50,15 @@ registry.find("order:get", "2")      # exact version match
 registry.find("order:get", "9")      # None — no fuzzy fallback
 ```
 
+`Registry.from_definitions(*sources)` builds a registry from anything exposing `definitions()` — an
+`HttpRouter`, another `Registry`, or any `SupportsDefinitions` — collapsing the `for d in
+router.definitions(): registry.add_definition(d)` bridge into one call. Chain `.register(...)` to add
+topics a router doesn't carry (a queue-only subscriber):
+
+```python
+registry = Registry.from_definitions(router).register("orders:created", on_created)
+```
+
 ## Middleware pipeline
 
 Middleware is `async def mw(context, next) -> None`, run in registration order (first registered is
@@ -333,7 +342,8 @@ client = with_retry(with_correlation_id(sender), attempts=5)   # wraps any Messa
 ## Exports
 
 `BenzeneMessageApplication`, `Container`, `Context`, `DuplicateHandlerError`, `Handler`,
-`HandlerDefinition`, `Lifetime`, `Middleware`, `MiddlewarePipeline`, `Next`, `Registry`, `Scope`,
+`HandlerDefinition`, `Lifetime`, `Middleware`, `MiddlewarePipeline`, `Next`, `Registry`,
+`SupportsDefinitions`, `Scope`,
 `ServiceNotRegisteredError`, `AppDefinition`, `BenzeneStartUp`, `HealthChecks`, `HealthCheck`,
 `HealthCheckResult`, `HealthReport`, `DuplicateHealthCheckError`, `HEALTH_TOPIC`,
 `health_interception`, `VERSION_HEADER`,

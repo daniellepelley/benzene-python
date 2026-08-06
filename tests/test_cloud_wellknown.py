@@ -53,9 +53,7 @@ class GreeterStartUp(BenzeneStartUp):
     def configure(self, services, config) -> AppDefinition:
         router = HttpRouter()
         router.register("POST", "/greet", "say:hello", greet, request_type=Greet)
-        registry = Registry()
-        for definition in router.definitions():
-            registry.add_definition(definition)
+        registry = Registry.from_definitions(router)
         db = services.get_service(Db)
         return AppDefinition(
             router=router,

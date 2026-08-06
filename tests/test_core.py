@@ -159,3 +159,22 @@ def test_camelcase_payload_round_trips_through_the_envelope() -> None:
     )
     assert response["statusCode"] == Status.OK
     assert json.loads(response["body"]) == {"orderId": "o9", "lineCount": 2}
+
+
+def test_registry_from_definitions_bridges_sources_and_chains() -> None:
+    async def h(_request: dict) -> Result:
+        return Result.ok()
+
+    a = Registry().register("a:one", h)
+    b = Registry().register("b:two", h)
+    # merge two sources (anything with definitions()), then chain .register for a queue-only topic
+    merged = Registry.from_definitions(a, b).register("c:three", h)
+    assert {d.topic for d in merged.definitions()} == {"a:one", "b:two", "c:three"}
+
+
+def test_registry_from_definitions_rejects_a_duplicate_pair() -> None:
+    async def h(_request: dict) -> Result:
+        return Result.ok()
+
+    with pytest.raises(DuplicateHandlerError):
+        Registry.from_definitions(Registry().register("dup", h), Registry().register("dup", h))

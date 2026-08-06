@@ -43,9 +43,7 @@ def build_orders(
     router.register("POST", "/orders", PLACE_ORDER_TOPIC, place, request_type=PlaceOrder)
     router.register("GET", "/orders/{id}", GET_ORDER_TOPIC, get)
 
-    registry = Registry()
-    for definition in router.definitions():
-        registry.add_definition(definition)
-    registry.register(ORDER_CREATED_TOPIC, on_created, request_type=OrderCreated)
+    registry = Registry.from_definitions(router)  # the HTTP topics...
+    registry.register(ORDER_CREATED_TOPIC, on_created, request_type=OrderCreated)  # ...plus the subscriber
 
     return OrdersWiring(router=router, registry=registry)

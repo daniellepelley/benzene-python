@@ -37,10 +37,7 @@ async def greet(request: Greet) -> Result:
 def _router_and_registry() -> tuple[HttpRouter, Registry]:
     router = HttpRouter()
     router.register("POST", "/greet", "say:hello", greet, request_type=Greet)
-    registry = Registry()
-    for definition in router.definitions():
-        registry.add_definition(definition)
-    return router, registry
+    return router, Registry.from_definitions(router)
 
 
 def _app(standard: StandardPaths | None = None) -> BenzeneHttpApp:

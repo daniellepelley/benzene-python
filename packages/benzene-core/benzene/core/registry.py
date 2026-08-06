@@ -9,12 +9,20 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from typing import Protocol, runtime_checkable
 
 from .handler import Handler, HandlerDefinition, definition_of
 
 #: How the router resolves a ``(topic, requested version)`` to a handler (versioning.md §3). A
 #: selector is a plain callable, so an application can supply its own policy.
 VersionSelector = Callable[["Registry", str, str], "HandlerDefinition | None"]
+
+
+@runtime_checkable
+class SupportsDefinitions(Protocol):
+    """Anything that can enumerate its handler definitions — a :class:`Registry` or an ``HttpRouter``."""
+
+    def definitions(self) -> list[HandlerDefinition]: ...
 
 
 class DuplicateHandlerError(Exception):
@@ -30,6 +38,21 @@ class Registry:
 
     def __init__(self) -> None:
         self._by_key: dict[tuple[str, str], HandlerDefinition] = {}
+
+    @classmethod
+    def from_definitions(cls, *sources: SupportsDefinitions) -> Registry:
+        """Build a registry from anything exposing ``definitions()`` — e.g. an ``HttpRouter``.
+
+        Collapses the common "a router is not a registry" bridge (``for d in router.definitions():
+        registry.add_definition(d)``) into one call. Later registrations still raise
+        :class:`DuplicateHandlerError` on a repeated ``(topic, version)`` — chain ``.register(...)``
+        to add topics a router doesn't carry (e.g. a queue-only subscriber).
+        """
+        registry = cls()
+        for source in sources:
+            for definition in source.definitions():
+                registry.add_definition(definition)
+        return registry
 
     def register(
         self,

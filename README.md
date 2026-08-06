@@ -153,7 +153,10 @@ API. None touch the wire envelope, status vocabulary, or HTTP mapping (the inter
 - **Middleware is a declarative field, not a `Configure(app)`/`app.Use()` call.** A composition
   root's cross-cutting middleware is a `middleware: list[Middleware]` field on the `AppDefinition`
   that `BenzeneStartUp.configure()` returns; `application_from(definition)` installs it ahead of the
-  message router, so a host and a test boot the same pipeline.
+  message router, so a host and a test boot the same pipeline. The Cloud Service Profile's well-known
+  surfaces are declared the same way — a sibling `standard_paths` field (a `benzene.http.StandardPaths`,
+  typed `Any` like `router` so `benzene.core` stays HTTP-free) — so every HTTP host and the test harness
+  expose `/benzene/*` off one declaration.
 - **Layered PyPI packages, not one-per-C#-project.** The distributions follow the meaningful
   adoption seams (see [`docs/packages.md`](docs/packages.md)); the assembly-only C# splits are folded
   in (e.g. `Benzene.Dependencies` → `benzene.core.dependencies`).
