@@ -18,7 +18,7 @@ import asyncio
 from typing import Any
 
 from benzene.core import BenzeneMessageApplication, MessageHandlingError, Registry
-from benzene.http import BenzeneHttpApp, HttpRouter
+from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
 from benzene.results import is_successful
 
 from .pubsub import decode_pubsub_message
@@ -30,6 +30,8 @@ class GcpFunctionsApp:
         http_router: HttpRouter | None = None,
         registry: Registry | None = None,
         application: BenzeneMessageApplication | None = None,
+        *,
+        standard_paths: StandardPaths | None = None,
     ) -> None:
         if application is None:
             if registry is None:
@@ -39,7 +41,9 @@ class GcpFunctionsApp:
             application = BenzeneMessageApplication(registry)
         self._application = application
         self._http_app = (
-            BenzeneHttpApp(http_router, application=application) if http_router else None
+            BenzeneHttpApp(http_router, application=application, standard_paths=standard_paths)
+            if http_router
+            else None
         )
 
     # --- HTTP trigger ----------------------------------------------------------------------

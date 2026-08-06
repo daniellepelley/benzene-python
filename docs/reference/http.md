@@ -136,6 +136,10 @@ app = BenzeneHttpApp(
 The reserved topic **`benzene:spec`** is answered on *any* transport by `spec_interception` (the same
 pattern as health and mesh interception); the HTTP `/benzene/spec` surface is its HTTP face.
 
+The three cloud hosts drive their HTTP trigger through this same `BenzeneHttpApp`, so passing
+`standard_paths=` to `GcpFunctionsApp` / `AwsLambdaApp` / `AzureFunctionsApp` exposes the identical
+surfaces on a Lambda, Cloud Function, or Azure Function.
+
 ## Outbound — `HttpMessageSender`
 
 The reverse direction: a `MessageSender` that publishes a message to another Benzene service over HTTP

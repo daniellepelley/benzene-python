@@ -19,7 +19,7 @@ import asyncio
 from typing import Any
 
 from benzene.core import BenzeneMessageApplication, MessageHandlingError, Registry
-from benzene.http import BenzeneHttpApp, HttpRouter
+from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
 from benzene.results import is_successful
 
 from .events import (
@@ -36,6 +36,8 @@ class AwsLambdaApp:
         http_router: HttpRouter | None = None,
         registry: Registry | None = None,
         application: BenzeneMessageApplication | None = None,
+        *,
+        standard_paths: StandardPaths | None = None,
     ) -> None:
         if application is None:
             if registry is None:
@@ -45,7 +47,9 @@ class AwsLambdaApp:
             application = BenzeneMessageApplication(registry)
         self._application = application
         self._http_app = (
-            BenzeneHttpApp(http_router, application=application) if http_router else None
+            BenzeneHttpApp(http_router, application=application, standard_paths=standard_paths)
+            if http_router
+            else None
         )
 
     def handle(self, event: dict[str, Any], context: Any = None) -> dict[str, Any] | None:
