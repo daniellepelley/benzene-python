@@ -38,9 +38,14 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import types
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from .mapping import to_camel
+
+# Both spellings of a union must be recognised: ``typing.Optional[X]`` / ``typing.Union[...]`` carry
+# ``typing.Union`` as their origin, while the PEP 604 ``X | None`` form carries ``types.UnionType``.
+_UNION_ORIGINS = (Union, types.UnionType)
 
 # JSON Schema is a plain ``dict[str, Any]`` here — small enough that a TypedDict would only add noise.
 Schema = dict[str, Any]
@@ -67,7 +72,8 @@ def _schema(py_type: Any, seen: tuple[Any, ...]) -> Schema:
     origin = get_origin(py_type)
 
     # Optional / Union: fold None into a nullable type; a genuine multi-type union stays open ({}).
-    if origin is Union:
+    # Handles both typing.Optional/Union and the PEP 604 ``X | None`` form.
+    if origin in _UNION_ORIGINS:
         args = [a for a in get_args(py_type) if a is not type(None)]
         nullable = len(args) != len(get_args(py_type))
         if len(args) != 1:

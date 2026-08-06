@@ -29,8 +29,9 @@ hand-written ``async def``. The casts themselves live in one ``SchemaCasters`` s
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from benzene.results import Result
 
@@ -61,7 +62,7 @@ class SchemaCasters:
 
     def cast_between(
         self, from_type: type[_F], to_type: type[_T], cast: Callable[[_F], _T]
-    ) -> "SchemaCasters":
+    ) -> SchemaCasters:
         """Register a one-step cast ``from_type`` → ``to_type``. Returns self, so calls chain."""
         self._edges.setdefault(from_type, {})[to_type] = cast
         return self

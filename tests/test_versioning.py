@@ -12,12 +12,14 @@ import json
 from dataclasses import dataclass
 
 import pytest
-
 from benzene.core import (
     VERSION_HEADER_NAMES,
     BenzeneMessageApplication,
     Handler,
+    NoCastPathError,
     Registry,
+    SchemaCasters,
+    casting_handler,
     highest_version,
     resolve_version,
 )
@@ -276,8 +278,7 @@ class PlaceOrderV0:
     sku: str  # v0 had no count at all; it defaults to 1 on the way up to v1
 
 
-def _order_casters() -> "SchemaCasters":
-    from benzene.core import SchemaCasters
+def _order_casters() -> SchemaCasters:
 
     return (
         SchemaCasters()
@@ -302,7 +303,6 @@ def test_schema_casters_chain_multiple_steps_by_bfs() -> None:
 
 
 def test_schema_casters_prefer_a_direct_cast_over_a_chain() -> None:
-    from benzene.core import SchemaCasters
 
     calls: list[str] = []
     casters = (
@@ -322,7 +322,6 @@ def test_schema_casters_return_a_matching_value_untouched() -> None:
 
 
 def test_schema_casters_raise_a_clear_error_with_no_path() -> None:
-    from benzene.core import NoCastPathError, SchemaCasters
 
     casters = SchemaCasters()  # nothing registered
     with pytest.raises(NoCastPathError, match="No cast path from PlaceOrderV1 to PlaceOrderV2"):
@@ -330,7 +329,6 @@ def test_schema_casters_raise_a_clear_error_with_no_path() -> None:
 
 
 def _transparent_orders_app() -> BenzeneMessageApplication:
-    from benzene.core import casting_handler
 
     async def place_v2(request: PlaceOrderV2) -> Result:
         return Result.created(OrderPlacedV2(id=f"ord-{request.sku}", quantity=request.quantity))
@@ -380,7 +378,6 @@ def test_canonical_version_is_untouched_by_casting() -> None:
 
 
 def test_casting_handler_passes_a_failure_through_unchanged() -> None:
-    from benzene.core import SchemaCasters, casting_handler
 
     async def rejects(_request: PlaceOrderV2) -> Result:
         return Result.bad_request("nope")
@@ -397,7 +394,6 @@ def test_casting_handler_passes_a_failure_through_unchanged() -> None:
 
 
 def test_casting_handler_does_not_downcast_a_failure_payload() -> None:
-    from benzene.core import SchemaCasters, casting_handler
 
     # A failure that happens to carry a payload of an uncastable type: since encode_response never
     # serialises a failure payload, casting_handler must leave it alone rather than raise NoCastPathError.

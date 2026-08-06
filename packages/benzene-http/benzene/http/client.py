@@ -18,11 +18,12 @@ import asyncio
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Mapping, TypeAlias
+from typing import Any, TypeAlias
 
 from benzene.core import encode_body
-from benzene.results import Result, Status, is_successful
+from benzene.results import Result, is_successful
 
 from .status import from_http
 

@@ -6,7 +6,6 @@ import asyncio
 import json
 
 import pytest
-
 from benzene.core import MessageSender, message
 from benzene.http import BenzeneHttpApp, HttpMessageSender, HttpReply, HttpRouter, http_endpoint
 from benzene.results import Result

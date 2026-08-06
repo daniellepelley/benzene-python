@@ -6,7 +6,6 @@ import asyncio
 import json
 
 import pytest
-
 from benzene.core import BenzeneMessageApplication
 from benzene.mesh import MeshCollector, collector_registry
 

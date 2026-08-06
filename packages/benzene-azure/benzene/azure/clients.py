@@ -6,7 +6,8 @@ property plus one per header). ``azure-servicebus`` is an optional dependency, i
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from benzene.core import encode_body
 from benzene.results import Result, Status

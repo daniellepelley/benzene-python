@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from benzene.aws import AwsLambdaApp, SnsMessageSender
 from benzene.core import Container, MessageSender, application_from, build_application
-
 from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
 
 

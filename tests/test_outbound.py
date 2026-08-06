@@ -6,7 +6,6 @@ import asyncio
 
 from benzene.core import (
     MessageSender,
-    RetryingMessageSender,
     with_correlation_id,
     with_retry,
 )

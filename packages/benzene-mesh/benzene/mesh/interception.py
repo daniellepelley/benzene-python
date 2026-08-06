@@ -12,7 +12,7 @@ endpoint simply doesn't exist, while every other mesh feed keeps working.
 
 from __future__ import annotations
 
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 from benzene.core import Context, Middleware, Next
 from benzene.results import Result

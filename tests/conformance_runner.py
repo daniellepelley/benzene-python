@@ -118,7 +118,7 @@ def _mesh_subset(expected: Any, actual: Any) -> bool:
             return True
         if not isinstance(actual, list) or len(actual) != len(expected):
             return False
-        return all(_mesh_subset(e, a) for e, a in zip(expected, actual))
+        return all(_mesh_subset(e, a) for e, a in zip(expected, actual, strict=True))  # lengths checked above
     return expected == actual
 
 

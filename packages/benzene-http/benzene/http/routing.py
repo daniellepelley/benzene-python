@@ -13,8 +13,8 @@ order, first match wins.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from benzene.core import Handler, HandlerDefinition, definition_of
 
@@ -48,7 +48,7 @@ def routes_of(fn: Handler) -> list[tuple[str, str]]:
 def _compile(path: str) -> tuple[re.Pattern[str], tuple[str, ...]]:
     params: list[str] = []
 
-    def sub(m: "re.Match[str]") -> str:
+    def sub(m: re.Match[str]) -> str:
         params.append(m.group(1))
         return f"(?P<{m.group(1)}>[^/]+)"
 
@@ -64,7 +64,7 @@ class HttpEndpoint:
     path: str
     topic: str
     version: str = ""
-    _regex: "re.Pattern[str]" = field(init=False, repr=False, compare=False)
+    _regex: re.Pattern[str] = field(init=False, repr=False, compare=False)
     _params: tuple[str, ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -95,7 +95,7 @@ class HttpRouter:
         self._endpoints: list[HttpEndpoint] = []
         self._definitions: dict[tuple[str, str], HandlerDefinition] = {}
 
-    def add(self, fn: Handler) -> "HttpRouter":
+    def add(self, fn: Handler) -> HttpRouter:
         """Register a ``@message`` + ``@http_endpoint``-tagged handler for all of its routes."""
         definition = definition_of(fn)
         if definition is None:
@@ -122,7 +122,7 @@ class HttpRouter:
         version: str = "",
         request_type: type | None = None,
         response_type: type | None = None,
-    ) -> "HttpRouter":
+    ) -> HttpRouter:
         """Explicitly map a route to a topic/handler (no decorators required)."""
         definition = HandlerDefinition(topic, handler, version, request_type, response_type)
         self._register(method, path, definition)

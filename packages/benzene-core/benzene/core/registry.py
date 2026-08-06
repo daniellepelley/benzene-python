@@ -8,7 +8,7 @@ unversioned handler (version = "") handles it; versioned handlers are selected o
 from __future__ import annotations
 
 import re
-from typing import Callable
+from collections.abc import Callable
 
 from .handler import Handler, HandlerDefinition, definition_of
 
@@ -38,13 +38,13 @@ class Registry:
         version: str = "",
         request_type: type | None = None,
         response_type: type | None = None,
-    ) -> "Registry":
+    ) -> Registry:
         """Explicitly register a handler (the first-class registration path)."""
         return self.add_definition(
             HandlerDefinition(topic, handler, version, request_type, response_type)
         )
 
-    def add(self, fn: Handler) -> "Registry":
+    def add(self, fn: Handler) -> Registry:
         """Register a ``@message``-tagged function."""
         definition = definition_of(fn)
         if definition is None:
@@ -54,7 +54,7 @@ class Registry:
             )
         return self.add_definition(definition)
 
-    def add_definition(self, definition: HandlerDefinition) -> "Registry":
+    def add_definition(self, definition: HandlerDefinition) -> Registry:
         key = (definition.topic, definition.version)
         if key in self._by_key:
             where = f"topic {definition.topic!r}" + (

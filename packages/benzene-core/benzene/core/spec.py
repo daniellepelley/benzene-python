@@ -18,8 +18,9 @@ mesh module.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from benzene.results import Result
 
@@ -58,7 +59,7 @@ class ServiceSpec:
     topics: tuple[TopicSpec, ...]
 
     @classmethod
-    def derive(cls, registry: Registry, *, service: str) -> "ServiceSpec":
+    def derive(cls, registry: Registry, *, service: str) -> ServiceSpec:
         """Project a registry into a spec document (topics sorted by id then version)."""
         topics = tuple(
             sorted(

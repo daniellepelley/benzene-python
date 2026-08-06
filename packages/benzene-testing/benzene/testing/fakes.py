@@ -6,7 +6,7 @@ edges — the outbound client here — and exercise the real pipeline, routing, 
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from benzene.results import Result

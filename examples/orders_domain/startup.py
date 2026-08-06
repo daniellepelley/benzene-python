@@ -8,7 +8,8 @@ test) by overriding that one registration — nothing else changes between cloud
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from benzene.core import AppDefinition, BenzeneStartUp, Container, MessageSender, Scope
 from benzene.results import Result, Status

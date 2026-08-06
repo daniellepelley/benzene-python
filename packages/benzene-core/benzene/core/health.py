@@ -13,8 +13,9 @@ health endpoint and the heartbeat feed reuse the result.
 from __future__ import annotations
 
 import inspect
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Iterable, Union
+from typing import Any
 
 from benzene.results import Result, Status
 
@@ -41,11 +42,11 @@ class HealthCheckResult:
     detail: str | None = None
 
     @classmethod
-    def healthy(cls, detail: str | None = None) -> "HealthCheckResult":
+    def healthy(cls, detail: str | None = None) -> HealthCheckResult:
         return cls(True, detail)
 
     @classmethod
-    def unhealthy(cls, detail: str | None = None) -> "HealthCheckResult":
+    def unhealthy(cls, detail: str | None = None) -> HealthCheckResult:
         return cls(False, detail)
 
     def to_payload(self) -> dict[str, Any]:
@@ -56,7 +57,7 @@ class HealthCheckResult:
 
 
 #: A health check: a callable returning a :class:`HealthCheckResult` (or a bool), sync or async.
-HealthCheck = Callable[[], Union[HealthCheckResult, bool, Awaitable[Union[HealthCheckResult, bool]]]]
+HealthCheck = Callable[[], HealthCheckResult | bool | Awaitable[HealthCheckResult | bool]]
 
 
 @dataclass(frozen=True)
@@ -83,7 +84,7 @@ class HealthChecks:
     def __init__(self) -> None:
         self._checks: dict[str, HealthCheck] = {}
 
-    def add(self, name: str, check: HealthCheck) -> "HealthChecks":
+    def add(self, name: str, check: HealthCheck) -> HealthChecks:
         if name in self._checks:
             raise DuplicateHealthCheckError(
                 f"A health check named {name!r} is already registered. Each check needs a distinct "

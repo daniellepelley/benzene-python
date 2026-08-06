@@ -17,10 +17,10 @@ import asyncio
 import json
 from typing import Any
 
-import grpc
-
 from benzene.core import BenzeneMessageApplication
 from benzene.results import is_successful
+
+import grpc
 
 from .codes import status_to_code
 from .status import BENZENE_STATUS_TRAILER

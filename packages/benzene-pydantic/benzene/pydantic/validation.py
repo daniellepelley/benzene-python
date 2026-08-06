@@ -27,12 +27,13 @@ Benzene naming policy.
 
 from __future__ import annotations
 
-from typing import Awaitable, Callable, TypeVar
-
-from pydantic import BaseModel, ValidationError
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 from benzene.core import Handler
 from benzene.results import Result
+
+from pydantic import BaseModel, ValidationError
 
 M = TypeVar("M", bound=BaseModel)
 

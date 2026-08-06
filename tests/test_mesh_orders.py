@@ -35,7 +35,6 @@ from benzene.mesh import (
 )
 from benzene.results import Result
 from benzene.testing import FakeMessageSender, create_test_host
-
 from orders_domain.startup import OrdersStartUp
 
 _SERVICE_INFO = ServiceInfo(service="orders", service_version="1.4.2", placement={"cloud": "aws"})

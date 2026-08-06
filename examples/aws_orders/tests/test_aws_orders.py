@@ -12,7 +12,6 @@ import json
 from benzene.aws.testing import SqsEventBuilder
 from benzene.core import MessageSender
 from benzene.testing import FakeMessageSender, create_test_host
-
 from orders_domain import ORDER_CREATED_TOPIC, ORDER_EVENTS_KEY, OrderService, OrdersStartUp
 
 

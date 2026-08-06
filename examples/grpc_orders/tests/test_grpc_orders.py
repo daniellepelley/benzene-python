@@ -19,7 +19,6 @@ pytest.importorskip("grpc")  # the transport needs grpcio (the benzene-grpc[tran
 
 from benzene.core import MessageSender
 from benzene.testing import FakeMessageSender, create_test_host
-
 from orders_domain import ORDER_CREATED_TOPIC, ORDER_EVENTS_KEY, OrderService, OrdersStartUp
 from orders_domain.model import OrderCreated
 
@@ -97,11 +96,10 @@ def test_real_channel_round_trip() -> None:
     channel, the client's encode → metadata → trailer-parse path end to end.
     """
     import grpc
-
     from benzene.grpc import GrpcMessageSender
+    from orders_domain import PlaceOrder
 
     from grpc_orders import build_grpc_orders_server
-    from orders_domain import PlaceOrder
 
     sender = FakeMessageSender()
     server, port = build_grpc_orders_server("localhost:0", sender=sender)

@@ -20,7 +20,6 @@ from benzene.core import (
     build_application,
 )
 from benzene.grpc import add_benzene_handler
-
 from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
 
 

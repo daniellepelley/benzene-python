@@ -8,7 +8,7 @@ invocation. The message router (topic → handler) is an ordinary middleware, re
 
 from __future__ import annotations
 
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from .context import Context
 
@@ -26,7 +26,7 @@ class MiddlewarePipeline:
     def __init__(self, middleware: list[Middleware] | None = None) -> None:
         self._middleware: list[Middleware] = list(middleware or [])
 
-    def use(self, middleware: Middleware) -> "MiddlewarePipeline":
+    def use(self, middleware: Middleware) -> MiddlewarePipeline:
         self._middleware.append(middleware)
         return self
 

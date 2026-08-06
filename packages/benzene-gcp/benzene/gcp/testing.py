@@ -29,22 +29,22 @@ class HttpRequestBuilder:
         self.query_string: bytes = b""
         self._body: str = ""
 
-    def with_header(self, key: str, value: str) -> "HttpRequestBuilder":
+    def with_header(self, key: str, value: str) -> HttpRequestBuilder:
         self.headers[key] = value
         return self
 
-    def with_query(self, query_string: str) -> "HttpRequestBuilder":
+    def with_query(self, query_string: str) -> HttpRequestBuilder:
         self.query_string = query_string.encode("latin-1")
         return self
 
-    def with_body(self, body: Any) -> "HttpRequestBuilder":
+    def with_body(self, body: Any) -> HttpRequestBuilder:
         self._body = body if isinstance(body, str) else json.dumps(_to_jsonable(body))
         return self
 
     def get_data(self, as_text: bool = False) -> Any:
         return self._body if as_text else self._body.encode("utf-8")
 
-    def build(self) -> "HttpRequestBuilder":
+    def build(self) -> HttpRequestBuilder:
         return self
 
 
@@ -63,11 +63,11 @@ class PubSubEventBuilder:
         self._attributes: dict[str, str] = {}
         self._body: str = ""
 
-    def with_attribute(self, key: str, value: str) -> "PubSubEventBuilder":
+    def with_attribute(self, key: str, value: str) -> PubSubEventBuilder:
         self._attributes[key] = value
         return self
 
-    def with_body(self, body: Any) -> "PubSubEventBuilder":
+    def with_body(self, body: Any) -> PubSubEventBuilder:
         self._body = body if isinstance(body, str) else json.dumps(_to_jsonable(body))
         return self
 
@@ -93,7 +93,7 @@ class GcpFunctionsTestHost:
     """Wraps a :class:`GcpFunctionsApp` for in-memory tests of both triggers."""
 
     #: The resolved root scope, set by ``create_test_host(...).build_gcp()`` for assertions.
-    scope: "Scope | None" = None
+    scope: Scope | None = None
 
     def __init__(self, app: GcpFunctionsApp) -> None:
         self._app = app

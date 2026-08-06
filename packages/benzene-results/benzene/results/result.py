@@ -5,8 +5,9 @@ Every handler invocation produces a Result — a value, never an exception, for 
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Generic, Sequence, TypeVar
+from typing import Any, Generic, TypeVar
 
 from .status import Status, is_successful
 
@@ -33,48 +34,48 @@ class Result(Generic[T]):
 
     # --- success factories -----------------------------------------------------------------
     @staticmethod
-    def ok(payload: T | None = None) -> "Result[T]":
+    def ok(payload: T | None = None) -> Result[T]:
         return Result(Status.OK, payload)
 
     @staticmethod
-    def created(payload: T | None = None) -> "Result[T]":
+    def created(payload: T | None = None) -> Result[T]:
         return Result(Status.CREATED, payload)
 
     @staticmethod
-    def accepted(payload: T | None = None) -> "Result[T]":
+    def accepted(payload: T | None = None) -> Result[T]:
         return Result(Status.ACCEPTED, payload)
 
     @staticmethod
-    def updated(payload: T | None = None) -> "Result[T]":
+    def updated(payload: T | None = None) -> Result[T]:
         return Result(Status.UPDATED, payload)
 
     @staticmethod
-    def deleted(payload: T | None = None) -> "Result[T]":
+    def deleted(payload: T | None = None) -> Result[T]:
         return Result(Status.DELETED, payload)
 
     @staticmethod
-    def ignored(payload: T | None = None) -> "Result[T]":
+    def ignored(payload: T | None = None) -> Result[T]:
         return Result(Status.IGNORED, payload)
 
     # --- failure factories -----------------------------------------------------------------
     @staticmethod
-    def failure(status: str, *errors: str) -> "Result[Any]":
+    def failure(status: str, *errors: str) -> Result[Any]:
         return Result(status, None, tuple(errors))
 
     @staticmethod
-    def bad_request(*errors: str) -> "Result[Any]":
+    def bad_request(*errors: str) -> Result[Any]:
         return Result.failure(Status.BAD_REQUEST, *errors)
 
     @staticmethod
-    def validation_error(*errors: str) -> "Result[Any]":
+    def validation_error(*errors: str) -> Result[Any]:
         return Result.failure(Status.VALIDATION_ERROR, *errors)
 
     @staticmethod
-    def not_found(*errors: str) -> "Result[Any]":
+    def not_found(*errors: str) -> Result[Any]:
         return Result.failure(Status.NOT_FOUND, *errors)
 
     @staticmethod
-    def service_unavailable(*errors: str) -> "Result[Any]":
+    def service_unavailable(*errors: str) -> Result[Any]:
         return Result.failure(Status.SERVICE_UNAVAILABLE, *errors)
 
 

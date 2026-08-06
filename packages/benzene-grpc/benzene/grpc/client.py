@@ -12,10 +12,10 @@ import asyncio
 import json
 from typing import Any
 
-import grpc
-
 from benzene.core import encode_body
 from benzene.results import Result
+
+import grpc
 
 from .codes import code_to_status
 from .server import method_for

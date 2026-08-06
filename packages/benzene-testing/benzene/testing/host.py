@@ -22,11 +22,11 @@ class MessageBuilder:
         self._headers: dict[str, str] = {}
         self._body: Any = {}
 
-    def with_header(self, key: str, value: str) -> "MessageBuilder":
+    def with_header(self, key: str, value: str) -> MessageBuilder:
         self._headers[key] = value
         return self
 
-    def with_body(self, body: Any) -> "MessageBuilder":
+    def with_body(self, body: Any) -> MessageBuilder:
         self._body = body
         return self
 

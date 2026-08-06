@@ -19,7 +19,7 @@ egress path an adopter writes app tests against, matching the cloud examples cel
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -79,7 +79,7 @@ class GrpcTestHost:
     """Wraps a :class:`BenzeneGrpcHandler` for in-memory tests of the gRPC ingress."""
 
     #: The resolved root scope, set by ``create_test_host(...).build_grpc()`` for assertions.
-    scope: "Scope | None" = None
+    scope: Scope | None = None
 
     def __init__(self, handler: BenzeneGrpcHandler) -> None:
         self._handler = handler

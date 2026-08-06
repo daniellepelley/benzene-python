@@ -106,8 +106,9 @@ def http_function(app: AzureFunctionsApp):
     """
 
     def entry(req: Any):
-        import azure.functions as func  # lazy: only needed at deploy time
         from urllib.parse import urlsplit
+
+        import azure.functions as func  # lazy: only needed at deploy time
 
         parts = urlsplit(getattr(req, "url", "") or "")
         raw = req.get_body()

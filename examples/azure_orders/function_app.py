@@ -11,7 +11,6 @@ Local run:  ``func start``  (Azure Functions Core Tools)
 from __future__ import annotations
 
 import azure.functions as func
-
 from benzene.azure import event_hub_function, http_function, service_bus_function
 
 from .host import build_azure_orders_app

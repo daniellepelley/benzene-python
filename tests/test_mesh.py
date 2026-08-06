@@ -14,22 +14,20 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import pytest
-
 from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
-from benzene.results import Result
 from benzene.mesh import (
     HEARTBEAT_TOPIC,
     ISSUES_TOPIC,
     MESH_TOPIC,
+    REGISTER_TOPIC,
+    TRACES_TOPIC,
     Heartbeat,
     InMemoryTraceExporter,
     IssueAggregator,
     MeshFeedSender,
     QueueTraceExporter,
-    REGISTER_TOPIC,
     ServiceDescriptor,
     ServiceInfo,
-    TRACES_TOPIC,
     TraceEvent,
     classify,
     current_traceparent,
@@ -40,6 +38,7 @@ from benzene.mesh import (
     trace_middleware,
     with_trace_propagation,
 )
+from benzene.results import Result
 from benzene.testing import FakeMessageSender
 
 from .canonical_handlers import register_canonical, register_with_panic
@@ -60,7 +59,7 @@ class _Node:
     """A module-level recursive dataclass so ``get_type_hints`` can resolve the forward ref."""
 
     value: int
-    next: Optional["_Node"] = None
+    next: _Node | None = None
 
 
 # --- conformance fixtures (aggregate + granular) -------------------------------------------------
@@ -111,7 +110,11 @@ def test_schema_primitives() -> None:
 def test_schema_containers_and_nullable() -> None:
     assert json_schema(list[str]) == {"type": "array", "items": {"type": "string"}}
     assert json_schema(dict[str, int]) == {"type": "object", "additionalProperties": {"type": "integer"}}
-    assert json_schema(Optional[str]) == {"type": ["string", "null"]}
+    # Both union spellings must derive the same nullable schema: the legacy typing.Optional…
+    assert json_schema(Optional[str]) == {"type": ["string", "null"]}  # noqa: UP045 - test the legacy form too
+    # …and the PEP 604 ``X | None`` form modern handlers actually write.
+    assert json_schema(str | None) == {"type": ["string", "null"]}
+    assert json_schema(list[str] | None) == {"type": ["array", "null"], "items": {"type": "string"}}
 
 
 def test_schema_dataclass_required_follows_defaults() -> None:

@@ -10,7 +10,6 @@ import asyncio
 import json
 
 import pytest
-
 from benzene.core import BenzeneMessageApplication, Registry
 
 from .canonical_handlers import register_canonical

@@ -6,7 +6,6 @@ import asyncio
 import json
 
 import pytest
-
 from benzene.core import (
     HEALTH_TOPIC,
     BenzeneMessageApplication,

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from benzene.azure import AzureFunctionsApp, ServiceBusMessageSender
 from benzene.core import Container, MessageSender, application_from, build_application
-
 from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
 
 

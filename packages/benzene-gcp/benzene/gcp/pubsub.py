@@ -13,7 +13,8 @@ onto the native message attributes so correlation/trace propagation works end to
 from __future__ import annotations
 
 import base64
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from benzene.core import encode_body, read_message_metadata
 from benzene.results import Result, Status

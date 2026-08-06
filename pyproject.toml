@@ -12,6 +12,24 @@
 #     pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http \
 #                  -e packages/benzene-testing -e packages/benzene-gcp
 
+[tool.ruff]
+# Lint the whole workspace (packages + runnable examples + tests) with one config.
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# A measured, high-signal rule set: pyflakes/pycodestyle errors, import sorting, modern-Python
+# upgrades, and bugbear. Kept strict enough to catch real issues without fighting the house style.
+select = ["E", "F", "I", "W", "UP", "B", "C4", "SIM"]
+ignore = [
+    "E501",   # line length is enforced by the formatter's judgment, not a hard cap here
+    "B008",   # calls in argument defaults are used deliberately (e.g. field(default_factory=...))
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests favour readability over some lint niceties.
+"tests/**" = ["B011"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "examples"]
 pythonpath = [

@@ -10,7 +10,8 @@ retry wraps an HTTP client, a gRPC client, or an SQS client unchanged. Each deco
 from __future__ import annotations
 
 import uuid
-from typing import Any, Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
+from typing import Any
 
 from benzene.results import Result, Status
 

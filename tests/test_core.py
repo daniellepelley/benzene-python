@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-
-import pytest
-
 from dataclasses import dataclass
 
+import pytest
 from benzene.core import (
     BenzeneMessageApplication,
     Context,

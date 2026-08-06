@@ -15,8 +15,9 @@ the startup configure the app against a resolved scope.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 from .dependencies import Container, Scope
 from .envelope import BenzeneMessageApplication

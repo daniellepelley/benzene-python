@@ -13,12 +13,11 @@ import pytest
 
 pytest.importorskip("pydantic")
 
-from pydantic import BaseModel, ConfigDict  # noqa: E402
-from pydantic.alias_generators import to_camel  # noqa: E402
-
 from benzene.core import BenzeneMessageApplication, Registry, message  # noqa: E402
 from benzene.pydantic import format_validation_errors, validated  # noqa: E402
 from benzene.results import Result  # noqa: E402
+from pydantic import BaseModel, ConfigDict  # noqa: E402
+from pydantic.alias_generators import to_camel  # noqa: E402
 
 
 class PlaceOrder(BaseModel):

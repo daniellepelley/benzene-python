@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from benzene.core import DEFAULT_TOPIC_KEY, MetadataKeys, read_message_metadata, resolve_version
 
 from .conformance_runner import CONFORMANCE_DIR, run_transport_metadata

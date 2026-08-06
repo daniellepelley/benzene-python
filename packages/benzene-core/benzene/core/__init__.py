@@ -30,6 +30,7 @@ from .envelope import (
     resolve_version,
 )
 from .errors import MessageHandlingError
+from .handler import Handler, HandlerDefinition, definition_of, message
 from .health import (
     HEALTH_TOPIC,
     DuplicateHealthCheckError,
@@ -39,15 +40,7 @@ from .health import (
     HealthReport,
     health_interception,
 )
-from .handler import Handler, HandlerDefinition, definition_of, message
 from .mapping import encode_body, to_camel, to_jsonable, to_request
-from .outbound import (
-    DEFAULT_RETRYABLE,
-    CorrelationIdMessageSender,
-    RetryingMessageSender,
-    with_correlation_id,
-    with_retry,
-)
 from .metadata import (
     DEFAULT_METADATA_KEYS,
     DEFAULT_TOPIC_KEY,
@@ -55,9 +48,14 @@ from .metadata import (
     MetadataKeys,
     read_message_metadata,
 )
+from .outbound import (
+    DEFAULT_RETRYABLE,
+    CorrelationIdMessageSender,
+    RetryingMessageSender,
+    with_correlation_id,
+    with_retry,
+)
 from .pipeline import Middleware, MiddlewarePipeline, Next
-from .schema import Schema, json_schema
-from .spec import SPEC_TOPIC, ServiceSpec, SpecSource, TopicSpec, spec_interception
 from .registry import (
     DuplicateHandlerError,
     Registry,
@@ -65,8 +63,10 @@ from .registry import (
     exact_version,
     highest_version,
 )
-from .startup import AppDefinition, BenzeneStartUp, application_from, build_application
 from .router import message_router
+from .schema import Schema, json_schema
+from .spec import SPEC_TOPIC, ServiceSpec, SpecSource, TopicSpec, spec_interception
+from .startup import AppDefinition, BenzeneStartUp, application_from, build_application
 
 __all__ = [
     "BenzeneMessageApplication",

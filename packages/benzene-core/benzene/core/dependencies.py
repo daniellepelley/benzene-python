@@ -13,8 +13,9 @@ bring-your-own-container adapter would still be its own package).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 
 class ServiceNotRegisteredError(KeyError):
@@ -43,7 +44,7 @@ class Lifetime(Enum):
 class _Registration:
     __slots__ = ("factory", "lifetime")
 
-    def __init__(self, factory: Callable[["Scope"], Any], lifetime: Lifetime) -> None:
+    def __init__(self, factory: Callable[[Scope], Any], lifetime: Lifetime) -> None:
         self.factory = factory
         self.lifetime = lifetime
 
@@ -56,34 +57,34 @@ class Container:
         self._singletons: dict[Any, Any] = {}
 
     # --- registration ----------------------------------------------------------------------
-    def _add(self, key: Any, factory: Callable[["Scope"], Any], lifetime: Lifetime) -> "Container":
+    def _add(self, key: Any, factory: Callable[[Scope], Any], lifetime: Lifetime) -> Container:
         self._registrations[key] = _Registration(factory, lifetime)
         return self
 
-    def add_singleton(self, key: Any, factory: Callable[["Scope"], Any]) -> "Container":
+    def add_singleton(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
         return self._add(key, factory, Lifetime.SINGLETON)
 
-    def add_scoped(self, key: Any, factory: Callable[["Scope"], Any]) -> "Container":
+    def add_scoped(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
         return self._add(key, factory, Lifetime.SCOPED)
 
-    def add_transient(self, key: Any, factory: Callable[["Scope"], Any]) -> "Container":
+    def add_transient(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
         return self._add(key, factory, Lifetime.TRANSIENT)
 
-    def add_instance(self, key: Any, instance: Any) -> "Container":
+    def add_instance(self, key: Any, instance: Any) -> Container:
         self._singletons[key] = instance
         return self._add(key, lambda _scope: instance, Lifetime.SINGLETON)
 
     # try_add* register only if absent — the mechanism that makes framework defaults overridable.
-    def try_add_singleton(self, key: Any, factory: Callable[["Scope"], Any]) -> "Container":
+    def try_add_singleton(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
         return self if key in self._registrations else self.add_singleton(key, factory)
 
-    def try_add_scoped(self, key: Any, factory: Callable[["Scope"], Any]) -> "Container":
+    def try_add_scoped(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
         return self if key in self._registrations else self.add_scoped(key, factory)
 
-    def try_add_transient(self, key: Any, factory: Callable[["Scope"], Any]) -> "Container":
+    def try_add_transient(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
         return self if key in self._registrations else self.add_transient(key, factory)
 
-    def create_scope(self) -> "Scope":
+    def create_scope(self) -> Scope:
         return Scope(self)
 
 

@@ -13,6 +13,7 @@ may fail, slow, or block the invocation.
 from __future__ import annotations
 
 import collections
+import contextlib
 import contextvars
 import os
 import re
@@ -152,7 +153,7 @@ class QueueTraceExporter:
     """
 
     def __init__(self, maxlen: int = 10_000) -> None:
-        self._buffer: "collections.deque[TraceEvent]" = collections.deque(maxlen=maxlen)
+        self._buffer: collections.deque[TraceEvent] = collections.deque(maxlen=maxlen)
 
     def export(self, event: TraceEvent) -> None:
         self._buffer.append(event)  # deque(maxlen) evicts the oldest when full — lossy, never blocks
@@ -204,10 +205,9 @@ def trace_middleware(
                 started_at=started_at,
                 correlation_id=context.headers.get("x-correlation-id"),
             )
-            try:
-                exporter.export(event)  # non-blocking + lossy: never let a mesh feed break traffic
-            except Exception:  # pragma: no cover - defensive; export must not affect the invocation
-                pass
+            # non-blocking + lossy: an exporter error must never affect the invocation (mesh.md §3)
+            with contextlib.suppress(Exception):  # pragma: no cover - defensive
+                exporter.export(event)
 
     return middleware
 

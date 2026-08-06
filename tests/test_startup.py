@@ -10,7 +10,14 @@ from __future__ import annotations
 import asyncio
 import json
 
-from benzene.core import AppDefinition, BenzeneStartUp, Container, Registry, Scope, build_application
+from benzene.core import (
+    AppDefinition,
+    BenzeneStartUp,
+    Container,
+    Registry,
+    Scope,
+    build_application,
+)
 from benzene.results import Result, Status
 from benzene.testing import InMemoryBenzeneHost
 

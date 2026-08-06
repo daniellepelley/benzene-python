@@ -37,15 +37,15 @@ class ApiGatewayRequestBuilder:
         self._query: dict[str, str] = {}
         self._body: str | None = None
 
-    def with_header(self, key: str, value: str) -> "ApiGatewayRequestBuilder":
+    def with_header(self, key: str, value: str) -> ApiGatewayRequestBuilder:
         self._headers[key] = value
         return self
 
-    def with_query(self, key: str, value: str) -> "ApiGatewayRequestBuilder":
+    def with_query(self, key: str, value: str) -> ApiGatewayRequestBuilder:
         self._query[key] = value
         return self
 
-    def with_body(self, body: Any) -> "ApiGatewayRequestBuilder":
+    def with_body(self, body: Any) -> ApiGatewayRequestBuilder:
         self._body = _body(body)
         return self
 
@@ -67,7 +67,7 @@ class SqsEventBuilder:
 
     def with_message(
         self, topic: str, body: Any, message_id: str | None = None, headers: dict[str, str] | None = None
-    ) -> "SqsEventBuilder":
+    ) -> SqsEventBuilder:
         attrs = {TOPIC_ATTRIBUTE: {"stringValue": topic, "dataType": "String"}}
         for key, value in (headers or {}).items():
             attrs[str(key)] = {"stringValue": str(value), "dataType": "String"}
@@ -93,7 +93,7 @@ class SnsEventBuilder:
 
     def with_message(
         self, topic: str, body: Any, headers: dict[str, str] | None = None
-    ) -> "SnsEventBuilder":
+    ) -> SnsEventBuilder:
         attrs = {TOPIC_ATTRIBUTE: {"Type": "String", "Value": topic}}
         for key, value in (headers or {}).items():
             attrs[str(key)] = {"Type": "String", "Value": str(value)}
@@ -130,7 +130,7 @@ class SqsBatchResponse:
         return [f["itemIdentifier"] for f in self.batch_item_failures if "itemIdentifier" in f]
 
     @classmethod
-    def from_wire(cls, response: dict[str, Any]) -> "SqsBatchResponse":
+    def from_wire(cls, response: dict[str, Any]) -> SqsBatchResponse:
         return cls(batch_item_failures=list(response.get("batchItemFailures", [])))
 
 
@@ -138,7 +138,7 @@ class AwsLambdaTestHost:
     """Wraps an :class:`AwsLambdaApp` for in-memory tests of each event source."""
 
     #: The resolved root scope, set by ``create_test_host(...).build_aws()`` for assertions.
-    scope: "Scope | None" = None
+    scope: Scope | None = None
 
     def __init__(self, app: AwsLambdaApp) -> None:
         self._app = app

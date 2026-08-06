@@ -29,6 +29,12 @@ from .collector import (
     MeshCollector,
     collector_registry,
 )
+from .descriptor import (
+    MESH_TOPIC,
+    ServiceDescriptor,
+    ServiceInfo,
+    TopicDescriptor,
+)
 from .feeds import (
     HEARTBEAT_TOPIC,
     ISSUES_TOPIC,
@@ -36,12 +42,6 @@ from .feeds import (
     TRACES_TOPIC,
     Heartbeat,
     MeshFeedSender,
-)
-from .descriptor import (
-    MESH_TOPIC,
-    ServiceDescriptor,
-    ServiceInfo,
-    TopicDescriptor,
 )
 from .interception import DescriptorSource, mesh_interception
 from .issues import (

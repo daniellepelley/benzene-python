@@ -67,7 +67,7 @@ class AzureFunctionsTestHost:
     """Wraps an :class:`AzureFunctionsApp` for in-memory tests of each trigger."""
 
     #: The resolved root scope, set by ``create_test_host(...).build_azure()`` for assertions.
-    scope: "Scope | None" = None
+    scope: Scope | None = None
 
     def __init__(self, app: AzureFunctionsApp) -> None:
         self._app = app

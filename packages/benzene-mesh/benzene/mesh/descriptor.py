@@ -75,7 +75,7 @@ class ServiceDescriptor:
     topics: tuple[TopicDescriptor, ...]
 
     @classmethod
-    def derive(cls, registry: Registry, info: ServiceInfo) -> "ServiceDescriptor":
+    def derive(cls, registry: Registry, info: ServiceInfo) -> ServiceDescriptor:
         """Project a registry + :class:`ServiceInfo` into a descriptor (topics sorted by id, version)."""
         topics = tuple(
             sorted(

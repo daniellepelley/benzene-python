@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from benzene.grpc import BENZENE_STATUS_TRAILER, from_grpc, to_grpc
 
 _FIXTURE = json.loads(

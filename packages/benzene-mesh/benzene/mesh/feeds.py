@@ -24,8 +24,9 @@ ingests these feeds and answers ``benzene:mesh:query:*`` (see :mod:`benzene.mesh
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from benzene.core import MessageSender
 from benzene.results import Result

@@ -25,7 +25,7 @@ dependency; ``.build_aws()`` raises a clear error if ``benzene-aws`` isn't insta
 
 from __future__ import annotations
 
-from typing import Callable, Mapping
+from collections.abc import Callable, Mapping
 
 from benzene.core import BenzeneStartUp, Container, application_from, build_application
 
@@ -38,12 +38,12 @@ class TestHostBuilder:
         self._overrides: list[Callable[[Container], None]] = []
         self._config: dict[str, str] = {}
 
-    def with_services(self, override: Callable[[Container], None]) -> "TestHostBuilder":
+    def with_services(self, override: Callable[[Container], None]) -> TestHostBuilder:
         """Register services over the startup's own (last wins) — the seam for fakes/mocks."""
         self._overrides.append(override)
         return self
 
-    def with_config(self, values: Mapping[str, str]) -> "TestHostBuilder":
+    def with_config(self, values: Mapping[str, str]) -> TestHostBuilder:
         """Layer configuration values on top of the startup's defaults."""
         self._config.update(values)
         return self

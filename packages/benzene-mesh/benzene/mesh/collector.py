@@ -22,8 +22,9 @@ The ``benzene:mesh:query:*`` shapes follow the reference collector and are pinne
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from benzene.core import Handler, Registry
 from benzene.results import Result, is_successful
