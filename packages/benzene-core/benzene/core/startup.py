@@ -34,11 +34,17 @@ class AppDefinition:
     built and passes it straight to the host binding. ``middleware`` is the pipeline the startup
     wants installed ahead of the message router (cross-cutting concerns such as mesh interception,
     tracing, or auth), so a host and a test boot the *same* pipeline, not just the same handlers.
+
+    ``standard_paths`` (typed ``Any``, the same trick as ``router`` — it holds a
+    ``benzene.http.StandardPaths``) declares the Cloud Service Profile's well-known HTTP surfaces
+    (``/benzene/invoke|health|spec``) as part of the composition root, so every HTTP-capable host and
+    the test harness expose them from one declaration rather than re-wiring them per host.
     """
 
     registry: Registry | None = None
     router: Any = None
     middleware: list[Middleware] = field(default_factory=list)
+    standard_paths: Any = None
 
 
 class BenzeneStartUp:

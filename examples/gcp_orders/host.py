@@ -43,4 +43,8 @@ def build_gcp_orders_app(
             services.add_instance(MessageSender, PubSubMessageSender(topic))
 
     definition, _ = build_application(OrdersStartUp, overrides=[overrides])
-    return GcpFunctionsApp(http_router=definition.router, application=application_from(definition))
+    return GcpFunctionsApp(
+        http_router=definition.router,
+        application=application_from(definition),
+        standard_paths=definition.standard_paths,
+    )

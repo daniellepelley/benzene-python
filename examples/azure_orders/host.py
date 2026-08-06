@@ -47,4 +47,8 @@ def build_azure_orders_app(
             )
 
     definition, _ = build_application(OrdersStartUp, overrides=[overrides])
-    return AzureFunctionsApp(http_router=definition.router, application=application_from(definition))
+    return AzureFunctionsApp(
+        http_router=definition.router,
+        application=application_from(definition),
+        standard_paths=definition.standard_paths,
+    )

@@ -60,7 +60,11 @@ class TestHostBuilder:
             raise ImportError("build_gcp() requires the 'benzene-gcp' package to be installed") from ex
         definition, scope = self._build()
         host = GcpFunctionsTestHost(
-            GcpFunctionsApp(http_router=definition.router, application=application_from(definition))
+            GcpFunctionsApp(
+                http_router=definition.router,
+                application=application_from(definition),
+                standard_paths=definition.standard_paths,
+            )
         )
         host.scope = scope
         return host
@@ -74,7 +78,11 @@ class TestHostBuilder:
             raise ImportError("build_aws() requires the 'benzene-aws' package to be installed") from ex
         definition, scope = self._build()
         host = AwsLambdaTestHost(
-            AwsLambdaApp(http_router=definition.router, application=application_from(definition))
+            AwsLambdaApp(
+                http_router=definition.router,
+                application=application_from(definition),
+                standard_paths=definition.standard_paths,
+            )
         )
         host.scope = scope
         return host
@@ -106,7 +114,11 @@ class TestHostBuilder:
             raise ImportError("build_azure() requires the 'benzene-azure' package to be installed") from ex
         definition, scope = self._build()
         host = AzureFunctionsTestHost(
-            AzureFunctionsApp(http_router=definition.router, application=application_from(definition))
+            AzureFunctionsApp(
+                http_router=definition.router,
+                application=application_from(definition),
+                standard_paths=definition.standard_paths,
+            )
         )
         host.scope = scope
         return host

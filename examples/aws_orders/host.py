@@ -42,4 +42,8 @@ def build_aws_orders_app(
             services.add_instance(MessageSender, SnsMessageSender(topic_arn))
 
     definition, _ = build_application(OrdersStartUp, overrides=[overrides])
-    return AwsLambdaApp(http_router=definition.router, application=application_from(definition))
+    return AwsLambdaApp(
+        http_router=definition.router,
+        application=application_from(definition),
+        standard_paths=definition.standard_paths,
+    )
