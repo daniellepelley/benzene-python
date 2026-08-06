@@ -12,11 +12,14 @@ This port is **spec-first**: it implements the language-neutral Benzene specific
 a Python Benzene service and a .NET/Go/TypeScript one speak the same wire contract and show up in the
 same mesh.
 
-> **Status: Core + inbound HTTP binding + three cloud hosts.** Shipped as layered packages
-> (`benzene-results`, `benzene-core`, `benzene-http`, the `benzene-gcp` / `benzene-aws` /
-> `benzene-azure` hosts, and `benzene-testing`) that pass the language-neutral **conformance
-> fixtures** (status vocabulary, HTTP status mapping, and the end-to-end envelope cases). The mesh
-> module and payload versioning are not built yet.
+> **Status: feature-complete against the spec.** Shipped as ten layered packages (`benzene-results`,
+> `benzene-core`, `benzene-http`, `benzene-grpc`, `benzene-mesh`, `benzene-pydantic`, the `benzene-gcp`
+> / `benzene-aws` / `benzene-azure` hosts, and `benzene-testing`) that pass **every language-neutral
+> conformance fixture**. Core, the inbound + outbound HTTP and gRPC bindings, the three cloud hosts, the
+> mesh module (descriptor, tracing, collector), payload versioning (headers, route segment, selectors,
+> casting-handler, transparent casting), health checks, and the Cloud Service Profile's well-known HTTP
+> surfaces (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`) are all implemented. Remaining work
+> is packaging/publishing to PyPI — see the [roadmap](#roadmap).
 
 ## Layered packages — install only what you use
 
@@ -209,6 +212,13 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     payload types, composed by breadth-first search, direct preferred) + `casting_handler`, which
     upcasts an older request to the canonical type and downcasts the response back, so a handler serves
     a retired version in one registration instead of a hand-written forwarder.
+13. **(done)** The Cloud Service Profile's well-known HTTP surfaces (design-principles §5.2; profile
+    R3/R4/R5/R7) — `BenzeneHttpApp(standard_paths=StandardPaths(...))` exposes `/benzene/invoke` (the
+    wire-envelope endpoint), `/benzene/health` (the `{isHealthy, healthChecks}` aggregate, 200/503), and
+    `/benzene/spec` (the registry-derived `ServiceSpec`) under a configurable `/benzene/` prefix. The
+    schema derivation moved into `benzene.core` (shared by the spec doc and the mesh descriptor), and
+    the reserved `benzene:spec` topic is answered on any transport by `spec_interception`.
+14. Later: publish the ten packages to PyPI (build metadata + a release workflow; trusted publishing).
 
 ## Documentation
 

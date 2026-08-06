@@ -264,6 +264,30 @@ the failed checks. The aggregate
 is exactly the shape the mesh [`Heartbeat`](mesh.md) reports, so a service runs its checks once and
 feeds both the health endpoint and the heartbeat: `report = await checks.run()`.
 
+## Service spec
+
+A `ServiceSpec` is a service's **derived** specification — `{service, topics}` with each topic's
+version and request/response JSON schema — projected from the registry, so it is always the truth of
+what the service serves (never hand-maintained). It is the transport-neutral core of the profile's
+`/benzene/spec` surface (Cloud Service Profile R5).
+
+```python
+from benzene.core import ServiceSpec, spec_interception, SPEC_TOPIC, MiddlewarePipeline
+
+spec = ServiceSpec.derive(registry, service="orders")
+spec.to_payload()   # {"service": "orders", "topics": [{"id": ..., "requestSchema": {...}, ...}]}
+
+# Answer the reserved benzene:spec topic on any transport (same pattern as health/mesh interception):
+pipeline = MiddlewarePipeline().use(spec_interception(spec))
+```
+
+`spec_interception(spec)` short-circuits the reserved `benzene:spec` topic (version ignored), so a
+service serves its spec over gRPC or a cloud queue too; over HTTP the [`/benzene/spec`](http.md) surface
+is its face. Pass a callable to `spec_interception` / `StandardPaths(spec=...)` to re-derive per request
+(e.g. to reflect a degraded subsystem). The mesh [`ServiceDescriptor`](mesh.md) is a richer projection
+of the same registry (adding identity, placement, and a contract hash); `ServiceSpec` is the minimal
+profile document and needs only `benzene.core`. Both share one schema derivation, `json_schema`.
+
 ## Transport metadata
 
 Every message transport that carries Benzene metadata natively (SQS/SNS attributes, Pub/Sub
@@ -318,7 +342,8 @@ client = with_retry(with_correlation_id(sender), attempts=5)   # wraps any Messa
 `resolve_version`, `read_message_metadata`, `MetadataKeys`, `DEFAULT_METADATA_KEYS`,
 `DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `MessageSender`, `with_retry`, `with_correlation_id`,
 `RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `SchemaCasters`,
-`casting_handler`, `Cast`, `NoCastPathError`, `to_jsonable`, `to_request`.
+`casting_handler`, `Cast`, `NoCastPathError`, `ServiceSpec`, `TopicSpec`, `spec_interception`,
+`SPEC_TOPIC`, `json_schema`, `Schema`, `to_jsonable`, `to_request`.
 
 ## See also
 

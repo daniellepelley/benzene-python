@@ -56,6 +56,8 @@ from .metadata import (
     read_message_metadata,
 )
 from .pipeline import Middleware, MiddlewarePipeline, Next
+from .schema import Schema, json_schema
+from .spec import SPEC_TOPIC, ServiceSpec, SpecSource, TopicSpec, spec_interception
 from .registry import (
     DuplicateHandlerError,
     Registry,
@@ -98,6 +100,13 @@ __all__ = [
     "Middleware",
     "MiddlewarePipeline",
     "Next",
+    "Schema",
+    "json_schema",
+    "SPEC_TOPIC",
+    "ServiceSpec",
+    "SpecSource",
+    "TopicSpec",
+    "spec_interception",
     "read_message_metadata",
     "AppDefinition",
     "BenzeneStartUp",

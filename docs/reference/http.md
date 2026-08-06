@@ -83,7 +83,7 @@ from_http(422)         # "validation-error"
 ## `BenzeneHttpApp`
 
 ```python
-BenzeneHttpApp(router, application=None, pipeline=None, container=None)
+BenzeneHttpApp(router, application=None, pipeline=None, container=None, *, standard_paths=None)
 ```
 
 By default it builds a `BenzeneMessageApplication` from the router's handler definitions. Pass your
@@ -94,6 +94,43 @@ Two ways to invoke it:
 - `await app.handle(method, path, query_string="", headers=None, body="")` → an `HttpResponse`
   (`status_code`, `headers`, `body`) — convenient in tests.
 - `await app(scope, receive, send)` — the raw ASGI entry point for uvicorn/hypercorn.
+
+## Well-known surfaces (the Cloud Service Profile)
+
+Pass `standard_paths=StandardPaths(...)` to expose the profile's well-known operational surfaces under
+a configurable `/benzene/` prefix (design-principles §5.2; profile R3/R4/R5/R7). They are served ahead
+of ordinary routing and never shadow your routes.
+
+```python
+from benzene.core import HealthChecks, ServiceSpec
+from benzene.http import BenzeneHttpApp, StandardPaths
+
+app = BenzeneHttpApp(
+    router,
+    application=application,
+    standard_paths=StandardPaths(
+        health=health_checks,                              # enables GET /benzene/health
+        spec=ServiceSpec.derive(registry, service="orders"),  # enables GET /benzene/spec
+        # invoke is on by default -> POST /benzene/invoke
+    ),
+)
+```
+
+- **`POST /benzene/invoke`** (R4) — the **wire-envelope endpoint**. The request body *is* a message
+  envelope (`{topic, headers, body}`); the service returns the response envelope. HTTP `200` means the
+  envelope was processed — the domain outcome is the envelope's `statusCode` — and a malformed envelope
+  is a transport-level `400`. This makes a service invokable uniformly across transports.
+- **`GET /benzene/health`** (R3) — the `{isHealthy, healthChecks}` aggregate (wire-contracts §5), `200`
+  when healthy and `503` when not. The full aggregate is returned either way (it is run directly, so an
+  unhealthy report survives — the envelope drops a failure payload). Enabled by passing `health`.
+- **`GET /benzene/spec`** (R5) — the derived [`ServiceSpec`](core.md#service-spec): `{service, topics}`
+  with each topic's request/response JSON schema, projected from the registry (never hand-written).
+  Enabled by passing `spec` (a `ServiceSpec` or a callable returning one).
+- **Prefix** (R7) — `prefix` defaults to `/benzene` and is configurable; relocating it moves every
+  surface together (the prefix is the steer, not a cage), so tell your clients the new base.
+
+The reserved topic **`benzene:spec`** is answered on *any* transport by `spec_interception` (the same
+pattern as health and mesh interception); the HTTP `/benzene/spec` surface is its HTTP face.
 
 ## Outbound — `HttpMessageSender`
 
@@ -119,7 +156,8 @@ result = await sender.send_message("orders:place", {"sku": "A"}, headers={"x-cor
 ## Exports
 
 `BenzeneHttpApp`, `HttpResponse`, `HttpRouter`, `HttpEndpoint`, `http_endpoint`, `routes_of`,
-`to_http`, `from_http`, `HttpMessageSender`, `HttpReply`, `HttpTransport`, `stdlib_transport`.
+`to_http`, `from_http`, `HttpMessageSender`, `HttpReply`, `HttpTransport`, `stdlib_transport`,
+`StandardPaths`, `DEFAULT_PREFIX`.
 
 ## See also
 

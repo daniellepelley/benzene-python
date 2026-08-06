@@ -27,16 +27,19 @@ from __future__ import annotations
 from .app import BenzeneHttpApp, HttpResponse
 from .client import HttpMessageSender, HttpReply, HttpTransport, UrlFor, stdlib_transport
 from .routing import HttpEndpoint, HttpRouter, http_endpoint, routes_of
+from .standard import DEFAULT_PREFIX, StandardPaths
 from .status import from_http, to_http
 
 __all__ = [
     "BenzeneHttpApp",
+    "DEFAULT_PREFIX",
     "HttpEndpoint",
     "HttpMessageSender",
     "HttpReply",
     "HttpResponse",
     "HttpRouter",
     "HttpTransport",
+    "StandardPaths",
     "UrlFor",
     "from_http",
     "http_endpoint",

@@ -37,6 +37,7 @@ from benzene.core import (
 from benzene.results import Result, Status
 
 from .routing import HttpRouter
+from .standard import StandardPaths
 from .status import to_http
 
 
@@ -62,6 +63,8 @@ class BenzeneHttpApp:
         application: BenzeneMessageApplication | None = None,
         pipeline: MiddlewarePipeline | None = None,
         container: Container | None = None,
+        *,
+        standard_paths: StandardPaths | None = None,
     ) -> None:
         self._router = router
         if application is None:
@@ -70,6 +73,8 @@ class BenzeneHttpApp:
                 registry.add_definition(definition)
             application = BenzeneMessageApplication(registry, pipeline, container)
         self._application = application
+        #: The Cloud Service Profile well-known surfaces (/benzene/invoke|health|spec), if enabled.
+        self._standard = standard_paths
 
     async def handle(
         self,
@@ -80,6 +85,11 @@ class BenzeneHttpApp:
         body: str = "",
     ) -> HttpResponse:
         """Handle one HTTP request end-to-end, returning the mapped :class:`HttpResponse`."""
+        if self._standard is not None:
+            standard = await self._handle_standard(method, path, headers or {}, body)
+            if standard is not None:
+                return standard
+
         match = self._router.match(method, path)
         if match is None:
             return self._error(
@@ -127,6 +137,52 @@ class BenzeneHttpApp:
             headers=dict(response["headers"]),
             body=response["body"],
         )
+
+    async def _handle_standard(
+        self, method: str, path: str, headers: dict[str, str], body: str
+    ) -> HttpResponse | None:
+        """Serve a well-known profile surface, or ``None`` if the request is not one (→ route it)."""
+        std = self._standard
+        assert std is not None
+        verb = method.upper()
+
+        # R4 — /benzene/invoke: the request body *is* a message envelope; hand it to the application
+        # verbatim and return the response envelope. HTTP 200 means "processed"; the domain outcome is
+        # in the envelope's statusCode (a malformed envelope is a transport-level 400).
+        if std.invoke and verb == "POST" and path == std.invoke_path:
+            try:
+                envelope = json.loads(body) if body else {}
+            except (ValueError, TypeError):
+                envelope = None
+            if not isinstance(envelope, dict):
+                return self._error(Status.BAD_REQUEST, "Request body is not a valid message envelope")
+            response = await self._application.handle(
+                {
+                    "topic": envelope.get("topic") or "",
+                    "headers": envelope.get("headers") or {},
+                    "body": envelope.get("body") or "",
+                }
+            )
+            return HttpResponse(200, {"content-type": "application/json"}, json.dumps(response))
+
+        # R3 — /benzene/health: the full {isHealthy, healthChecks} aggregate, 200 healthy / 503 not.
+        # Run the checks directly so the aggregate survives (the envelope drops a failure payload).
+        if std.health is not None and verb == "GET" and path == std.health_path:
+            report = await std.health.run()
+            status_code = 200 if report.is_healthy else 503
+            return HttpResponse(
+                status_code, {"content-type": "application/json"}, json.dumps(report.to_payload())
+            )
+
+        # R5 — /benzene/spec: the derived spec document (topics + payload schemas from the registry).
+        if verb == "GET" and path == std.spec_path:
+            spec = std.resolved_spec()
+            if spec is not None:
+                return HttpResponse(
+                    200, {"content-type": "application/json"}, json.dumps(spec.to_payload())
+                )
+
+        return None
 
     def _error(self, status: str, detail: str) -> HttpResponse:
         payload = error_payload(Result.failure(status, detail))
