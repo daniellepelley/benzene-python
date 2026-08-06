@@ -1,0 +1,82 @@
+name: Release
+
+# Build all ten Benzene distributions and publish them to PyPI via **trusted publishing**
+# (OpenID Connect — no API tokens stored in the repo). Fires on a version tag (e.g. `v0.0.1`) and
+# is also runnable on demand via the Actions tab.
+#
+# One-time maintainer setup (see docs/publishing.md):
+#   1. On PyPI, add a "pending" trusted publisher for EACH of the ten project names
+#      (benzene-results, benzene-core, benzene-http, benzene-grpc, benzene-mesh, benzene-pydantic,
+#      benzene-testing, benzene-gcp, benzene-aws, benzene-azure), all pointing at:
+#         owner/repo = daniellepelley/benzene-python
+#         workflow   = release.yml
+#         environment = pypi
+#   2. Create a GitHub Environment named `pypi` on this repo (optionally with required reviewers).
+# The single publish step uploads all twenty artifacts; PyPI routes each to its project and verifies
+# the OIDC identity per project.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & check all distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine
+      - name: Verify versions are consistent (and match the tag, if tagged)
+        run: |
+          python - <<'PY'
+          import os, pathlib, re, sys
+          versions = {}
+          for pp in sorted(pathlib.Path("packages").glob("*/pyproject.toml")):
+              m = re.search(r'(?m)^version = "([^"]+)"', pp.read_text())
+              versions[pp.parent.name] = m.group(1) if m else None
+          unique = set(versions.values())
+          if len(unique) != 1 or None in unique:
+              print("Package versions are not consistent:", versions)
+              sys.exit(1)
+          version = unique.pop()
+          ref = os.environ.get("GITHUB_REF", "")
+          if ref.startswith("refs/tags/"):
+              tag = ref.removeprefix("refs/tags/")
+              if tag != f"v{version}":
+                  print(f"Tag {tag!r} does not match package version {version!r} (expected v{version})")
+                  sys.exit(1)
+          print(f"All packages at {version}")
+          PY
+      - name: Build sdists + wheels for every package
+        run: |
+          for pkg in packages/*/; do
+            echo "::group::build $pkg"
+            python -m build --outdir dist "$pkg"
+            echo "::endgroup::"
+          done
+      - name: Check metadata
+        run: python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benzene-dists
+          path: dist/
+
+  publish:
+    name: Publish to PyPI (trusted publishing)
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # mint the OIDC token trusted publishing uses; no stored secret
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: benzene-dists
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

@@ -18,8 +18,10 @@ same mesh.
 > conformance fixture**. Core, the inbound + outbound HTTP and gRPC bindings, the three cloud hosts, the
 > mesh module (descriptor, tracing, collector), payload versioning (headers, route segment, selectors,
 > casting-handler, transparent casting), health checks, and the Cloud Service Profile's well-known HTTP
-> surfaces (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`) are all implemented. Remaining work
-> is packaging/publishing to PyPI — see the [roadmap](#roadmap).
+> surfaces (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`) are all implemented. Each package
+> builds a `twine`-clean sdist + wheel and a trusted-publishing [`release`](.github/workflows/release.yml)
+> workflow is in place; the first PyPI publish awaits the one-time trusted-publisher setup and a version
+> tag ([`docs/publishing.md`](docs/publishing.md)). See the [roadmap](#roadmap).
 
 ## Layered packages — install only what you use
 
@@ -218,7 +220,12 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     `/benzene/spec` (the registry-derived `ServiceSpec`) under a configurable `/benzene/` prefix. The
     schema derivation moved into `benzene.core` (shared by the spec doc and the mesh descriptor), and
     the reserved `benzene:spec` topic is answered on any transport by `spec_interception`.
-14. Later: publish the ten packages to PyPI (build metadata + a release workflow; trusted publishing).
+14. **(done)** PyPI packaging — every package carries complete metadata (PEP 639 `license = "MIT"` with
+    a bundled `LICENSE`, classifiers, pinned inter-package deps) and builds a clean sdist + wheel that
+    passes `twine check`. A [`release`](.github/workflows/release.yml) workflow builds all ten and
+    publishes them via **trusted publishing** (OIDC, no stored tokens) on a `vX.Y.Z` tag; see
+    [`docs/publishing.md`](docs/publishing.md). The first publish awaits the one-time PyPI
+    trusted-publisher setup and a version tag.
 
 ## Documentation
 

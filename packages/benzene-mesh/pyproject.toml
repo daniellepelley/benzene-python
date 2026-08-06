@@ -8,10 +8,22 @@ version = "0.0.1"
 description = "Benzene mesh module — ServiceDescriptor self-description, the benzene:mesh endpoint, per-invocation tracing, and collector feeds."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Benzene" }]
 keywords = ["benzene", "mesh", "service-descriptor", "tracing", "observability", "hexagonal"]
-dependencies = ["benzene-core"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+dependencies = ["benzene-core>=0.0.1"]
 
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"

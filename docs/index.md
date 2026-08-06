@@ -11,6 +11,7 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
   few minutes.
 - **[Packages & adoption levels](packages.md)** — how Benzene is split into layered PyPI packages,
   why, and which ones to install.
+- **[Publishing](publishing.md)** — how the ten packages are released to PyPI (trusted publishing).
 
 ## Reference
 
