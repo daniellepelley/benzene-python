@@ -34,8 +34,8 @@ else:
             "'pip install benzene-grpc[transport]'."
         )
 
-    GrpcMessageSender = _needs_grpc  # type: ignore[assignment]
-    BenzeneGrpcHandler = _needs_grpc  # type: ignore[assignment]
+    GrpcMessageSender = _needs_grpc  # type: ignore[assignment,misc]  # class name reused as a stub
+    BenzeneGrpcHandler = _needs_grpc  # type: ignore[assignment,misc]  # class name reused as a stub
     add_benzene_handler = _needs_grpc  # type: ignore[assignment]
     method_for = _needs_grpc  # type: ignore[assignment]
     topic_for = _needs_grpc  # type: ignore[assignment]

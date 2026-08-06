@@ -55,7 +55,8 @@ class AwsLambdaApp:
         if source == "sqs":
             return self._handle_sqs(event)
         if source == "sns":
-            return self._handle_sns(event)
+            self._handle_sns(event)  # SNS is fire-and-forget: no response envelope to return
+            return None
         raise ValueError("Unrecognised Lambda event: not API Gateway, SQS, or SNS")
 
     # --- API Gateway -----------------------------------------------------------------------

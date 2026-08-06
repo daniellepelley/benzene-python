@@ -30,6 +30,41 @@ ignore = [
 # Tests favour readability over some lint niceties.
 "tests/**" = ["B011"]
 
+[tool.mypy]
+# Type-check the ten packages as one PEP 420 namespace. A pragmatic-but-rigorous bar: default checks
+# plus the high-signal flags that catch real bugs (untyped-body checking, return-Any, redundant
+# ignores, strict equality) without requiring exhaustive annotation of every internal helper.
+python_version = "3.10"
+namespace_packages = true
+explicit_package_bases = true
+ignore_missing_imports = true # third-party (grpcio, pydantic, cloud SDKs) ship without stubs
+mypy_path = "packages/benzene-results:packages/benzene-core:packages/benzene-http:packages/benzene-grpc:packages/benzene-mesh:packages/benzene-pydantic:packages/benzene-testing:packages/benzene-gcp:packages/benzene-aws:packages/benzene-azure"
+files = [
+    "packages/benzene-results/benzene",
+    "packages/benzene-core/benzene",
+    "packages/benzene-http/benzene",
+    "packages/benzene-grpc/benzene",
+    "packages/benzene-mesh/benzene",
+    "packages/benzene-pydantic/benzene",
+    "packages/benzene-testing/benzene",
+    "packages/benzene-gcp/benzene",
+    "packages/benzene-aws/benzene",
+    "packages/benzene-azure/benzene",
+]
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+strict_equality = true
+# warn_return_any is intentionally off: this is a framework that moves JSON across dynamic boundaries
+# (json.loads, dict.get, type-erased casts), where "returns Any" is the honest shape, not a defect.
+
+[[tool.mypy.overrides]]
+# The gRPC package's optional-import fallback (grpcio may be absent) reuses class names as runtime
+# stubs; whether each `# type: ignore` fires depends on whether grpcio is installed in the checking
+# env, so pinning "unused ignore" there would be brittle across CI matrices.
+module = "benzene.grpc"
+warn_unused_ignores = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "examples"]
 pythonpath = [

@@ -7,11 +7,29 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff + mypy (pinned)
+        run: python -m pip install ruff==0.15.8 mypy==1.19.1
+      - name: Ruff
+        run: ruff check .
+      - name: Mypy
+        # Reads [tool.mypy] in pyproject: checks the ten packages as one PEP 420 namespace via
+        # mypy_path, with third-party imports ignored — no install needed.
+        run: mypy
+
   test:
+    name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -45,3 +63,33 @@ jobs:
         # and their dogfooded, in-memory tests run here as a required gate (port-quality-standards
         # §5, Tier 1 — credential-free, no cloud deploy).
         run: pytest -q
+
+  package:
+    name: Build & test the distributions (as PyPI would ship them)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine
+      - name: Build sdists + wheels for every package
+        run: |
+          for pkg in packages/*/; do python -m build --outdir dist "$pkg"; done
+      - name: Check metadata
+        run: twine check dist/*
+      - name: Install the built wheels (not editable) + pytest
+        # Resolve benzene-* only from the freshly built wheels, exactly as `pip install benzene-*`
+        # from PyPI would; third-party extras come from PyPI. This proves the artifacts install and
+        # coexist in one namespace — a check editable installs cannot make.
+        run: |
+          pip install --find-links dist \
+            benzene-testing benzene-http 'benzene-grpc[transport]' benzene-mesh benzene-pydantic \
+            benzene-gcp benzene-aws benzene-azure pytest
+      - name: Conformance + suite against the INSTALLED wheels
+        # Override pythonpath to examples only, so `benzene.*` resolves from the installed wheels
+        # (site-packages) rather than the packages/ source tree.
+        run: |
+          python -m tests.conformance_runner
+          pytest -q -o "pythonpath=examples"

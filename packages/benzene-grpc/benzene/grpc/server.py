@@ -76,8 +76,10 @@ def _detail(response: dict[str, Any]) -> str:
     try:
         parsed = json.loads(body) if body else {}
     except (ValueError, TypeError):
-        return response["statusCode"]
-    return parsed.get("detail") if isinstance(parsed, dict) and parsed.get("detail") else response["statusCode"]
+        return str(response["statusCode"])
+    if isinstance(parsed, dict) and parsed.get("detail"):
+        return str(parsed["detail"])
+    return str(response["statusCode"])
 
 
 def add_benzene_handler(server: Any, application: BenzeneMessageApplication) -> None:

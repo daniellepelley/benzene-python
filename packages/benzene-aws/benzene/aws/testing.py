@@ -159,6 +159,7 @@ class AwsLambdaTestHost:
         if body is not None:
             builder.with_body(body)
         result = self._app.handle(builder.build())
+        assert result is not None  # API Gateway always yields a response envelope (never None like SNS)
         return ApiGatewayResponse(result["statusCode"], result.get("headers", {}), result.get("body", ""))
 
     def send_sqs(
@@ -174,10 +175,12 @@ class AwsLambdaTestHost:
             .with_message(topic, body, message_id=message_id, headers=headers)
             .build()
         )
-        return SqsBatchResponse.from_wire(self._app.handle(event))
+        return self.send_sqs_event(event)
 
     def send_sqs_event(self, event: dict[str, Any]) -> SqsBatchResponse:
-        return SqsBatchResponse.from_wire(self._app.handle(event))
+        result = self._app.handle(event)
+        assert result is not None  # SQS always yields a partial-batch response (never None like SNS)
+        return SqsBatchResponse.from_wire(result)
 
     def send_sns(self, topic: str, body: Any, headers: dict[str, str] | None = None) -> None:
         event = SnsEventBuilder().with_message(topic, body, headers=headers).build()
