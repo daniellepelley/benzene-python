@@ -51,6 +51,7 @@ files = [
     "packages/benzene-aws/benzene",
     "packages/benzene-azure/benzene",
     "deploy/mesh/collector",
+    "deploy/mesh/fleet",
 ]
 check_untyped_defs = true
 warn_redundant_casts = true
@@ -67,7 +68,7 @@ module = "benzene.grpc"
 warn_unused_ignores = false
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "examples", "deploy/mesh/collector"]
+testpaths = ["tests", "examples", "deploy/mesh/collector", "deploy/mesh/fleet"]
 pythonpath = [
     "packages/benzene-results",
     "packages/benzene-core",

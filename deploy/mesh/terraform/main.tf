@@ -170,7 +170,7 @@ resource "aws_ecs_task_definition" "collector" {
       ]
       environment = [
         { name = "PORT", value = tostring(var.container_port) },
-        { name = "MESH_SERVICES", value = var.mesh_services_json }
+        { name = "MESH_SERVICES", value = local.effective_mesh_services }
       ]
       logConfiguration = {
         logDriver = "awslogs"

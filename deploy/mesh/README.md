@@ -6,16 +6,24 @@ polling a fleet's `/benzene/spec` + `/benzene/health` on a timer and serving the
 directory ships it as a container (`collector/`) and the Terraform to run it on Fargate behind an ALB
 (`terraform/`).
 
-> **Status.** The container and Terraform are complete and validated locally (the host app is
-> unit-tested in `collector/tests`). The steps below stand up a *running collector*; pointing it at a
-> deployed fleet (services on Lambda) is the next phase, and wiring the [`mesh-ui`](../../docs/mesh-aws-plan.md)
-> dashboard awaits its artifact schema. See [`docs/mesh-aws-plan.md`](../../docs/mesh-aws-plan.md).
+> **Status.** The collector container, the demo fleet Lambdas, and the Terraform are complete and
+> validated locally (both the host and the fleet service are unit-tested — `collector/tests`,
+> `fleet/tests`). One `terraform apply` stands up the whole mesh: the fleet on Lambda + the collector on
+> Fargate, wired together. Only the [`mesh-ui`](../../docs/mesh-aws-plan.md) dashboard is outstanding
+> (awaiting its artifact schema). See [`docs/mesh-aws-plan.md`](../../docs/mesh-aws-plan.md).
 
 ## What gets created
 
-An ECR repository, an ECS Fargate cluster + service (one collector task), an Application Load Balancer
-(public, port 80 → container 8080), the security groups, IAM roles, and a CloudWatch log group — in the
-account's **default VPC**. Roughly the cost of one small Fargate task + an ALB while it runs.
+- **The collector**: an ECR repository, an ECS Fargate cluster + service (one collector task), a public
+  Application Load Balancer (port 80 → container 8080), security groups, IAM roles, a CloudWatch log
+  group — in the account's **default VPC**.
+- **The fleet** (`deploy_fleet=true`, the default): three Lambdas (`orders` → `inventory` →
+  `notifications`, all from one zip, env-selected) each behind an HTTP API Gateway, plus their IAM role.
+  The collector is pointed at their URLs automatically; each service calls the next with trace
+  propagation and pushes traces back, so the collector derives the consumer edges.
+
+Roughly the cost of one small Fargate task + an ALB while it runs (the Lambdas + HTTP APIs are
+pay-per-request). Set `-var="deploy_fleet=false"` to deploy just the collector.
 
 ## Prerequisites
 
@@ -40,37 +48,43 @@ Terraform creates the ECR repo, but the ECS service needs an image to exist firs
 push the image, then apply the rest.
 
 ```bash
+# 0. Build the fleet Lambda zip (from the repo root).
+deploy/mesh/fleet/build.sh          # -> deploy/mesh/build/fleet.zip
+
 cd deploy/mesh/terraform
 terraform init
 
-# 1. Create just the registry.
+# 1. Create just the ECR registry (the ECS service needs an image to exist first).
 terraform apply -target=aws_ecr_repository.collector -var="collector_image=placeholder"
 REPO=$(terraform output -raw ecr_repository_url)
 REGION=${AWS_REGION:-eu-west-1}
 
-# 2. Build (from the repo root — the Docker context needs packages/ and deploy/) and push.
+# 2. Build the collector image (context = repo root, needs packages/ + deploy/) and push it.
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "${REPO%/*}"
 docker build -f ../collector/Dockerfile -t "$REPO:v1" ../../..
 docker push "$REPO:v1"
 
-# 3. Apply the full stack, pointing the service at the pushed image and your fleet.
-terraform apply \
-  -var="collector_image=$REPO:v1" \
-  -var='mesh_services_json={"pollIntervalSeconds":30,"services":[{"name":"orders","baseUrl":"https://<orders-url>"}]}'
+# 3. Apply the whole mesh — fleet Lambdas + collector, wired together.
+terraform apply -var="collector_image=$REPO:v1"
 ```
 
-`mesh_services_json` is the inline fleet config (the `MESH_SERVICES` env var; see
-[`collector/mesh.json.example`](collector/mesh.json.example) for the shape). Leave it empty to deploy an
-idle collector and populate it once a fleet exists.
+That's it: the fleet deploys, the collector is pointed at the fleet's own API Gateway URLs, and the
+fleet's `COLLECTOR_URL` points at the ALB. To deploy the collector against an *external* fleet instead,
+pass `-var="deploy_fleet=false" -var='mesh_services_json=...'` (see
+[`collector/mesh.json.example`](collector/mesh.json.example) for the shape).
 
 ## Verify
 
 ```bash
 MESH=$(terraform output -raw mesh_url)
 curl "$MESH/benzene/health"     # {"isHealthy": true, ...}   (the ALB health check hits this)
-curl "$MESH/benzene/spec"       # the mesh API's own derived spec
-curl "$MESH/mesh/fleet"         # the polled fleet: services, topics, issues
-curl "$MESH/mesh/topic/orders:place"   # providers + consumer edges for a topic
+curl "$MESH/mesh/fleet"         # the polled fleet: orders, inventory, notifications (after one poll)
+
+# Drive an order through the fleet to generate cross-service traces, then read the edges back:
+ORDERS=$(terraform output -json fleet_urls | python -c 'import json,sys;print(json.load(sys.stdin)["orders"])')
+curl -X POST "$ORDERS/orders" -d '{"sku":"ABC"}'
+curl "$MESH/mesh/topic/inventory:reserve"   # providers: [inventory], consumers: [orders]
+curl "$MESH/mesh/topic/notify:send"         # providers: [notifications], consumers: [inventory]
 ```
 
 Logs: `aws logs tail "$(terraform output -raw log_group)" --follow`.
@@ -92,8 +106,8 @@ terraform destroy
 
 ## Next
 
-- **Fleet on Lambda** — Terraform to deploy the [`mesh_fleet`](../../examples/mesh_fleet) services as
-  Lambdas so the collector polls a real fleet end to end (the collector's `task` IAM role has a spot to
-  grant `lambda:InvokeFunction` for a direct-invoke source).
 - **mesh-ui** — emit `manifest.json` / `topology.json` in the shape the main-repo dashboard renders,
-  and serve it (from the container or S3+CloudFront).
+  and serve it (from the container or S3+CloudFront). This is the last piece; it needs the `mesh-ui`
+  artifact schema.
+- **First live run** — apply this in a real account and confirm end to end (the port has not yet run on
+  AWS). Consider an integration test that applies, drives an order, asserts the mesh, and destroys.
