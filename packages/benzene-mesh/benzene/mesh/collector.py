@@ -162,11 +162,15 @@ class MeshCollector:
         return self._persisted({"accepted": accepted})
 
     def _merge_issue(self, fingerprint: str, issue: dict[str, Any]) -> None:
+        # A malformed aggregated field (e.g. an explicit null count/firstSeen/lastSeen from a
+        # hand-rolled or cross-language POST) must not crash the merge and drop the whole batch —
+        # the contract is skip-the-bad-part, accept the rest. Coerce count and span only over
+        # present, non-null timestamps.
         incoming_exemplars = list(issue.get("exemplarTraceIds", []))
         existing = self._issues.get(fingerprint)
         if existing is None:
             merged = dict(issue)
-            merged["count"] = int(issue.get("count", 0))
+            merged["count"] = _safe_int(issue.get("count", 0))
             merged["exemplarTraceIds"] = incoming_exemplars[-_MAX_EXEMPLARS:]  # keep the newest
             self._issues[fingerprint] = merged
             return
@@ -175,21 +179,19 @@ class MeshCollector:
         for key, value in issue.items():
             if key not in _AGGREGATED_ISSUE_FIELDS:
                 existing[key] = value
-        existing["count"] += int(issue.get("count", 0))
+        existing["count"] = _safe_int(existing.get("count", 0)) + _safe_int(issue.get("count", 0))
         combined = existing["exemplarTraceIds"] + [
             trace_id
             for trace_id in incoming_exemplars
             if trace_id not in existing["exemplarTraceIds"]
         ]
         existing["exemplarTraceIds"] = combined[-_MAX_EXEMPLARS:]
-        if "firstSeen" in issue:
-            existing["firstSeen"] = min(
-                existing.get("firstSeen", issue["firstSeen"]), issue["firstSeen"]
-            )
-        if "lastSeen" in issue:
-            existing["lastSeen"] = max(
-                existing.get("lastSeen", issue["lastSeen"]), issue["lastSeen"]
-            )
+        first = issue.get("firstSeen")
+        if first is not None:
+            existing["firstSeen"] = min(existing.get("firstSeen") or first, first)
+        last = issue.get("lastSeen")
+        if last is not None:
+            existing["lastSeen"] = max(existing.get("lastSeen") or last, last)
 
     # --- persistence -----------------------------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
@@ -412,6 +414,14 @@ def _require(body: dict[str, Any], key: str) -> str:
     if not value:
         raise CollectorBadRequest(f"{key!r} is required")
     return str(value)
+
+
+def _safe_int(value: Any) -> int:
+    """Coerce a count to int, treating a null/garbage value as 0 (skip-the-bad-part, don't crash)."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 _CollectorMethod = Callable[[dict[str, Any]], dict[str, Any]]
