@@ -66,7 +66,7 @@ module = "benzene.grpc"
 warn_unused_ignores = false
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "examples"]
+testpaths = ["tests", "examples", "deploy"]
 pythonpath = [
     "packages/benzene-results",
     "packages/benzene-core",
@@ -79,4 +79,5 @@ pythonpath = [
     "packages/benzene-aws",
     "packages/benzene-azure",
     "examples",
+    "deploy",
 ]

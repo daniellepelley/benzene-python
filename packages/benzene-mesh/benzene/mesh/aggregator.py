@@ -30,6 +30,7 @@ The aggregator's HTTP dependency is why this module (and :mod:`benzene.mesh.host
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
@@ -184,10 +185,6 @@ class SpecHealthSource:
         return parsed, None
 
 
-#: A source the aggregator resolves each entry through: anything with ``async fetch(entry) -> _Fetched``.
-FetchSource = SpecHealthSource
-
-
 class MeshAggregator:
     """Runs one aggregation pass over a :class:`MeshServiceRegistry`, emitting the six mesh-UI artifacts.
 
@@ -233,7 +230,9 @@ class MeshAggregator:
         entries = list(registry.services)
         fetched = await asyncio.gather(*(self._source.fetch(entry) for entry in entries))
 
-        catalogs = [self._catalog(entry, result) for entry, result in zip(entries, fetched)]
+        catalogs = [
+            self._catalog(entry, result) for entry, result in zip(entries, fetched, strict=True)
+        ]
         emitter = MeshArtifactEmitter(
             catalogs,
             self._collector,
@@ -286,10 +285,8 @@ async def run_poll_loop(
             await aggregator.run_once(registry, out_dir=out_dir)
         except Exception:  # noqa: BLE001 - a failed pass must never crash the host
             log.exception("Mesh aggregation pass failed")
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=interval)
-        except asyncio.TimeoutError:
-            pass  # the interval elapsed — run the next pass
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(stop.wait(), timeout=interval)  # the interval elapsed → next pass
 
 
 def aggregate_handler(
