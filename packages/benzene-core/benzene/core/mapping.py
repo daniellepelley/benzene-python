@@ -13,6 +13,8 @@ and outbound client inherits it identically:
 
 from __future__ import annotations
 
+import base64
+import datetime
 import json
 from dataclasses import asdict, fields, is_dataclass
 from typing import Any
@@ -37,7 +39,11 @@ def to_request(request_type: type | None, data: Any) -> Any:
         return data  # already the right type — pass through untouched
     if is_dataclass(request_type) and isinstance(data, dict):
         by_norm = {_normalize(str(k)): v for k, v in data.items()}
-        kwargs = {f.name: by_norm[_normalize(f.name)] for f in fields(request_type) if _normalize(f.name) in by_norm}
+        kwargs = {
+            f.name: by_norm[_normalize(f.name)]
+            for f in fields(request_type)
+            if _normalize(f.name) in by_norm
+        }
         return request_type(**kwargs)
     if isinstance(data, dict):
         try:
@@ -57,6 +63,15 @@ def to_jsonable(payload: Any) -> Any:
         return [to_jsonable(item) for item in payload]
     if isinstance(payload, dict):
         return {key: to_jsonable(value) for key, value in payload.items()}  # keys verbatim
+    # The non-JSON-native wire types the schema layer declares (schema.py): datetime → RFC3339
+    # string, bytes → base64 string, set/frozenset → array. Kept in step so a handler can return
+    # them without json.dumps crashing on a type the derived spec says is valid.
+    if isinstance(payload, (bytes, bytearray)):
+        return base64.b64encode(bytes(payload)).decode("ascii")
+    if isinstance(payload, datetime.datetime):
+        return payload.isoformat()
+    if isinstance(payload, (set, frozenset)):
+        return [to_jsonable(item) for item in payload]
     # Duck-typed support for objects that know how to serialize themselves (e.g. a pydantic
     # BaseModel): dump with aliases so a model's camelCase alias generator reaches the wire.
     model_dump = getattr(payload, "model_dump", None)

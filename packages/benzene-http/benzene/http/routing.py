@@ -46,14 +46,19 @@ def routes_of(fn: Handler) -> list[tuple[str, str]]:
 
 
 def _compile(path: str) -> tuple[re.Pattern[str], tuple[str, ...]]:
+    # Escape the literal segments between placeholders so a regex metacharacter in a route
+    # (``.``, ``+``, ``(`` …) is matched literally — otherwise ``/users/me.json`` would also match
+    # ``/users/meXjson``. Only the ``{name}`` placeholders become a real pattern.
     params: list[str] = []
-
-    def sub(m: re.Match[str]) -> str:
+    parts: list[str] = []
+    last = 0
+    for m in _PARAM_RE.finditer(path):
+        parts.append(re.escape(path[last : m.start()]))
         params.append(m.group(1))
-        return f"(?P<{m.group(1)}>[^/]+)"
-
-    pattern = _PARAM_RE.sub(sub, path)
-    return re.compile("^" + pattern + "$"), tuple(params)
+        parts.append(f"(?P<{m.group(1)}>[^/]+)")
+        last = m.end()
+    parts.append(re.escape(path[last:]))
+    return re.compile("^" + "".join(parts) + "$"), tuple(params)
 
 
 @dataclass(frozen=True)
@@ -129,9 +134,7 @@ class HttpRouter:
         return self
 
     def _register(self, method: str, path: str, definition: HandlerDefinition) -> None:
-        self._endpoints.append(
-            HttpEndpoint(method, path, definition.topic, definition.version)
-        )
+        self._endpoints.append(HttpEndpoint(method, path, definition.topic, definition.version))
         # One handler may own several routes — register its definition once.
         self._definitions[(definition.topic, definition.version)] = definition
 

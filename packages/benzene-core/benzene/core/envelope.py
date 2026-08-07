@@ -27,7 +27,9 @@ VERSION_HEADER = "benzene-version"
 VERSION_HEADER_NAMES: tuple[str, ...] = (VERSION_HEADER, "version", "x-version")
 
 
-def resolve_version(headers: Mapping[str, str], names: tuple[str, ...] = VERSION_HEADER_NAMES) -> str:
+def resolve_version(
+    headers: Mapping[str, str], names: tuple[str, ...] = VERSION_HEADER_NAMES
+) -> str:
     """Read the message version from the first present header in ``names`` (versioning.md §2).
 
     Absent from all of them → ``""`` (the unversioned default). Headers are matched lower-case, as
@@ -63,13 +65,17 @@ class BenzeneMessageApplication:
 
     async def handle(self, request_envelope: dict[str, Any]) -> dict[str, Any]:
         topic = request_envelope.get("topic") or ""
-        headers = {
-            k.lower(): v for k, v in (request_envelope.get("headers") or {}).items()
-        }
+        headers = {k.lower(): v for k, v in (request_envelope.get("headers") or {}).items()}
         body = request_envelope.get("body") or ""
         version = resolve_version(headers)
 
-        parsed = json.loads(body) if body else {}
+        try:
+            parsed = json.loads(body) if body else {}
+        except (ValueError, TypeError):
+            # A malformed body is the caller's error, never a crash: the entry point must always
+            # return a response envelope so a transport (e.g. SQS partial-batch, /benzene/invoke)
+            # can classify it rather than throwing out of the adapter.
+            return encode_response(Result.bad_request("Request body is not valid JSON"))
         scope = self._container.create_scope()
         context = Context(topic, parsed, headers, scope, version)
 

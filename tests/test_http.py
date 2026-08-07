@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import pytest
 from benzene.core import message
-from benzene.http import BenzeneHttpApp, HttpRouter, http_endpoint
+from benzene.http import BenzeneHttpApp, HttpEndpoint, HttpRouter, http_endpoint
 from benzene.results import Result
 
 
@@ -188,3 +188,39 @@ def test_asgi_post_reads_streamed_body() -> None:
 
     start = asyncio.run(run())
     assert start["status"] == 201
+
+
+def test_route_literals_are_matched_literally_not_as_regex() -> None:
+    # A regex metacharacter in a route literal must match literally, not as a pattern.
+    ep = HttpEndpoint("GET", "/users/me.json", "users:me")
+    assert ep.match("GET", "/users/me.json") == {}
+    assert ep.match("GET", "/users/meXjson") is None  # the '.' must not match an arbitrary char
+    # Placeholders still capture a single segment.
+    assert HttpEndpoint("GET", "/orders/{id}", "orders").match("GET", "/orders/7") == {"id": "7"}
+
+
+def test_asgi_non_utf8_body_yields_400_not_a_crash() -> None:
+    app = build_app()
+
+    async def run() -> dict:
+        sent: list[dict] = []
+
+        async def receive() -> dict:
+            return {"type": "http.request", "body": b"\xff\xfe not utf8", "more_body": False}
+
+        async def send(message_: dict) -> None:
+            sent.append(message_)
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/orders",
+            "query_string": b"",
+            "headers": [],
+        }
+        await app(scope, receive, send)
+        return next(m for m in sent if m["type"] == "http.response.start")
+
+    # The host must never crash on request content: a non-UTF-8 body is a clean 400.
+    start = asyncio.run(run())
+    assert start["status"] == 400

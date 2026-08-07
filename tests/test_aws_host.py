@@ -15,7 +15,7 @@ import pytest
 pytest.importorskip("benzene.aws")
 
 from benzene.aws import AwsLambdaApp, to_lambda_handler
-from benzene.aws.testing import ApiGatewayRequestBuilder, SnsEventBuilder
+from benzene.aws.testing import ApiGatewayRequestBuilder, SnsEventBuilder, SqsEventBuilder
 from benzene.core import MessageHandlingError, Registry, message
 from benzene.http import HttpRouter, http_endpoint
 from benzene.results import Result
@@ -57,3 +57,24 @@ def test_sns_record_failure_raises_for_retry() -> None:
     # SNS is not partial-batch: a failing record raises so Lambda redelivers the whole event.
     with pytest.raises(MessageHandlingError):
         app.handle(event)
+
+
+def test_sqs_poison_record_is_isolated_not_a_whole_batch_crash() -> None:
+    seen: list[dict] = []
+
+    async def handler(request: dict) -> Result:
+        seen.append(request)
+        return Result.ok()
+
+    app = AwsLambdaApp(registry=Registry().register("greet", handler))
+    event = (
+        SqsEventBuilder()
+        .with_message("greet", "this is not json", message_id="bad")  # a poison, non-JSON body
+        .with_message("greet", {"ok": True}, message_id="good")
+        .build()
+    )
+    # The whole batch must not crash: only the poison record is reported for redelivery, and the
+    # good record is still processed (partial-batch response, not an all-or-nothing failure).
+    response = app.handle(event)
+    assert response["batchItemFailures"] == [{"itemIdentifier": "bad"}]
+    assert seen == [{"ok": True}]

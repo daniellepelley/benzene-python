@@ -30,12 +30,19 @@ def message_router(
 
         definition = selector(registry, context.topic, context.version)
         if definition is None:
-            context.result = Result.not_found(
-                f"No handler found for topic {context.topic}"
-            )
+            context.result = Result.not_found(f"No handler found for topic {context.topic}")
             return
 
-        request = to_request(definition.request_type, context.request)
+        # Mapping the payload onto the handler's declared type can fail (e.g. a required field is
+        # missing) — that is the caller's error, so classify it as bad-request rather than letting
+        # the TypeError crash the adapter (a distinct failure mode from a handler exception below).
+        try:
+            request = to_request(definition.request_type, context.request)
+        except Exception as ex:
+            name = getattr(definition.request_type, "__name__", "the request type")
+            context.result = Result.bad_request(f"Could not map request to {name}: {ex}")
+            return
+
         try:
             context.result = await definition.handler(request)
         except Exception as ex:  # domain code must not crash the transport adapter

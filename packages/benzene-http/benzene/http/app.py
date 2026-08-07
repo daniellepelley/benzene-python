@@ -91,9 +91,7 @@ class BenzeneHttpApp:
 
         match = self._router.match(method, path)
         if match is None:
-            return self._error(
-                Status.NOT_FOUND, f"No route for {method.upper()} {path}"
-            )
+            return self._error(Status.NOT_FOUND, f"No route for {method.upper()} {path}")
         endpoint, path_params = match
         # A ``{version}`` path segment (e.g. /v{version}/orders/{id}) drives handler selection, so
         # pull it out of the captured params before they merge into the request body (versioning.md §2).
@@ -197,7 +195,9 @@ class BenzeneHttpApp:
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         """ASGI entry point (HTTP scope only)."""
         if scope.get("type") != "http":
-            raise ValueError(f"BenzeneHttpApp only handles 'http' scopes, got {scope.get('type')!r}")
+            raise ValueError(
+                f"BenzeneHttpApp only handles 'http' scopes, got {scope.get('type')!r}"
+            )
 
         headers = {
             key.decode("latin-1").lower(): value.decode("latin-1")
@@ -218,8 +218,7 @@ class BenzeneHttpApp:
                 "type": "http.response.start",
                 "status": response.status_code,
                 "headers": [
-                    [k.encode("latin-1"), v.encode("latin-1")]
-                    for k, v in response.headers.items()
+                    [k.encode("latin-1"), v.encode("latin-1")] for k, v in response.headers.items()
                 ],
             }
         )
@@ -241,4 +240,10 @@ async def _read_body(receive: Any) -> str:
             break
         chunks.append(message.get("body", b"") or b"")
         more = message.get("more_body", False)
-    return b"".join(chunks).decode("utf-8")
+    raw = b"".join(chunks)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        # The host must never crash on request content: a non-UTF-8 body can't be a valid Benzene
+        # payload, so hand back a string the downstream JSON guard rejects as bad-request instead.
+        return raw.decode("utf-8", errors="replace")

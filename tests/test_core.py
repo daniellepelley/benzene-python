@@ -155,7 +155,9 @@ def test_camelcase_payload_round_trips_through_the_envelope() -> None:
     app = BenzeneMessageApplication(Registry().add(echo))
     # Send camelCase in; expect camelCase back out.
     response = asyncio.run(
-        app.handle({"topic": "wire:echo", "headers": {}, "body": '{"orderId": "o9", "lineCount": 2}'})
+        app.handle(
+            {"topic": "wire:echo", "headers": {}, "body": '{"orderId": "o9", "lineCount": 2}'}
+        )
     )
     assert response["statusCode"] == Status.OK
     assert json.loads(response["body"]) == {"orderId": "o9", "lineCount": 2}
@@ -178,3 +180,65 @@ def test_registry_from_definitions_rejects_a_duplicate_pair() -> None:
 
     with pytest.raises(DuplicateHandlerError):
         Registry.from_definitions(Registry().register("dup", h), Registry().register("dup", h))
+
+
+# --- malformed-input robustness (the entry point must return a Result, never crash) ----------
+
+
+def test_malformed_json_body_is_bad_request_not_a_crash() -> None:
+    async def h(_request: dict) -> Result:
+        return Result.ok()
+
+    app = BenzeneMessageApplication(Registry().register("t", h))
+    response = asyncio.run(app.handle({"topic": "t", "headers": {}, "body": "{not json"}))
+    assert response["statusCode"] == Status.BAD_REQUEST
+
+
+def test_unmappable_request_is_bad_request_not_a_crash() -> None:
+    @dataclass
+    class Req:
+        a: str
+        b: int  # required, so a body omitting it can't be mapped
+
+    async def h(_request: Req) -> Result:
+        return Result.ok()
+
+    app = BenzeneMessageApplication(Registry().register("t", h, request_type=Req))
+    response = asyncio.run(app.handle({"topic": "t", "headers": {}, "body": '{"a": "x"}'}))
+    assert response["statusCode"] == Status.BAD_REQUEST
+
+
+def test_handler_exception_is_service_unavailable_not_bad_request() -> None:
+    # The mapping-failure guard must not swallow a real handler error into bad-request.
+    async def boom(_request: dict) -> Result:
+        raise RuntimeError("kaboom")
+
+    app = BenzeneMessageApplication(Registry().register("t", boom))
+    response = asyncio.run(app.handle({"topic": "t", "headers": {}, "body": "{}"}))
+    assert response["statusCode"] == Status.SERVICE_UNAVAILABLE
+
+
+def test_to_jsonable_serializes_the_declared_wire_scalar_types() -> None:
+    from datetime import datetime
+
+    # The schema layer advertises these as valid wire types; the serializer must not crash on them.
+    assert to_jsonable(datetime(2020, 1, 2, 3, 4, 5)) == "2020-01-02T03:04:05"
+    assert to_jsonable(b"hi") == "aGk="  # base64
+    assert sorted(to_jsonable({3, 1, 2})) == [1, 2, 3]  # set -> array
+
+
+def test_datetime_payload_round_trips_through_a_response_envelope() -> None:
+    from datetime import datetime
+
+    @dataclass
+    class Event:
+        id: str
+        at: datetime
+
+    async def h(_request: dict) -> Result:
+        return Result.ok(Event("e1", datetime(2020, 1, 1, 12, 0, 0)))
+
+    app = BenzeneMessageApplication(Registry().register("t", h))
+    response = asyncio.run(app.handle({"topic": "t", "headers": {}, "body": "{}"}))
+    assert response["statusCode"] == Status.OK
+    assert json.loads(response["body"]) == {"id": "e1", "at": "2020-01-01T12:00:00"}
