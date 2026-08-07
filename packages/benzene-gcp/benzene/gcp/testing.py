@@ -7,10 +7,11 @@ request or a Pub/Sub CloudEvent — in memory, so an example's tests dogfood the
 from __future__ import annotations
 
 import base64
-import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
+
+from benzene.core import encode_body
 
 from .functions import GcpFunctionsApp
 from .pubsub import TOPIC_ATTRIBUTE
@@ -38,7 +39,7 @@ class HttpRequestBuilder:
         return self
 
     def with_body(self, body: Any) -> HttpRequestBuilder:
-        self._body = body if isinstance(body, str) else json.dumps(_to_jsonable(body))
+        self._body = encode_body(body)
         return self
 
     def get_data(self, as_text: bool = False) -> Any:
@@ -68,7 +69,7 @@ class PubSubEventBuilder:
         return self
 
     def with_body(self, body: Any) -> PubSubEventBuilder:
-        self._body = body if isinstance(body, str) else json.dumps(_to_jsonable(body))
+        self._body = encode_body(body)
         return self
 
     def build(self) -> FakeCloudEvent:
@@ -126,11 +127,3 @@ class GcpFunctionsTestHost:
         if body is not None:
             builder.with_body(body)
         self._app.handle_pubsub(builder.build())
-
-
-def _to_jsonable(value: Any) -> Any:
-    from dataclasses import asdict, is_dataclass
-
-    if is_dataclass(value) and not isinstance(value, type):
-        return asdict(value)
-    return value

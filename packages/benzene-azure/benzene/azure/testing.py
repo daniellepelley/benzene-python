@@ -6,25 +6,16 @@ Service Bus, and Event Hub trigger inputs, in memory — no Azure SDK required.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
+
+from benzene.core import encode_body
 
 from .app import AzureFunctionsApp, AzureHttpResponse
 
 if TYPE_CHECKING:
     from benzene.core import Scope
-
-
-def _body_text(value: Any) -> str:
-    from dataclasses import asdict, is_dataclass
-
-    if isinstance(value, str):
-        return value
-    if is_dataclass(value) and not isinstance(value, type):
-        return json.dumps(asdict(value))
-    return json.dumps(value)
 
 
 @dataclass
@@ -55,12 +46,16 @@ def _with_topic(topic: str, headers: dict[str, str] | None) -> dict[str, str]:
     return props
 
 
-def service_bus_message(topic: str, body: Any, headers: dict[str, str] | None = None) -> FakeServiceBusMessage:
-    return FakeServiceBusMessage(_body_text(body).encode("utf-8"), _with_topic(topic, headers))
+def service_bus_message(
+    topic: str, body: Any, headers: dict[str, str] | None = None
+) -> FakeServiceBusMessage:
+    return FakeServiceBusMessage(encode_body(body).encode("utf-8"), _with_topic(topic, headers))
 
 
-def event_hub_event(topic: str, body: Any, headers: dict[str, str] | None = None) -> FakeEventHubEvent:
-    return FakeEventHubEvent(_body_text(body).encode("utf-8"), _with_topic(topic, headers))
+def event_hub_event(
+    topic: str, body: Any, headers: dict[str, str] | None = None
+) -> FakeEventHubEvent:
+    return FakeEventHubEvent(encode_body(body).encode("utf-8"), _with_topic(topic, headers))
 
 
 class AzureFunctionsTestHost:
@@ -85,10 +80,12 @@ class AzureFunctionsTestHost:
             path=path,
             query_string=urlencode(query or {}),
             headers=headers or {},
-            body="" if body is None else _body_text(body),
+            body="" if body is None else encode_body(body),
         )
 
-    def send_service_bus(self, topic: str, body: Any, headers: dict[str, str] | None = None) -> None:
+    def send_service_bus(
+        self, topic: str, body: Any, headers: dict[str, str] | None = None
+    ) -> None:
         self._app.handle_service_bus(service_bus_message(topic, body, headers))
 
     def send_event_hub(self, topic: str, body: Any, headers: dict[str, str] | None = None) -> None:

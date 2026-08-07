@@ -160,6 +160,10 @@ API. None touch the wire envelope, status vocabulary, or HTTP mapping (the inter
 - **Layered PyPI packages, not one-per-C#-project.** The distributions follow the meaningful
   adoption seams (see [`docs/packages.md`](docs/packages.md)); the assembly-only C# splits are folded
   in (e.g. `Benzene.Dependencies` → `benzene.core.dependencies`).
+- **The test builders serialize like the wire.** Every in-memory test-host builder
+  (`MessageBuilder`, and the AWS/GCP/Azure native-event builders) encodes a dataclass body through the
+  same `encode_body` policy the live transports use (camelCase fields — `orderId`, not `order_id`), so
+  a passing in-memory test reflects real cross-language traffic instead of masking an interop gap.
 
 ## Conformance
 

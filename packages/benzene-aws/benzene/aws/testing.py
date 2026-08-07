@@ -6,25 +6,16 @@ deliver, in memory, so an example's tests dogfood the real bindings.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from benzene.core import encode_body
 
 from .app import AwsLambdaApp
 from .events import TOPIC_ATTRIBUTE
 
 if TYPE_CHECKING:
     from benzene.core import Scope
-
-
-def _body(value: Any) -> str:
-    from dataclasses import asdict, is_dataclass
-
-    if isinstance(value, str):
-        return value
-    if is_dataclass(value) and not isinstance(value, type):
-        return json.dumps(asdict(value))
-    return json.dumps(value)
 
 
 class ApiGatewayRequestBuilder:
@@ -46,7 +37,7 @@ class ApiGatewayRequestBuilder:
         return self
 
     def with_body(self, body: Any) -> ApiGatewayRequestBuilder:
-        self._body = _body(body)
+        self._body = encode_body(body)
         return self
 
     def build(self) -> dict[str, Any]:
@@ -66,7 +57,11 @@ class SqsEventBuilder:
         self._records: list[dict[str, Any]] = []
 
     def with_message(
-        self, topic: str, body: Any, message_id: str | None = None, headers: dict[str, str] | None = None
+        self,
+        topic: str,
+        body: Any,
+        message_id: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> SqsEventBuilder:
         attrs = {TOPIC_ATTRIBUTE: {"stringValue": topic, "dataType": "String"}}
         for key, value in (headers or {}).items():
@@ -75,7 +70,7 @@ class SqsEventBuilder:
             {
                 "eventSource": "aws:sqs",
                 "messageId": message_id or f"msg-{len(self._records) + 1}",
-                "body": _body(body),
+                "body": encode_body(body),
                 "messageAttributes": attrs,
             }
         )
@@ -98,7 +93,10 @@ class SnsEventBuilder:
         for key, value in (headers or {}).items():
             attrs[str(key)] = {"Type": "String", "Value": str(value)}
         self._records.append(
-            {"EventSource": "aws:sns", "Sns": {"Message": _body(body), "MessageAttributes": attrs}}
+            {
+                "EventSource": "aws:sns",
+                "Sns": {"Message": encode_body(body), "MessageAttributes": attrs},
+            }
         )
         return self
 
@@ -159,8 +157,12 @@ class AwsLambdaTestHost:
         if body is not None:
             builder.with_body(body)
         result = self._app.handle(builder.build())
-        assert result is not None  # API Gateway always yields a response envelope (never None like SNS)
-        return ApiGatewayResponse(result["statusCode"], result.get("headers", {}), result.get("body", ""))
+        assert (
+            result is not None
+        )  # API Gateway always yields a response envelope (never None like SNS)
+        return ApiGatewayResponse(
+            result["statusCode"], result.get("headers", {}), result.get("body", "")
+        )
 
     def send_sqs(
         self,
@@ -179,7 +181,9 @@ class AwsLambdaTestHost:
 
     def send_sqs_event(self, event: dict[str, Any]) -> SqsBatchResponse:
         result = self._app.handle(event)
-        assert result is not None  # SQS always yields a partial-batch response (never None like SNS)
+        assert (
+            result is not None
+        )  # SQS always yields a partial-batch response (never None like SNS)
         return SqsBatchResponse.from_wire(result)
 
     def send_sns(self, topic: str, body: Any, headers: dict[str, str] | None = None) -> None:

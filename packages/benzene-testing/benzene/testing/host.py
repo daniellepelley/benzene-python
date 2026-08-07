@@ -8,10 +8,9 @@ event builders (e.g. ``benzene.gcp.testing``) on top of it.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from benzene.core import BenzeneMessageApplication, Registry
+from benzene.core import BenzeneMessageApplication, Registry, encode_body
 
 
 class MessageBuilder:
@@ -34,7 +33,7 @@ class MessageBuilder:
         return {
             "topic": self._topic,
             "headers": dict(self._headers),
-            "body": self._body if isinstance(self._body, str) else json.dumps(_to_jsonable(self._body)),
+            "body": encode_body(self._body),
         }
 
 
@@ -66,11 +65,3 @@ class InMemoryBenzeneHost:
         if body is not None:
             builder.with_body(body)
         return await self.send(builder.build())
-
-
-def _to_jsonable(value: Any) -> Any:
-    from dataclasses import asdict, is_dataclass
-
-    if is_dataclass(value) and not isinstance(value, type):
-        return asdict(value)
-    return value
