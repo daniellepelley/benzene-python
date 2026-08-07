@@ -72,6 +72,38 @@ issues.record(topic="order:create", status="service-unavailable", exception_type
 await feeds.publish_issues(issues.flush())   # deduplicated failure signatures; count is a delta
 ```
 
-Mirrors .NET's `Benzene.Mesh`, and contributes the `benzene.mesh` subpackage to the shared `benzene`
-namespace. The wire shapes (descriptor, TraceEvent, collector topics) are the cross-language mesh
-contract — a Python service and a .NET/Go/TypeScript one show up in the same mesh.
+## Run the Mesh Host (`benzene-mesh[host]`)
+
+`MeshCollector` is an ordinary Benzene service, so the **Mesh Host** turns it into a real, networked,
+config-driven mesh runtime — collector + aggregator + UI in one process. It needs the HTTP binding, so
+it lives behind the `host` extra (`pip install benzene-mesh[host]`); importing `benzene.mesh` for
+descriptors/tracing never pulls `benzene-http` in.
+
+```python
+from benzene.mesh.aggregator import MeshServiceEntry, MeshServiceRegistry
+from benzene.mesh.host import MeshHost, MeshHostConfig
+
+host = MeshHost(MeshHostConfig(
+    registry=MeshServiceRegistry([
+        MeshServiceEntry(name="orders",   base_url="http://orders:8080"),
+        MeshServiceEntry(name="payments", base_url="http://payments:8080"),
+    ]),
+    out_dir="mesh-artifacts",
+    ui_html="mesh-ui.html",
+))
+host.start_polling()          # timer-driven aggregation (the local/compose seam)
+# `host` is an ASGI app: /benzene/invoke is the networked collector (services POST their feeds here),
+# every other GET serves the emitted UI + artifacts. Run it under uvicorn/hypercorn.
+```
+
+Each pass HTTP-fetches every service's `/benzene/spec` + `/benzene/health`, queries the co-hosted
+collector, and emits the six mesh-UI artifacts. Services report in over HTTP with a `MeshFeedSender`
+over `benzene.http.InvokeMessageSender` (the outbound counterpart of `/benzene/invoke`). See
+[`deploy/mesh`](../../deploy/mesh) for a runnable multi-process stack + a browser-driven proof.
+
+---
+
+Mirrors .NET's `Benzene.Mesh` (+ its `Benzene.Mesh.Aggregator` / `deploy/Mesh/Benzene.Mesh.Host`), and
+contributes the `benzene.mesh` subpackage to the shared `benzene` namespace. The wire shapes
+(descriptor, TraceEvent, collector topics) are the cross-language mesh contract — a Python service and a
+.NET/Go/TypeScript one show up in the same mesh.
