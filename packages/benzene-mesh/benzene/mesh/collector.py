@@ -21,6 +21,7 @@ The ``benzene:mesh:query:*`` shapes follow the reference collector and are pinne
 
 from __future__ import annotations
 
+import copy
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -229,7 +230,9 @@ class MeshCollector:
                 }
                 for event in self._events
             ],
-            "issues": self._issues,
+            # Deep-copied: issue records are nested mutable dicts, and later ingests must not mutate a
+            # snapshot already handed out (nor, via restore, one collector leak into another).
+            "issues": copy.deepcopy(self._issues),
         }
 
     def restore(self, snapshot: dict[str, Any]) -> None:
@@ -271,7 +274,9 @@ class MeshCollector:
         ]
         # Rebuild the span-owner index from the restored events (it is not part of the snapshot).
         self._span_owner = {event.span_id: event.service for event in self._events}
-        self._issues = dict(snapshot.get("issues", {}))
+        # Deep-copied so the restored collector never shares nested issue dicts with the snapshot it
+        # was given (the JSON-file store hands back fresh parses; an in-memory snapshot would not).
+        self._issues = copy.deepcopy(snapshot.get("issues", {}))
 
     def _persisted(self, result: dict[str, Any]) -> dict[str, Any]:
         """Write the catalog through the store after a mutating ingest, then return ``result``."""

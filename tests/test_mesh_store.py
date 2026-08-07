@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from benzene.mesh import (
     CollectorStore,
     JsonFileCollectorStore,
@@ -153,14 +154,22 @@ def test_collector_rehydrates_from_its_store_on_construction(tmp_path: Path) -> 
 def test_collector_persists_after_every_mutating_ingest(tmp_path: Path) -> None:
     store = JsonFileCollectorStore(tmp_path / "state.json")
     c = MeshCollector(store=store)
+    # All four mutating ingests must write through the store, not just register/heartbeat.
     c.ingest_register({"service": "orders", "topics": [{"id": "order:create"}]})
     c.ingest_heartbeat({"service": "orders", "instanceId": "i1", "health": {"isHealthy": True}})
-    # The store reflects the latest state without any explicit save call from the caller.
+    c.ingest_traces(
+        {"events": [{"traceId": "t", "spanId": "s", "service": "orders", "topic": "order:create"}]}
+    )
+    c.ingest_issues({"service": "orders", "issues": [{"fingerprint": "f1", "count": 1}]})
+    # A fresh collector on the same store sees every feed reflected — proof all four saved.
+    reloaded = MeshCollector(store=store)
     saved = store.load()
     assert saved is not None
-    names = {s["name"] for s in saved["services"]}
-    assert names == {"orders"}
+    assert {s["name"] for s in saved["services"]} == {"orders"}
     assert saved["services"][0]["instances"][0]["instanceId"] == "i1"
+    assert saved["events"] and saved["events"][0]["spanId"] == "s"
+    assert "f1" in saved["issues"]
+    assert reloaded.query_fleet({})["issues"][0]["fingerprint"] == "f1"
 
 
 def test_restore_ignores_an_incompatible_snapshot_version() -> None:
@@ -170,3 +179,35 @@ def test_restore_ignores_an_incompatible_snapshot_version() -> None:
     # A future/foreign snapshot is ignored, leaving the existing catalog untouched.
     assert "orders" in {s["service"] for s in c.query_fleet({})["services"]}
     assert "ghost" not in {s["service"] for s in c.query_fleet({})["services"]}
+
+
+# --- snapshot isolation (a snapshot is a detached copy, not a live view) ----------------------
+
+
+def test_snapshot_is_isolated_from_later_mutation() -> None:
+    c = MeshCollector()
+    c.ingest_issues({"service": "o", "issues": [{"fingerprint": "f1", "count": 1}]})
+    snap = c.snapshot()
+    # A later ingest that merges the same fingerprint must not reach back into a handed-out snapshot.
+    c.ingest_issues({"service": "o", "issues": [{"fingerprint": "f1", "count": 5}]})
+    assert snap["issues"]["f1"]["count"] == 1
+
+
+def test_restore_does_not_share_issue_state_with_the_source() -> None:
+    source = MeshCollector()
+    source.ingest_issues({"service": "o", "issues": [{"fingerprint": "g", "count": 1}]})
+    restored = MeshCollector()
+    restored.restore(source.snapshot())
+    # Mutating the restored collector must not corrupt the source's issue records (no shared dicts).
+    restored.ingest_issues({"service": "o", "issues": [{"fingerprint": "g", "count": 9}]})
+    assert source.query_fleet({})["issues"][0]["count"] == 1
+
+
+def test_json_file_store_leaves_no_partial_file_when_save_fails(tmp_path: Path) -> None:
+    store = JsonFileCollectorStore(tmp_path / "state.json")
+    store.save({"version": 1, "ok": True})  # a good prior snapshot
+    with pytest.raises(TypeError):
+        store.save({"bad": object()})  # json.dump raises mid-write
+    # The atomic write must clean up its temp sibling and never replace the good file with a partial.
+    assert [p.name for p in tmp_path.iterdir()] == ["state.json"]
+    assert store.load() == {"version": 1, "ok": True}
