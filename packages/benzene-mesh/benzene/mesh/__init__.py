@@ -22,6 +22,10 @@ from .artifacts import (
     HttpMapping,
     MeshArtifactEmitter,
     ServiceCatalog,
+    TopologyEdge,
+    TopologySource,
+    UsageEntry,
+    UsageSource,
     spec_hash,
 )
 from .collector import (
@@ -82,6 +86,10 @@ __all__ = [
     "HttpMapping",
     "MeshArtifactEmitter",
     "ServiceCatalog",
+    "TopologyEdge",
+    "TopologySource",
+    "UsageEntry",
+    "UsageSource",
     "spec_hash",
     "HEARTBEAT_TOPIC",
     "Heartbeat",

@@ -28,9 +28,12 @@ Artifact                Derivation
 ``services/<n>.json``   the spine snapshot: ``specJson`` + ``specHash`` + ``health`` + ``error``
 ``topics.json``         union of the fleet's topics; **consumers** = handlers (spec + collector
                         providers) with HTTP mappings; **producers** = collector trace-parent callers
-``topology.json``       ``client → server`` edges from the collector's trace-parentage; ``source`` =
-                        ``"collector"``; latency/RPM stay ``null`` (no trace-source timing in this MVP)
-``usage.json``          per-topic invocation/status counts from the collector; ``source`` = ``"collector"``
+``topology.json``       ``client → server`` edges from the collector's trace-parentage (``source`` =
+                        ``"collector"``, latency/RPM ``null``); an optional external **topology source**
+                        (X-Ray) overlays richer edges (real RPM + p50/p95/p99 + error rate) per pair
+``usage.json``          per-topic invocation/status counts from the collector (``source`` =
+                        ``"collector"``); an optional external **usage source** (CloudWatch) supplies
+                        real per-(topic, transport, status) counts + ``avgDurationMs`` per topic it covers
 ``annotations.json``    human discussion threads — not derived; emitted empty unless seeded
 ======================  ==============================================================================
 
@@ -87,6 +90,85 @@ class HttpMapping:
 
     def to_payload(self) -> dict[str, str]:
         return {"method": self.method, "path": self.path}
+
+
+@dataclass(frozen=True)
+class TopologyEdge:
+    """One enriched ``client → server`` edge an external **topology source** contributes.
+
+    The ``topology.json`` edge shape, but sourced from an observability backend (X-Ray) rather than the
+    collector's trace-parentage — so it carries real timing the collector plane can't: a call rate
+    (:attr:`requests_per_minute`), an error ratio (:attr:`error_rate`), and latency percentiles. Its
+    :attr:`source` tag (e.g. ``"xray"``) rides with it so a merged ``topology.json`` keeps attribution,
+    mirroring .NET's ``Benzene.Mesh.Contracts.TopologyEdge``. Any metric the source can't supply is
+    ``None`` (rendered ``–`` by the mesh UI) — never guessed.
+    """
+
+    client: str
+    server: str
+    source: str
+    requests_per_minute: float | None = None
+    error_rate: float | None = None
+    p50_latency_ms: float | None = None
+    p95_latency_ms: float | None = None
+    p99_latency_ms: float | None = None
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "client": self.client,
+            "server": self.server,
+            "source": self.source,
+            "requestsPerMinute": self.requests_per_minute,
+            "errorRate": self.error_rate,
+            "p50LatencyMs": self.p50_latency_ms,
+            "p95LatencyMs": self.p95_latency_ms,
+            "p99LatencyMs": self.p99_latency_ms,
+        }
+
+
+@dataclass(frozen=True)
+class UsageEntry:
+    """One enriched usage count an external **usage source** contributes (the ``usage.json`` entry shape).
+
+    A count at the finest dimension combination the backend (CloudWatch) can supply — split by
+    :attr:`transport` and :attr:`status`, optionally with a mean :attr:`avg_duration_ms` — carrying its
+    own :attr:`source` tag (e.g. ``"cloudwatch"``) so a merged feed keeps attribution. A ``None``
+    dimension means the backend genuinely lacks it (not "all"), matching .NET's
+    ``Benzene.Mesh.Contracts.MeshUsageEntry``.
+    """
+
+    topic: str
+    count: int
+    source: str
+    version: str | None = None
+    service: str | None = None
+    transport: str | None = None
+    status: str | None = None
+    avg_duration_ms: float | None = None
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "topic": self.topic,
+            "version": self.version,
+            "service": self.service,
+            "transport": self.transport,
+            "status": self.status,
+            "count": self.count,
+            "avgDurationMs": self.avg_duration_ms,
+            "source": self.source,
+        }
+
+
+class TopologySource(Protocol):
+    """An external source of enriched topology edges (X-Ray) the emitter overlays on the collector plane."""
+
+    def topology(self) -> Sequence[TopologyEdge]: ...
+
+
+class UsageSource(Protocol):
+    """An external source of enriched usage entries (CloudWatch) the emitter overlays on the collector plane."""
+
+    def usage(self) -> Sequence[UsageEntry]: ...
 
 
 @dataclass(frozen=True)
@@ -167,6 +249,8 @@ class MeshArtifactEmitter:
         window_start: datetime | None = None,
         window_end: datetime | None = None,
         annotations: Sequence[Mapping[str, Any]] = (),
+        topology_source: TopologySource | None = None,
+        usage_source: UsageSource | None = None,
     ) -> None:
         self._services = list(services)
         self._collector = collector
@@ -179,6 +263,15 @@ class MeshArtifactEmitter:
         self._fleet_topics: dict[str, dict[str, Any]] = {
             str(entry["topic"]): entry for entry in self._fleet.get("topics", [])
         }
+        # Optional external enrichment planes (mesh.md §9 / .NET Benzene.Mesh.Aggregator layering): an
+        # X-Ray topology source and a CloudWatch usage source, each queried once here (as the collector
+        # is) so the build_* projections stay pure. Absent → the collector plane is used verbatim.
+        self._external_edges: list[TopologyEdge] = (
+            list(topology_source.topology()) if topology_source is not None else []
+        )
+        self._external_usage: list[UsageEntry] = (
+            list(usage_source.usage()) if usage_source is not None else []
+        )
 
     # --- manifest.json ------------------------------------------------------------------------
     def build_manifest(self) -> dict[str, Any]:
@@ -285,7 +378,14 @@ class MeshArtifactEmitter:
 
     # --- topology.json ------------------------------------------------------------------------
     def build_topology(self) -> dict[str, Any]:
-        """``client → server`` edges from the collector's trace-parentage consumer edges."""
+        """``client → server`` edges: the collector's trace-parentage baseline, overlaid by an X-Ray source.
+
+        The collector plane derives edges from trace parentage (``source: "collector"``, timing ``null``).
+        When a :class:`TopologySource` is wired, its richer edges (real RPM + latency percentiles, tagged
+        ``"xray"``) **take precedence per ``(client, server)`` pair**, and collector edges survive only for
+        pairs the external source did not observe — mirroring .NET's aggregator layering a fleet source over
+        the baseline (the richer edge wins; the baseline fills gaps). Deterministic: sorted by pair.
+        """
         edges: dict[tuple[str, str], _Edge] = {}
         for topic_id in self._fleet_topics:
             live = self._topic_live(topic_id)
@@ -300,10 +400,16 @@ class MeshArtifactEmitter:
                         edge.errors += live["errors"]
                     else:
                         edge.ambiguous = True
-        ordered = sorted(edges.items(), key=lambda item: item[0])
+        merged: dict[tuple[str, str], dict[str, Any]] = {
+            (client, server): self._edge_payload(client, server, edge)
+            for (client, server), edge in edges.items()
+        }
+        for external in self._external_edges:  # the external (X-Ray) edge wins its pair
+            merged[(external.client, external.server)] = external.to_payload()
+        ordered = sorted(merged.items(), key=lambda item: item[0])
         return {
             "generatedAtUtc": _iso(self._generated_at),
-            "edges": [self._edge_payload(client, server, edge) for (client, server), edge in ordered],
+            "edges": [payload for _key, payload in ordered],
         }
 
     def _edge_payload(self, client: str, server: str, edge: _Edge) -> dict[str, Any]:
@@ -328,12 +434,21 @@ class MeshArtifactEmitter:
 
     # --- usage.json ---------------------------------------------------------------------------
     def build_usage(self) -> dict[str, Any]:
-        """Per-topic exercise counts, split by status, from the collector's observed invocations."""
-        entries: list[dict[str, Any]] = []
+        """Per-topic exercise counts (collector), overlaid per-topic by an external CloudWatch usage source.
+
+        The collector plane counts observed invocations per (topic, status) (``source: "collector"``,
+        no transport/service/duration). When a :class:`UsageSource` is wired, it supplies richer entries
+        (real counts split by transport + status, with ``avgDurationMs``, tagged ``"cloudwatch"``): **for
+        every topic the external source reports, its entries replace the collector's** for that topic;
+        topics the external source doesn't cover keep their collector entries. This mirrors the .NET
+        aggregator merging usage adapters over the baseline, and keeps each entry's ``source`` attribution
+        (so one ``usage.json`` carries both planes). Deterministic: topics sorted, external order preserved.
+        """
+        collector_by_topic: dict[str, list[dict[str, Any]]] = {}
         for topic_id in sorted(self._fleet_topics):
             status_counts = self._topic_live(topic_id)["statusCounts"]
             for status in sorted(status_counts):
-                entries.append(
+                collector_by_topic.setdefault(topic_id, []).append(
                     {
                         "topic": topic_id,
                         "version": None,
@@ -345,6 +460,13 @@ class MeshArtifactEmitter:
                         "source": "collector",
                     }
                 )
+        external_by_topic: dict[str, list[dict[str, Any]]] = {}
+        for entry in self._external_usage:
+            external_by_topic.setdefault(entry.topic, []).append(entry.to_payload())
+
+        entries: list[dict[str, Any]] = []
+        for topic_id in sorted(set(collector_by_topic) | set(external_by_topic)):
+            entries.extend(external_by_topic.get(topic_id) or collector_by_topic.get(topic_id, []))
         return {
             "generatedAtUtc": _iso(self._generated_at),
             "windowStartUtc": _iso(self._window_start) if self._window_start else None,
