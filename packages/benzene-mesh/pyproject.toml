@@ -25,6 +25,13 @@ classifiers = [
 ]
 dependencies = ["benzene-core>=0.0.1"]
 
+# The mesh **host** surface (benzene.mesh.host + benzene.mesh.aggregator) — the networked collector,
+# the config-driven aggregator, and the ASGI UI server — additionally needs the HTTP binding. It is an
+# opt-in extra so installing benzene-mesh for descriptors/tracing/collector never pulls in benzene-http;
+# `pip install benzene-mesh[host]` turns the Mesh Host on. Mirrors benzene-grpc's `[transport]` extra.
+[project.optional-dependencies]
+host = ["benzene-http>=0.0.1"]
+
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"
 Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"

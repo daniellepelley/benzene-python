@@ -1,15 +1,28 @@
 """Outbound HTTP client — send a Benzene message to another service over HTTP (transport-bindings §2).
 
-The reverse direction of the HTTP binding: an :class:`HttpMessageSender` implements the
-:class:`~benzene.core.MessageSender` port by **POSTing the message body to the target service** and
-mapping the HTTP response back to a :class:`~benzene.results.Result` via the reverse status table
-(:func:`from_http`). Benzene headers are forwarded as HTTP headers (plus the reserved ``topic`` key),
-so correlation ids and trace context propagate end-to-end.
+Two shapes of outbound HTTP client live here, both implementing the
+:class:`~benzene.core.MessageSender` port:
+
+- :class:`HttpMessageSender` — the reverse direction of the *route-based* HTTP binding: it **POSTs the
+  message body** to the target service and maps the HTTP status back to a
+  :class:`~benzene.results.Result` via the reverse status table (:func:`from_http`). Use it against a
+  service that exposes a topic as its own HTTP route.
+- :class:`InvokeMessageSender` — the outbound counterpart of the Cloud Service Profile's
+  ``/benzene/invoke`` surface (design-principles §5.2, R4). It POSTs the **full wire envelope**
+  (``{topic, headers, body}``) to one ``/benzene/invoke`` URL and reads the **response envelope** back,
+  so the domain status travels *inside* the envelope (``/benzene/invoke`` always answers HTTP 200 for a
+  processed message). This is what a service uses to report mesh feeds to a collector host, or to call
+  any peer uniformly regardless of that peer's routes.
+
+Benzene headers are forwarded as HTTP headers (plus, for :class:`HttpMessageSender`, the reserved
+``topic`` key), so correlation ids and trace context propagate end-to-end.
 
 The actual HTTP call is an **injectable transport** — an ``async (url, headers, body) -> HttpReply``
 callable — so a test drives the sender with a fake and no network. The default transport uses the
 standard library (``urllib`` on a worker thread), so the sender works with **zero extra dependencies**;
-pass an ``httpx``-backed transport for connection pooling in production.
+pass an ``httpx``-backed transport for connection pooling in production. :func:`stdlib_get_transport`
+is the read-only companion (an ``async (url) -> HttpReply`` GET) an aggregator uses to fetch a peer's
+``/benzene/spec`` and ``/benzene/health`` documents.
 """
 
 from __future__ import annotations
@@ -117,3 +130,94 @@ def stdlib_transport(*, timeout: float = 30.0) -> HttpTransport:
         return await asyncio.to_thread(_post)
 
     return transport
+
+
+#: The injectable HTTP read: ``await get(url) -> HttpReply`` (a GET, no request body).
+HttpGet = Callable[[str], Awaitable[HttpReply]]
+
+
+def stdlib_get_transport(*, timeout: float = 10.0, headers: dict[str, str] | None = None) -> HttpGet:
+    """A zero-dependency :data:`HttpGet` using ``urllib`` on a worker thread (GET).
+
+    A 4xx/5xx is returned as an :class:`HttpReply` (status + body), *not* raised — an aggregator must
+    tell a genuinely unreachable service (a connection error, which does raise :class:`OSError`) apart
+    from one that answered ``503`` with a valid unhealthy ``/benzene/health`` body.
+    """
+
+    base_headers = {"accept": "application/json", **(headers or {})}
+
+    async def get(url: str) -> HttpReply:
+        def _get() -> HttpReply:
+            request = urllib.request.Request(url, headers=base_headers, method="GET")
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return HttpReply(response.status, response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:  # a 4xx/5xx still carries a body worth reading
+                return HttpReply(exc.code, exc.read().decode("utf-8"))
+
+        return await asyncio.to_thread(_get)
+
+    return get
+
+
+class InvokeMessageSender:
+    """A :class:`~benzene.core.MessageSender` that POSTs a wire envelope to ``/benzene/invoke``.
+
+    The outbound counterpart of the profile's ``/benzene/invoke`` surface (R4): the message is wrapped
+    in the wire envelope ``{topic, headers, body}`` and POSTed to the resolved invoke URL, and the
+    **response envelope** is mapped back to a :class:`~benzene.results.Result`. Because ``/benzene/invoke``
+    answers HTTP 200 for any *processed* message, the domain outcome is read from the response
+    envelope's ``statusCode`` — not the HTTP status — so a ``not-found``/``service-unavailable`` handler
+    result round-trips faithfully.
+
+    ``url_for`` resolves a topic to the target's invoke URL — a single URL string (every topic goes to
+    the same ``/benzene/invoke``), a ``{topic: url}`` mapping, or a ``topic -> url`` callable — so one
+    sender can fan a fleet's topics out to different peers. Headers (e.g. a forwarded ``traceparent``)
+    ride inside the envelope, so trace context propagates across the hop.
+    """
+
+    def __init__(
+        self,
+        url_for: UrlFor,
+        *,
+        transport: HttpTransport | None = None,
+    ) -> None:
+        self._url_for = url_for
+        self._transport = transport or stdlib_transport()
+
+    async def send_message(
+        self, topic: str, message: Any, headers: dict[str, str] | None = None
+    ) -> Result:
+        url = self._resolve_url(topic)
+        envelope = json.dumps(
+            {"topic": topic, "headers": headers or {}, "body": encode_body(message)}
+        )
+        reply = await self._transport(url, {"content-type": "application/json"}, envelope)
+        return _envelope_to_result(reply)
+
+    def _resolve_url(self, topic: str) -> str:
+        target = self._url_for
+        if callable(target):
+            return target(topic)
+        if isinstance(target, Mapping):
+            if topic not in target:
+                raise KeyError(f"No invoke URL configured for topic {topic!r} in the InvokeMessageSender map")
+            return target[topic]
+        return str(target)
+
+
+def _envelope_to_result(reply: HttpReply) -> Result:
+    """Map a ``/benzene/invoke`` HTTP reply (an envelope, or a transport-level error) to a Result."""
+    if reply.status_code >= 400:
+        # A transport-level failure (malformed envelope → 400, host down → mapped by the transport):
+        # the message was never processed, so surface it as the reverse-mapped HTTP status.
+        return Result.failure(from_http(reply.status_code))
+    envelope = _parse(reply.body)
+    if not isinstance(envelope, dict) or "statusCode" not in envelope:
+        return Result.failure(from_http(reply.status_code))
+    status = str(envelope["statusCode"])
+    payload = _parse(envelope.get("body") or "")
+    if is_successful(status):
+        return Result(status, payload)
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    return Result.failure(status, detail) if detail else Result.failure(status)
