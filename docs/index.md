@@ -14,6 +14,8 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 - **[Publishing](publishing.md)** — how the ten packages are released to PyPI (trusted publishing).
 - **[Cloud Service Profile conformance](cloud-service-profile.md)** — how the port satisfies the
   profile's R1–R8, mapped to the API and the test that proves each.
+- **[Mesh on AWS — plan](mesh-aws-plan.md)** — the sequenced plan for a multi-service mesh deployed to
+  AWS (thin poller, Fargate collector, reused mesh-ui, Terraform).
 
 ## Reference
 
