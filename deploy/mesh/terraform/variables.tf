@@ -69,6 +69,12 @@ variable "ingress_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "persist_state" {
+  description = "Give the collector a durable EFS volume (mounted at /data) so the fleet view survives a task restart. Off keeps the catalog purely in-memory (rebuilt from the fleet within one poll interval)."
+  type        = bool
+  default     = true
+}
+
 variable "tags" {
   description = "Extra tags applied to every resource."
   type        = map(string)

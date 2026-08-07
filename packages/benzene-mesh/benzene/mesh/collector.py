@@ -30,6 +30,10 @@ from benzene.core import Handler, Registry
 from benzene.results import Result, is_successful
 
 from .feeds import HEARTBEAT_TOPIC, ISSUES_TOPIC, REGISTER_TOPIC, TRACES_TOPIC
+from .store import CollectorStore, NullCollectorStore
+
+# Bumped when the snapshot shape changes incompatibly; an older/newer snapshot is ignored on load.
+_SNAPSHOT_VERSION = 1
 
 # Query topics (the collector's read models — one collector's shapes, pinned by the fixtures).
 QUERY_FLEET_TOPIC = "benzene:mesh:query:fleet"
@@ -86,14 +90,24 @@ class _Event:
 
 
 class MeshCollector:
-    """In-memory catalog: ingest the feeds, derive the fleet. One instance per collector."""
+    """The catalog: ingest the feeds, derive the fleet. One instance per collector.
 
-    def __init__(self) -> None:
+    In-memory by default. Pass a :class:`~benzene.mesh.CollectorStore` to make the catalog durable:
+    the collector restores from it on construction and writes a fresh snapshot after every mutating
+    ingest, so a restarted host rehydrates the fleet it already knew. The default store keeps nothing,
+    so tests and single runs behave exactly as before and pay nothing.
+    """
+
+    def __init__(self, *, store: CollectorStore | None = None) -> None:
         self._services: dict[str, _Service] = {}
         self._topics: set[str] = set()  # every topic ever seen (registered or traced); grows only
         self._events: list[_Event] = []
         self._span_owner: dict[str, str] = {}  # span id -> the service that emitted it
         self._issues: dict[str, dict[str, Any]] = {}  # fingerprint -> merged issue
+        self._store: CollectorStore = store or NullCollectorStore()
+        saved = self._store.load()
+        if saved is not None:
+            self.restore(saved)
 
     # --- ingest ----------------------------------------------------------------------------
     def ingest_register(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -104,7 +118,7 @@ class MeshCollector:
         record.has_descriptor = True
         record.descriptor_hash = body.get("descriptorHash")
         self._topics.update(record.provided)
-        return {"accepted": 1}
+        return self._persisted({"accepted": 1})
 
     def ingest_heartbeat(self, body: dict[str, Any]) -> dict[str, Any]:
         service = _require(body, "service")
@@ -115,7 +129,7 @@ class MeshCollector:
             healthy=bool(health.get("isHealthy", False)),
             descriptor_hash=body.get("descriptorHash"),
         )
-        return {"accepted": 1}
+        return self._persisted({"accepted": 1})
 
     def ingest_traces(self, body: dict[str, Any]) -> dict[str, Any]:
         events = body.get("events") or []
@@ -132,7 +146,7 @@ class MeshCollector:
             self._span_owner[event.span_id] = event.service
             self._topics.add(event.topic)
             self._service(event.service)  # a traced service becomes known (possibly anonymous)
-        return {"accepted": len(events)}
+        return self._persisted({"accepted": len(events)})
 
     def ingest_issues(self, body: dict[str, Any]) -> dict[str, Any]:
         service = _require(body, "service")
@@ -144,7 +158,7 @@ class MeshCollector:
                 continue  # skip an unidentifiable entry, never reject the batch for it
             self._merge_issue(str(fingerprint), issue)
             accepted += 1
-        return {"accepted": accepted}
+        return self._persisted({"accepted": accepted})
 
     def _merge_issue(self, fingerprint: str, issue: dict[str, Any]) -> None:
         incoming_exemplars = list(issue.get("exemplarTraceIds", []))
@@ -162,13 +176,107 @@ class MeshCollector:
                 existing[key] = value
         existing["count"] += int(issue.get("count", 0))
         combined = existing["exemplarTraceIds"] + [
-            trace_id for trace_id in incoming_exemplars if trace_id not in existing["exemplarTraceIds"]
+            trace_id
+            for trace_id in incoming_exemplars
+            if trace_id not in existing["exemplarTraceIds"]
         ]
         existing["exemplarTraceIds"] = combined[-_MAX_EXEMPLARS:]
         if "firstSeen" in issue:
-            existing["firstSeen"] = min(existing.get("firstSeen", issue["firstSeen"]), issue["firstSeen"])
+            existing["firstSeen"] = min(
+                existing.get("firstSeen", issue["firstSeen"]), issue["firstSeen"]
+            )
         if "lastSeen" in issue:
-            existing["lastSeen"] = max(existing.get("lastSeen", issue["lastSeen"]), issue["lastSeen"])
+            existing["lastSeen"] = max(
+                existing.get("lastSeen", issue["lastSeen"]), issue["lastSeen"]
+            )
+
+    # --- persistence -----------------------------------------------------------------------
+    def snapshot(self) -> dict[str, Any]:
+        """The whole catalog as a JSON-able dict — what a :class:`CollectorStore` persists.
+
+        ``_span_owner`` is not stored: it is a pure index of ``_events`` and is rebuilt on
+        :meth:`restore`, so the snapshot stays the single source of truth with nothing to drift.
+        """
+        return {
+            "version": _SNAPSHOT_VERSION,
+            "services": [
+                {
+                    "name": record.name,
+                    "hasDescriptor": record.has_descriptor,
+                    "descriptorHash": record.descriptor_hash,
+                    "provided": record.provided,
+                    "reportedIssues": record.reported_issues,
+                    "instances": [
+                        {
+                            "instanceId": instance_id,
+                            "healthy": instance.healthy,
+                            "descriptorHash": instance.descriptor_hash,
+                        }
+                        for instance_id, instance in record.instances.items()
+                    ],
+                }
+                for record in self._services.values()
+            ],
+            "topics": sorted(self._topics),
+            "events": [
+                {
+                    "traceId": event.trace_id,
+                    "spanId": event.span_id,
+                    "parentSpanId": event.parent_span_id,
+                    "service": event.service,
+                    "topic": event.topic,
+                    "status": event.status,
+                }
+                for event in self._events
+            ],
+            "issues": self._issues,
+        }
+
+    def restore(self, snapshot: dict[str, Any]) -> None:
+        """Replace the catalog with a snapshot from :meth:`snapshot`.
+
+        A snapshot from an incompatible ``version`` is ignored (the catalog is left empty and refills
+        from the fleet) rather than half-loaded into an inconsistent state.
+        """
+        if snapshot.get("version") != _SNAPSHOT_VERSION:
+            return
+        self._services = {}
+        for entry in snapshot.get("services", []):
+            record = _Service(
+                name=str(entry["name"]),
+                has_descriptor=bool(entry.get("hasDescriptor", False)),
+                descriptor_hash=entry.get("descriptorHash"),
+                provided=list(entry.get("provided", [])),
+                reported_issues=bool(entry.get("reportedIssues", False)),
+                instances={
+                    str(inst["instanceId"]): _Instance(
+                        healthy=bool(inst.get("healthy", False)),
+                        descriptor_hash=inst.get("descriptorHash"),
+                    )
+                    for inst in entry.get("instances", [])
+                },
+            )
+            self._services[record.name] = record
+        self._topics = set(snapshot.get("topics", []))
+        self._events = [
+            _Event(
+                trace_id=str(raw.get("traceId", "")),
+                span_id=str(raw.get("spanId", "")),
+                parent_span_id=raw.get("parentSpanId"),
+                service=str(raw.get("service", "")),
+                topic=str(raw.get("topic", "")),
+                status=str(raw.get("status", "")),
+            )
+            for raw in snapshot.get("events", [])
+        ]
+        # Rebuild the span-owner index from the restored events (it is not part of the snapshot).
+        self._span_owner = {event.span_id: event.service for event in self._events}
+        self._issues = dict(snapshot.get("issues", {}))
+
+    def _persisted(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Write the catalog through the store after a mutating ingest, then return ``result``."""
+        self._store.save(self.snapshot())
+        return result
 
     # --- queries ---------------------------------------------------------------------------
     def query_fleet(self, _body: dict[str, Any]) -> dict[str, Any]:

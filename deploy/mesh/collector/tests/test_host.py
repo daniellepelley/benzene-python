@@ -9,8 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
-from benzene.mesh import CallableServiceSource, MeshCollector, MeshPoller
+from benzene.mesh import (
+    CallableServiceSource,
+    JsonFileCollectorStore,
+    MeshCollector,
+    MeshPoller,
+)
 
 from collector.config import load_config
 from collector.host import build_mesh_host, run_poll_loop
@@ -70,9 +76,46 @@ def test_poll_loop_folds_a_source_then_stops() -> None:
 
 def test_config_parses_inline_services() -> None:
     config = load_config(
-        {"MESH_SERVICES": json.dumps(
-            {"pollIntervalSeconds": 15, "services": [{"name": "orders", "baseUrl": "https://orders.svc"}]}
-        )}
+        {
+            "MESH_SERVICES": json.dumps(
+                {
+                    "pollIntervalSeconds": 15,
+                    "services": [{"name": "orders", "baseUrl": "https://orders.svc"}],
+                }
+            )
+        }
     )
     assert config.poll_interval_seconds == 15
     assert [s.name for s in config.sources] == ["orders"]
+    assert config.store is None  # no MESH_STORE_PATH → the catalog stays in-memory
+
+
+def test_config_builds_a_file_store_when_a_store_path_is_set(tmp_path: Path) -> None:
+    config = load_config(
+        {
+            "MESH_SERVICES": json.dumps({"services": []}),
+            "MESH_STORE_PATH": str(tmp_path / "state.json"),
+        }
+    )
+    assert isinstance(config.store, JsonFileCollectorStore)
+    assert config.store.path == tmp_path / "state.json"
+
+
+def test_host_backed_by_a_store_survives_a_rebuild(tmp_path: Path) -> None:
+    store = JsonFileCollectorStore(tmp_path / "state.json")
+
+    # A service registers against a host whose collector persists through the store...
+    first = build_mesh_host(sources=[], collector=MeshCollector(store=store))
+    register = asyncio.run(
+        first.app.handle(
+            "POST",
+            "/mesh/register",
+            body=json.dumps({"service": "orders", "topics": [{"id": "orders:place"}]}),
+        )
+    )
+    assert register.status_code == 200
+
+    # ...and a fresh host (a redeployed task) rehydrates that service from the same store.
+    second = build_mesh_host(sources=[], collector=MeshCollector(store=store))
+    fleet = asyncio.run(second.app.handle("GET", "/mesh/fleet"))
+    assert "orders" in {s["service"] for s in json.loads(fleet.body)["services"]}

@@ -168,10 +168,18 @@ resource "aws_ecs_task_definition" "collector" {
       portMappings = [
         { containerPort = var.container_port, protocol = "tcp" }
       ]
-      environment = [
-        { name = "PORT", value = tostring(var.container_port) },
-        { name = "MESH_SERVICES", value = local.effective_mesh_services }
-      ]
+      environment = concat(
+        [
+          { name = "PORT", value = tostring(var.container_port) },
+          { name = "MESH_SERVICES", value = local.effective_mesh_services },
+        ],
+        local.persist ? [
+          { name = "MESH_STORE_PATH", value = "${local.state_mount}/${local.state_file}" }
+        ] : []
+      )
+      mountPoints = local.persist ? [
+        { sourceVolume = "state", containerPath = local.state_mount, readOnly = false }
+      ] : []
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -182,6 +190,23 @@ resource "aws_ecs_task_definition" "collector" {
       }
     }
   ])
+
+  # The EFS-backed volume the collector snapshots to (only when persistence is on).
+  dynamic "volume" {
+    for_each = local.persist ? [1] : []
+    content {
+      name = "state"
+      efs_volume_configuration {
+        file_system_id     = aws_efs_file_system.state[0].id
+        transit_encryption = "ENABLED"
+        authorization_config {
+          access_point_id = aws_efs_access_point.state[0].id
+          iam             = "DISABLED"
+        }
+      }
+    }
+  }
+
   tags = local.tags
 }
 
@@ -204,6 +229,7 @@ resource "aws_ecs_service" "collector" {
     container_port   = var.container_port
   }
 
-  depends_on = [aws_lb_listener.http]
+  # The mount targets must exist before a task tries to mount the volume.
+  depends_on = [aws_lb_listener.http, aws_efs_mount_target.state]
   tags       = local.tags
 }

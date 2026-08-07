@@ -44,10 +44,13 @@ Lambda, each with `StandardPaths` + `trace_middleware` + traceparent propagation
 the collector (so the graph has real consumer edges). Built on the shared example domain. *(Fleet
 example code is AWS-independent and can land first; deploy needs Phase 0.)*
 
-**Phase 2 — the Fargate collector.** Package the collector as a container: the `MeshPoller` on a timer
-(pull spec+health) **plus** an ingest endpoint for pushed traces (SNS→SQS→collector), a durable store
-(a `CollectorStore` seam over the mounted volume — see task), and an HTTP surface exposing `query:*`.
-Terraform for the Fargate service, task role, and the volume/EFS.
+**Phase 2 — the Fargate collector.** *(done.)* The collector is packaged as a container: the
+`MeshPoller` on a timer (pull spec+health) **plus** HTTP ingest routes for pushed traces/register/
+heartbeat/issues, and an HTTP surface exposing `query:*`. Persistence is a `CollectorStore` seam —
+`NullCollectorStore` (in-memory default, for tests) and `JsonFileCollectorStore` (atomic JSON snapshot
+on a mounted volume); the collector restores on boot and saves after each ingest. Terraform stands up
+the Fargate service, task role, and an EFS volume mounted at `/data` (gated on `persist_state`), so a
+replaced task rehydrates the fleet it already knew.
 
 **Phase 3 — topology + UI.** Emit `manifest.json` / per-service JSON / `topology.json` in the shape the
 main-repo `mesh-ui` renders (**open item**: inspect `mesh-ui`'s expected schema and add an artifact
@@ -73,6 +76,6 @@ optionally a CI deploy workflow (OIDC to AWS, gated/manual).
   Python collector emits exactly what `mesh-ui` reads. Needs a look at the main-repo `mesh-ui`.
 - **Consumer edges need traces** — pull gives identity/topics/health; the call graph needs pushed
   traces. The fleet pushes traces to the collector (hybrid), which the collector already supports.
-- **Collector persistence** — Fargate + volume mirrors .NET; an `CollectorStore` seam keeps the
-  in-memory default for tests and swaps to the volume in the container.
+- **Collector persistence** — *done.* Fargate + EFS volume mirrors .NET; the `CollectorStore` seam
+  keeps the in-memory default for tests and swaps to a JSON snapshot on the volume in the container.
 - **First-ever real AWS run** — Phase 0 is the real risk retirement; do it before the mesh phases.

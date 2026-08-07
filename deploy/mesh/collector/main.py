@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import os
 
+from benzene.mesh import MeshCollector
+
 from .config import load_config
 from .host import build_mesh_host, run_poll_loop
 
@@ -19,7 +21,9 @@ async def serve() -> None:
     import uvicorn  # a container-only dependency (see requirements.txt), imported lazily
 
     config = load_config()
-    host = build_mesh_host(config.sources)
+    # With a store configured, the collector rehydrates the last snapshot on construction.
+    collector = MeshCollector(store=config.store) if config.store else None
+    host = build_mesh_host(config.sources, collector=collector)
     port = int(os.environ.get("PORT", "8080"))
 
     server = uvicorn.Server(

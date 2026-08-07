@@ -20,7 +20,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from benzene.mesh import HttpServiceSource
+from benzene.mesh import CollectorStore, HttpServiceSource, JsonFileCollectorStore
 
 DEFAULT_CONFIG_PATH = "/etc/mesh/mesh.json"
 DEFAULT_POLL_INTERVAL = 30.0
@@ -30,10 +30,15 @@ DEFAULT_POLL_INTERVAL = 30.0
 class MeshConfig:
     sources: list[HttpServiceSource]
     poll_interval_seconds: float
+    store: CollectorStore | None = None
 
 
 def load_config(env: Mapping[str, str] | None = None) -> MeshConfig:
-    """Load the fleet config from ``MESH_CONFIG`` (a file) or ``MESH_SERVICES`` (inline JSON)."""
+    """Load the fleet config from ``MESH_CONFIG`` (a file) or ``MESH_SERVICES`` (inline JSON).
+
+    ``MESH_STORE_PATH``, when set, points the collector at a durable snapshot file on the mounted
+    volume, so the fleet view survives a task restart; unset keeps the catalog purely in-memory.
+    """
     env = os.environ if env is None else env
     raw = _read_raw(env)
     services = raw.get("services", [])
@@ -48,7 +53,9 @@ def load_config(env: Mapping[str, str] | None = None) -> MeshConfig:
         for entry in services
     ]
     interval = float(raw.get("pollIntervalSeconds", DEFAULT_POLL_INTERVAL))
-    return MeshConfig(sources=sources, poll_interval_seconds=interval)
+    store_path = env.get("MESH_STORE_PATH")
+    store = JsonFileCollectorStore(store_path) if store_path else None
+    return MeshConfig(sources=sources, poll_interval_seconds=interval, store=store)
 
 
 def _read_raw(env: Mapping[str, str]) -> dict:

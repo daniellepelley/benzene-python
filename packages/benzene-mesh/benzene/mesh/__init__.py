@@ -61,6 +61,11 @@ from .poller import (
     ServiceSource,
 )
 from .schema import Schema, json_schema
+from .store import (
+    CollectorStore,
+    JsonFileCollectorStore,
+    NullCollectorStore,
+)
 from .trace import (
     InMemoryTraceExporter,
     QueueTraceExporter,
@@ -86,6 +91,7 @@ __all__ = [
     "CollectorBadRequest",
     "CollectorError",
     "CollectorNotFound",
+    "CollectorStore",
     "DescriptorSource",
     "HEARTBEAT_TOPIC",
     "Heartbeat",
@@ -94,9 +100,11 @@ __all__ = [
     "Issue",
     "IssueAggregator",
     "IssueBatch",
+    "JsonFileCollectorStore",
     "MESH_TOPIC",
     "MeshCollector",
     "MeshFeedSender",
+    "NullCollectorStore",
     "QUERY_FLEET_TOPIC",
     "QUERY_SERVICE_TOPIC",
     "QUERY_TOPIC_TOPIC",

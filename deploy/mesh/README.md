@@ -112,11 +112,26 @@ Logs: `aws logs tail "$(terraform output -raw log_group)" --follow`.
   optionally `/mesh/register`, `/mesh/heartbeat`, `/mesh/issues`). Consumer edges are derived from the
   trace parentage — point each service's `MeshFeedSender` (or an HTTP `MessageSender`) at these routes.
 
+## Persistence
+
+The collector keeps its fleet view in memory. So it survives a replaced Fargate task, the stack gives
+it a durable **EFS volume** mounted at `/data` and sets `MESH_STORE_PATH=/data/mesh-state.json`; the
+collector snapshots there after every ingest and rehydrates on the next boot (see
+[`benzene.mesh.JsonFileCollectorStore`](../../docs/reference/mesh.md#persistence--collectorstore)).
+Access is by EFS access point over NFS from the task's security group only, transit-encrypted.
+
+It is on by default; set `-var="persist_state=false"` to skip the EFS entirely and run purely
+in-memory (the catalog refills from the fleet within one poll interval). Running the container by hand,
+export `MESH_STORE_PATH` to point at a writable path (unset keeps it in-memory).
+
 ## Tear down
 
 ```bash
 terraform destroy
 ```
+
+The state EFS is created and destroyed with the stack, so `destroy` takes the persisted snapshot with
+it — a fresh `apply` starts from an empty catalog and refills from the fleet.
 
 ## Next
 
