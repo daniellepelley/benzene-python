@@ -42,7 +42,13 @@ from benzene.core import Handler
 from benzene.http import HttpGet, stdlib_get_transport
 from benzene.results import Result
 
-from .artifacts import HttpMapping, MeshArtifactEmitter, ServiceCatalog
+from .artifacts import (
+    HttpMapping,
+    MeshArtifactEmitter,
+    ServiceCatalog,
+    TopologySource,
+    UsageSource,
+)
 from .collector import MeshCollector
 from .registry import MeshServiceEntry, MeshServiceRegistry
 
@@ -151,6 +157,13 @@ class MeshAggregator:
     A per-service spec/health fetch failing never fails the pass (that service becomes an ``error``
     snapshot but stays in the catalog if its live feeds describe it); :func:`run_poll_loop` additionally
     guards the whole pass so nothing here can crash the host.
+
+    ``topology_source`` / ``usage_source`` are the optional enrichment hooks passed straight through to
+    the :class:`~benzene.mesh.MeshArtifactEmitter` on every pass: a hosted deployment constructs the AWS
+    sources (:class:`~benzene.mesh.aws.XRayTopologySource`,
+    :class:`~benzene.mesh.aws.CloudWatchUsageSource`) once and hands them here, so each aggregation pass
+    fills the topology plane's real latency percentiles + the usage feed from X-Ray/CloudWatch. Left
+    unset, the pass emits exactly what the collector plane provides (today's behaviour, unchanged).
     """
 
     def __init__(
@@ -161,12 +174,16 @@ class MeshAggregator:
         clock: Callable[[], datetime] | None = None,
         previous_hashes: Mapping[str, str] | None = None,
         annotations: Sequence[Mapping[str, Any]] = (),
+        topology_source: TopologySource | None = None,
+        usage_source: UsageSource | None = None,
     ) -> None:
         self._collector = collector
         self._source = source or SpecHealthSource()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._previous_hashes: dict[str, str] = dict(previous_hashes or {})
         self._annotations = [dict(annotation) for annotation in annotations]
+        self._topology_source = topology_source
+        self._usage_source = usage_source
 
     async def run_once(
         self,
@@ -194,6 +211,8 @@ class MeshAggregator:
             window_start=moment,
             window_end=moment,
             annotations=self._annotations,
+            topology_source=self._topology_source,
+            usage_source=self._usage_source,
         )
         manifest = emitter.emit(out_dir)
 

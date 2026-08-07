@@ -40,6 +40,13 @@ HEARTBEAT_TOPIC = "benzene:mesh:heartbeat"
 TRACES_TOPIC = "benzene:mesh:traces"
 ISSUES_TOPIC = "benzene:mesh:issues"
 
+#: The header a service attaches to its ingest feeds when a shared secret is configured, and the
+#: collector matches on to authorise them (see :class:`MeshFeedSender` and the host's collector auth).
+#: Lower-case because the envelope/context normalise header keys to lower-case. This is the *simple*
+#: shared-secret option (mesh.md's deferred feed-auth flag); deeper auth (IAM SigV4, mTLS, an API
+#: Gateway authorizer) is a follow-up layered in front of the feed endpoint, not a change to this header.
+MESH_KEY_HEADER = "x-benzene-mesh-key"
+
 
 @dataclass(frozen=True)
 class Heartbeat:
@@ -76,24 +83,35 @@ class MeshFeedSender:
     telemetry feeds — :meth:`publish_heartbeat`, :meth:`publish_traces`, :meth:`publish_issues` —
     are pushed periodically. Each returns the outbound :class:`~benzene.results.Result` so a caller
     can log a failed feed; sending never raises.
+
+    ``key`` is the optional shared secret: when set, every feed carries it in the
+    :data:`MESH_KEY_HEADER` header (inside the wire envelope's ``headers``), so a collector configured
+    with the same key authorises the feed and one without a key is rejected ``unauthorized``. Left
+    unset (the default) the feeds carry no key and a collector with no key configured accepts them —
+    today's open behaviour, byte-for-byte unchanged.
     """
 
-    def __init__(self, sender: MessageSender) -> None:
+    def __init__(self, sender: MessageSender, *, key: str | None = None) -> None:
         self._sender = sender
+        self._headers: dict[str, str] | None = {MESH_KEY_HEADER: key} if key else None
 
     async def register(self, descriptor: ServiceDescriptor) -> Result:
         """Announce the ServiceDescriptor on ``benzene:mesh:register``."""
-        return await self._sender.send_message(REGISTER_TOPIC, descriptor.to_payload())
+        return await self._sender.send_message(
+            REGISTER_TOPIC, descriptor.to_payload(), self._headers
+        )
 
     async def publish_heartbeat(self, heartbeat: Heartbeat) -> Result:
         """Send a :class:`Heartbeat` to ``benzene:mesh:heartbeat``."""
-        return await self._sender.send_message(HEARTBEAT_TOPIC, heartbeat.to_payload())
+        return await self._sender.send_message(
+            HEARTBEAT_TOPIC, heartbeat.to_payload(), self._headers
+        )
 
     async def publish_traces(self, events: Iterable[TraceEvent]) -> Result:
         """Send a batch of :class:`TraceEvent`s to ``benzene:mesh:traces`` as ``{"events": [...]}``."""
         body = {"events": [event.to_payload() for event in events]}
-        return await self._sender.send_message(TRACES_TOPIC, body)
+        return await self._sender.send_message(TRACES_TOPIC, body, self._headers)
 
     async def publish_issues(self, batch: IssueBatch) -> Result:
         """Send an :class:`~benzene.mesh.IssueBatch` to ``benzene:mesh:issues``."""
-        return await self._sender.send_message(ISSUES_TOPIC, batch.to_payload())
+        return await self._sender.send_message(ISSUES_TOPIC, batch.to_payload(), self._headers)

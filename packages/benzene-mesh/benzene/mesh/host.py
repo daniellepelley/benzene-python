@@ -35,8 +35,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from benzene.core import BenzeneMessageApplication, HealthChecks, ServiceSpec
+from benzene.core import (
+    BenzeneMessageApplication,
+    Context,
+    HealthChecks,
+    Middleware,
+    MiddlewarePipeline,
+    Next,
+    ServiceSpec,
+)
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
+from benzene.results import Result, Status
 
 from .aggregator import (
     MeshAggregator,
@@ -44,10 +53,43 @@ from .aggregator import (
     SpecHealthSource,
     run_poll_loop,
 )
+from .artifacts import TopologySource, UsageSource
 from .collector import MeshCollector, collector_registry
+from .feeds import (
+    HEARTBEAT_TOPIC,
+    ISSUES_TOPIC,
+    MESH_KEY_HEADER,
+    REGISTER_TOPIC,
+    TRACES_TOPIC,
+)
 
 #: The service name the collector reports for itself (its ``/benzene/spec``).
 COLLECTOR_SERVICE_NAME = "benzene-mesh-collector"
+
+#: The four ingest feeds a shared-secret collector guards (the read-model ``query:*`` topics stay open).
+_GUARDED_TOPICS = frozenset({REGISTER_TOPIC, HEARTBEAT_TOPIC, TRACES_TOPIC, ISSUES_TOPIC})
+
+
+def mesh_key_middleware(key: str) -> Middleware:
+    """Middleware that rejects an unauthorised ingest feed — the simple shared-secret option.
+
+    Guards only the four *ingest* topics (:data:`_GUARDED_TOPICS`): a ``register`` / ``heartbeat`` /
+    ``traces`` / ``issues`` message must carry :data:`MESH_KEY_HEADER` equal to ``key`` (the header rides
+    inside the wire envelope, so it is present in :attr:`~benzene.core.Context.headers`), or the pipeline
+    short-circuits with ``unauthorized`` before the collector ever ingests it. The ``benzene:mesh:query:*``
+    read models are left open — they expose no write path and the mesh UI polls them same-origin. Deeper
+    auth (IAM SigV4 / mTLS / an API Gateway authorizer) is a follow-up layered in front of this endpoint.
+    """
+
+    async def middleware(context: Context, next: Next) -> None:
+        if context.topic in _GUARDED_TOPICS and context.headers.get(MESH_KEY_HEADER) != key:
+            context.result = Result.failure(
+                Status.UNAUTHORIZED, "missing or invalid mesh feed key"
+            )
+            return  # short-circuit: do not call next() → the collector never sees the feed
+        await next()
+
+    return middleware
 
 # Minimal content-type map for the static artifacts + the UI (all same-origin, so no CORS concerns).
 _CONTENT_TYPES = {
@@ -62,7 +104,7 @@ _CONTENT_TYPES = {
 
 
 def collector_service_app(
-    collector: MeshCollector, *, prefix: str = "/benzene"
+    collector: MeshCollector, *, prefix: str = "/benzene", key: str | None = None
 ) -> BenzeneHttpApp:
     """Wrap a :class:`~benzene.mesh.MeshCollector` as a real networked Benzene service.
 
@@ -72,9 +114,15 @@ def collector_service_app(
     and the ``benzene:mesh:query:*`` read models alike. Also exposes ``/benzene/health`` (the collector
     is always healthy) and ``/benzene/spec`` (its own derived spec), so the collector is itself a
     first-class, describable mesh citizen.
+
+    ``key`` is the optional shared secret (the simple feed-auth option): when set, a
+    :func:`mesh_key_middleware` guards the four ingest feeds so only a service presenting the matching
+    :data:`MESH_KEY_HEADER` is accepted. Left unset (the default) the collector is open, exactly as
+    before — so an existing deployment and every existing test is unaffected.
     """
     registry = collector_registry(collector)
-    application = BenzeneMessageApplication(registry)
+    pipeline = MiddlewarePipeline([mesh_key_middleware(key)]) if key else None
+    application = BenzeneMessageApplication(registry, pipeline)
     spec = ServiceSpec.derive(registry, service=COLLECTOR_SERVICE_NAME)
     standard = StandardPaths(prefix=prefix, invoke=True, health=HealthChecks(), spec=spec)
     return BenzeneHttpApp(HttpRouter(), application=application, standard_paths=standard)
@@ -90,6 +138,12 @@ class MeshHostConfig:
     copy — never fork the UI). ``poll_interval_seconds`` drives the background loop for the compose case;
     ``prefix`` is the well-known path prefix (R7). ``annotations`` seeds the human-discussion artifact;
     ``previous_hashes`` seeds contract-drift so it can show on the first pass.
+
+    ``mesh_key`` is the optional shared secret guarding the collector's ingest feeds (a hosted
+    deployment reads it from ``BENZENE_MESH_KEY``); unset → the collector is open, unchanged.
+    ``topology_source`` / ``usage_source`` are the optional enrichment hooks handed straight to the
+    aggregator: a hosted deployment builds the AWS sources (X-Ray topology, CloudWatch usage) and passes
+    them here so every pass carries real latency + usage. Both unset → the collector-plane view, as before.
     """
 
     registry: MeshServiceRegistry
@@ -99,6 +153,9 @@ class MeshHostConfig:
     prefix: str = "/benzene"
     annotations: Sequence[Mapping[str, Any]] = ()
     previous_hashes: Mapping[str, str] = field(default_factory=dict)
+    mesh_key: str | None = None
+    topology_source: TopologySource | None = None
+    usage_source: UsageSource | None = None
 
 
 class MeshHost:
@@ -121,13 +178,17 @@ class MeshHost:
         self._config = config
         self._out_dir = os.path.abspath(config.out_dir)
         self.collector = collector or MeshCollector()
-        self._collector_app = collector_service_app(self.collector, prefix=config.prefix)
+        self._collector_app = collector_service_app(
+            self.collector, prefix=config.prefix, key=config.mesh_key
+        )
         self.aggregator = MeshAggregator(
             self.collector,
             source=source,
             clock=clock,
             previous_hashes=config.previous_hashes,
             annotations=config.annotations,
+            topology_source=config.topology_source,
+            usage_source=config.usage_source,
         )
         self._prefix = config.prefix
         self._stop: asyncio.Event | None = None

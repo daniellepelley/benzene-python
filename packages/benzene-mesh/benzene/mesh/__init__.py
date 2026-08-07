@@ -48,6 +48,7 @@ from .descriptor import (
 from .feeds import (
     HEARTBEAT_TOPIC,
     ISSUES_TOPIC,
+    MESH_KEY_HEADER,
     REGISTER_TOPIC,
     TRACES_TOPIC,
     Heartbeat,
@@ -94,6 +95,7 @@ __all__ = [
     "HEARTBEAT_TOPIC",
     "Heartbeat",
     "ISSUES_TOPIC",
+    "MESH_KEY_HEADER",
     "InMemoryTraceExporter",
     "Issue",
     "IssueAggregator",
