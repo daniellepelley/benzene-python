@@ -18,6 +18,12 @@ Mirrors .NET's ``Benzene.Mesh``. Contributes the ``benzene.mesh`` subpackage to 
 
 from __future__ import annotations
 
+from .artifacts import (
+    HttpMapping,
+    MeshArtifactEmitter,
+    ServiceCatalog,
+    spec_hash,
+)
 from .collector import (
     QUERY_FLEET_TOPIC,
     QUERY_SERVICE_TOPIC,
@@ -73,6 +79,10 @@ __all__ = [
     "CollectorError",
     "CollectorNotFound",
     "DescriptorSource",
+    "HttpMapping",
+    "MeshArtifactEmitter",
+    "ServiceCatalog",
+    "spec_hash",
     "HEARTBEAT_TOPIC",
     "Heartbeat",
     "ISSUES_TOPIC",
