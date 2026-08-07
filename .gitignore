@@ -9,3 +9,6 @@ dist/
 venv/
 .mypy_cache/
 .ruff_cache/
+
+# CI-only Terraform S3 backend override (written by deploy-mesh.yml at run time)
+deploy/mesh/terraform/backend_override.tf

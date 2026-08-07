@@ -42,7 +42,21 @@ MESH_SERVICES='{"pollIntervalSeconds":15,"services":[{"name":"demo","baseUrl":"h
 # then: curl localhost:8080/benzene/health ; curl localhost:8080/mesh/fleet
 ```
 
-## Deploy
+## Deploy with a GitHub task (no laptop)
+
+The [`Deploy Mesh (AWS)`](../../.github/workflows/deploy-mesh.yml) workflow does everything below from
+a runner. It reads AWS credentials from the repo's `test` environment (the access key id is an
+environment *variable*, the secret an environment *secret*), populated by the main Benzene repo's
+**Sync Test Environment** workflow. Terraform state goes to an auto-created, versioned S3 bucket so a
+later run can tear the stack down.
+
+- **Actions → Deploy Mesh (AWS) → Run workflow**, pick `action` = `apply` (or `plan` / `destroy`).
+- The run's summary prints the mesh URL and fleet URLs when it finishes.
+- `destroy` removes everything it created (state is durable in S3).
+
+The rest of this file is the same flow by hand.
+
+## Deploy (by hand)
 
 Terraform creates the ECR repo, but the ECS service needs an image to exist first — so create the repo,
 push the image, then apply the rest.

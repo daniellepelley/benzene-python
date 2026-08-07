@@ -1,0 +1,200 @@
+# Deploy the Benzene mesh to AWS (the fleet on Lambda + the collector on Fargate), driven by the
+# Terraform in deploy/mesh/terraform and the runbook in deploy/mesh/README.md — as a dispatchable
+# GitHub task rather than a laptop.
+#
+# Credentials come from the `test` environment, populated by the main Benzene repo's
+# "Sync Test Environment" workflow: the access key id is an environment *variable*
+# (vars.AWS_ACCESS_KEY_ID, not sensitive) and the secret is an environment *secret*
+# (secrets.AWS_SECRET_ACCESS_KEY). Terraform's AWS provider and the aws CLI both read these
+# from the standard AWS_* env vars set at job level.
+#
+# State lives in S3 (auto-created, versioned, natively locked) so a later `destroy` run can tear
+# the stack down. The committed Terraform stays backend-less — local `terraform init` keeps using
+# local state as the README describes — and CI drops in the S3 backend at run time.
+
+name: Deploy Mesh (AWS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do"
+        type: choice
+        options: [apply, plan, destroy]
+        default: apply
+      region:
+        description: "AWS region"
+        type: string
+        default: eu-west-1
+      deploy_fleet:
+        description: "Also deploy the demo fleet (orders -> inventory -> notifications)"
+        type: boolean
+        default: true
+      image_tag:
+        description: "Collector image tag (defaults to the run number)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-mesh
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: test
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ inputs.region }}
+      AWS_DEFAULT_REGION: ${{ inputs.region }}
+      TF_DIR: deploy/mesh/terraform
+      TF_IN_AUTOMATION: "1"
+
+    steps:
+      - name: Check the AWS credentials arrived from the test environment
+        run: |
+          missing=0
+          [ -n "${AWS_ACCESS_KEY_ID}" ] || { echo "::error::vars.AWS_ACCESS_KEY_ID is empty — run Benzene's 'Sync Test Environment' into this repo first."; missing=1; }
+          [ -n "${AWS_SECRET_ACCESS_KEY}" ] || { echo "::error::secrets.AWS_SECRET_ACCESS_KEY is empty — run Benzene's 'Sync Test Environment' into this repo first."; missing=1; }
+          exit "${missing}"
+
+      - uses: actions/checkout@v4
+
+      - name: Resolve the image tag
+        id: vars
+        run: |
+          tag="${{ inputs.image_tag }}"
+          [ -n "${tag}" ] || tag="gh-${{ github.run_number }}"
+          echo "image_tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the fleet Lambda zip
+        run: deploy/mesh/fleet/build.sh   # -> deploy/mesh/build/fleet.zip (Terraform's var.fleet_zip default)
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"     # >= 1.10 for S3-native state locking (no DynamoDB table)
+          terraform_wrapper: false
+
+      - name: Who am I (fail early if the creds are wrong)
+        run: aws sts get-caller-identity
+
+      - name: Ensure the Terraform state bucket exists
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          bucket="benzene-mesh-tfstate-${account}-${AWS_REGION}"
+          if aws s3api head-bucket --bucket "${bucket}" 2>/dev/null; then
+            echo "state bucket ${bucket} already exists"
+          else
+            echo "creating state bucket ${bucket}"
+            if [ "${AWS_REGION}" = "us-east-1" ]; then
+              aws s3api create-bucket --bucket "${bucket}" --region "${AWS_REGION}"
+            else
+              aws s3api create-bucket --bucket "${bucket}" --region "${AWS_REGION}" \
+                --create-bucket-configuration LocationConstraint="${AWS_REGION}"
+            fi
+            aws s3api put-bucket-versioning --bucket "${bucket}" \
+              --versioning-configuration Status=Enabled
+            aws s3api put-public-access-block --bucket "${bucket}" \
+              --public-access-block-configuration \
+              BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+          fi
+          echo "TFSTATE_BUCKET=${bucket}" >> "$GITHUB_ENV"
+
+      - name: Point Terraform at the S3 backend (CI only; committed config stays backend-less)
+        run: |
+          cat > "${TF_DIR}/backend_override.tf" <<'EOF'
+          terraform {
+            backend "s3" {}
+          }
+          EOF
+
+      - name: terraform init
+        run: |
+          terraform -chdir="${TF_DIR}" init -input=false \
+            -backend-config="bucket=${TFSTATE_BUCKET}" \
+            -backend-config="key=mesh/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="use_lockfile=true"
+
+      # --- plan ---------------------------------------------------------------------------------
+      - name: terraform plan
+        if: inputs.action == 'plan'
+        run: |
+          terraform -chdir="${TF_DIR}" plan -input=false \
+            -var="region=${AWS_REGION}" \
+            -var="deploy_fleet=${{ inputs.deploy_fleet }}" \
+            -var="collector_image=placeholder"
+
+      # --- apply --------------------------------------------------------------------------------
+      # The ECS service needs an image to exist before it can start, so create the ECR repo first,
+      # push the collector image into it, then apply the whole mesh (fleet + collector, wired up).
+      - name: Create the ECR repository
+        if: inputs.action == 'apply'
+        run: |
+          terraform -chdir="${TF_DIR}" apply -input=false -auto-approve \
+            -target=aws_ecr_repository.collector \
+            -var="region=${AWS_REGION}" \
+            -var="deploy_fleet=${{ inputs.deploy_fleet }}" \
+            -var="collector_image=placeholder"
+
+      - name: Build and push the collector image
+        if: inputs.action == 'apply'
+        env:
+          IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          repo="$(terraform -chdir="${TF_DIR}" output -raw ecr_repository_url)"
+          registry="${repo%/*}"
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${registry}"
+          # Context = repo root (the Dockerfile COPYs packages/ and deploy/).
+          docker build -f deploy/mesh/collector/Dockerfile -t "${repo}:${IMAGE_TAG}" .
+          docker push "${repo}:${IMAGE_TAG}"
+          echo "COLLECTOR_IMAGE=${repo}:${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: terraform apply (fleet + collector)
+        if: inputs.action == 'apply'
+        run: |
+          terraform -chdir="${TF_DIR}" apply -input=false -auto-approve \
+            -var="region=${AWS_REGION}" \
+            -var="deploy_fleet=${{ inputs.deploy_fleet }}" \
+            -var="collector_image=${COLLECTOR_IMAGE}"
+
+      - name: Report the endpoints
+        if: inputs.action == 'apply'
+        run: |
+          set -euo pipefail
+          mesh="$(terraform -chdir="${TF_DIR}" output -raw mesh_url)"
+          {
+            echo "## Benzene mesh deployed"
+            echo
+            echo "- **Mesh URL:** ${mesh}"
+            echo "  - health: \`${mesh}/benzene/health\`"
+            echo "  - fleet:  \`${mesh}/mesh/fleet\`"
+            echo
+            echo "Fleet service URLs:"
+            terraform -chdir="${TF_DIR}" output -json fleet_urls \
+              | python3 -c 'import json,sys; [print(f"- **{k}:** {v}") for k,v in json.load(sys.stdin).items()]' \
+              || echo "- (fleet not deployed)"
+            echo
+            echo "The collector polls the fleet every 30s; give it a poll interval before reading \`/mesh/fleet\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- destroy ------------------------------------------------------------------------------
+      - name: terraform destroy
+        if: inputs.action == 'destroy'
+        run: |
+          terraform -chdir="${TF_DIR}" destroy -input=false -auto-approve \
+            -var="region=${AWS_REGION}" \
+            -var="deploy_fleet=${{ inputs.deploy_fleet }}" \
+            -var="collector_image=placeholder"
