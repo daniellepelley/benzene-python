@@ -14,3 +14,10 @@ venv/
 .mesh-fleet-artifacts/
 # Mesh-enriched proof: transient emitted artifacts (the committed deliverable is mesh-enriched-proof.png)
 .mesh-enriched-artifacts/
+
+# Terraform working dirs / state (deploy/aws) — never commit provider plugins, state, or tfvars secrets
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+deploy/aws/terraform/terraform.tfvars

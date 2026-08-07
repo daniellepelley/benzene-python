@@ -1,0 +1,24 @@
+# Copy to terraform.tfvars and edit. Every value here has a default — the file is only for overrides.
+
+# The region the whole mesh deploys into.
+aws_region = "eu-west-1"
+
+# Prefix for every resource name (so multiple meshes can share an account).
+name_prefix = "benzene-mesh"
+
+# The image tag you build + push to both ECR repos (see the runbook). Bump it to ship a new build.
+image_tag = "v1"
+
+# The optional shared secret guarding the collector's ingest feeds. Leave "" for open (default), or set
+# a strong random value to turn on the simple shared-secret auth (stored in SSM + injected as an env var
+# on the services and the host). Keep it out of version control — prefer TF_VAR_mesh_key in the env.
+# mesh_key = "change-me-to-a-long-random-string"
+
+# How the host builds its registry: "lambda" (tag discovery, the default) or "static" (baked URLs).
+discovery_mode = "lambda"
+
+# Wire the X-Ray topology + CloudWatch usage enrichment into the host (recommended).
+enrich = true
+
+# Seconds between the host's aggregation passes.
+poll_interval_seconds = 60
