@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -144,6 +144,12 @@ class MeshHostConfig:
     ``topology_source`` / ``usage_source`` are the optional enrichment hooks handed straight to the
     aggregator: a hosted deployment builds the AWS sources (X-Ray topology, CloudWatch usage) and passes
     them here so every pass carries real latency + usage. Both unset → the collector-plane view, as before.
+
+    ``registry_provider``, when given, is called each pass to obtain the registry (the static ``registry``
+    is the fallback): a hosted host wires its discovery source (e.g.
+    :class:`~benzene.mesh.aws.AwsLambdaDiscoveryProvider`) here so the fleet is **re-discovered every
+    pass** — picking up services created after the host booted and dropping ones that went away. Unset →
+    the static ``registry`` is polled every pass, unchanged.
     """
 
     registry: MeshServiceRegistry
@@ -156,6 +162,7 @@ class MeshHostConfig:
     mesh_key: str | None = None
     topology_source: TopologySource | None = None
     usage_source: UsageSource | None = None
+    registry_provider: Callable[[], MeshServiceRegistry] | None = None
 
 
 class MeshHost:
@@ -201,10 +208,16 @@ class MeshHost:
         if self._config.ui_html is not None:
             shutil.copy(self._config.ui_html, os.path.join(self._out_dir, "mesh-ui.html"))
 
+    def _registry(self) -> MeshServiceRegistry:
+        """This pass's registry — re-discovered via ``registry_provider`` if set, else the static one."""
+        if self._config.registry_provider is not None:
+            return self._config.registry_provider()
+        return self._config.registry
+
     async def run_once(self, *, generated_at: datetime | None = None) -> dict[str, Any]:
         """Run one aggregation pass, writing the artifacts into the served directory. Returns the manifest."""
         return await self.aggregator.run_once(
-            self._config.registry, out_dir=self._out_dir, generated_at=generated_at
+            self._registry(), out_dir=self._out_dir, generated_at=generated_at
         )
 
     def start_polling(self) -> None:
@@ -219,6 +232,7 @@ class MeshHost:
                 out_dir=self._out_dir,
                 interval_seconds=self._config.poll_interval_seconds,
                 stop=self._stop,
+                registry_provider=self._config.registry_provider,
             )
         )
 

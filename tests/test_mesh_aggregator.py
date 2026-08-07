@@ -193,3 +193,42 @@ def test_a_failing_pass_never_crashes_the_poll_loop(tmp_path, caplog) -> None:
     with caplog.at_level(logging.ERROR):
         asyncio.run(scenario())
     assert any("aggregation pass failed" in record.message.lower() for record in caplog.records)
+
+
+def test_poll_loop_re_discovers_the_registry_each_pass(tmp_path) -> None:
+    # registry_provider is called each pass, so a fleet that appears after the loop starts is picked up
+    # (the hosted re-discovery seam: the host can boot before the services it points at exist).
+    calls = {"n": 0}
+
+    def provider() -> MeshServiceRegistry:
+        calls["n"] += 1
+        # Empty on the first pass, then one service — mimics discovery finding the fleet a pass later.
+        if calls["n"] == 1:
+            return MeshServiceRegistry(())
+        return MeshServiceRegistry([MeshServiceEntry(name="orders", base_url="http://orders")])
+
+    # A source that tolerates the (unreachable) service — the pass must still complete.
+    source = SpecHealthSource(get=_fake_get({}))
+    aggregator = MeshAggregator(MeshCollector(), source=source)
+
+    async def scenario() -> None:
+        stop = asyncio.Event()
+        task = asyncio.create_task(
+            run_poll_loop(
+                aggregator,
+                MeshServiceRegistry(()),  # the static fallback — ignored while the provider is set
+                out_dir=str(tmp_path),
+                interval_seconds=0.02,
+                stop=stop,
+                registry_provider=provider,
+            )
+        )
+        await asyncio.sleep(0.12)
+        stop.set()
+        await task
+
+    asyncio.run(scenario())
+    assert calls["n"] >= 2  # the provider was consulted on every pass, not once at start
+    # The most recent pass wrote the discovered service into the catalog spine.
+    catalog = _read(str(tmp_path), os.path.join("services", "orders.json"))
+    assert catalog["name"] == "orders"

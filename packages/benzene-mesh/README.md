@@ -72,6 +72,24 @@ issues.record(topic="order:create", status="service-unavailable", exception_type
 await feeds.publish_issues(issues.flush())   # deduplicated failure signatures; count is a delta
 ```
 
+### Shared-secret feed auth (the simple option)
+
+The ingest feeds are open by default. Pass a `key` to close them with a **shared secret**: the sender
+attaches it as the `MESH_KEY_HEADER` (`x-benzene-mesh-key`) on every feed, and a collector configured with
+the same key rejects any ingest lacking it as `unauthorized` (the `benzene:mesh:query:*` read models stay
+open). Unset on both sides → today's open behaviour, unchanged.
+
+```python
+from benzene.mesh import MeshFeedSender
+
+feeds = MeshFeedSender(outbound_client, key="s3cret")   # attaches x-benzene-mesh-key
+# host side: collector_service_app(collector, key="s3cret"), or MeshHostConfig(mesh_key="s3cret")
+```
+
+This is the **simple** option only; deeper auth (IAM SigV4, mTLS, an API Gateway authorizer) is a
+follow-up layered in front of the feed endpoint. See [`deploy/aws`](../../deploy/aws/) for the wired-up
+AWS deployment (the key stored in SSM + injected on the services and host).
+
 ## Run the Mesh Host (`benzene-mesh[host]`)
 
 `MeshCollector` is an ordinary Benzene service, so the **Mesh Host** turns it into a real, networked,
@@ -99,7 +117,13 @@ host.start_polling()          # timer-driven aggregation (the local/compose seam
 Each pass HTTP-fetches every service's `/benzene/spec` + `/benzene/health`, queries the co-hosted
 collector, and emits the six mesh-UI artifacts. Services report in over HTTP with a `MeshFeedSender`
 over `benzene.http.InvokeMessageSender` (the outbound counterpart of `/benzene/invoke`). See
-[`deploy/mesh`](../../deploy/mesh) for a runnable multi-process stack + a browser-driven proof.
+[`deploy/mesh`](../../deploy/mesh) for a runnable multi-process stack + a browser-driven proof, and
+[`deploy/aws`](../../deploy/aws) for the same fleet lifted onto AWS (Lambda + App Runner).
+
+Two host hooks make it AWS-ready: `MeshHostConfig(topology_source=…, usage_source=…)` threads the AWS
+enrichment sources (below) into every pass, and `MeshHostConfig(registry_provider=…)` re-discovers the
+fleet each pass (wrap `AwsLambdaDiscoveryProvider.discover`) so the registry tracks services that come and
+go — instead of a registry fixed once at boot.
 
 ## Enrich with AWS observability data (`benzene-mesh[aws]`)
 

@@ -279,6 +279,7 @@ async def run_poll_loop(
     interval_seconds: float,
     stop: asyncio.Event | None = None,
     logger: logging.Logger | None = None,
+    registry_provider: Callable[[], MeshServiceRegistry] | None = None,
 ) -> None:
     """Drive :meth:`MeshAggregator.run_once` on a timer until ``stop`` is set (mirrors ``MeshPollBackgroundService``).
 
@@ -286,13 +287,20 @@ async def run_poll_loop(
     host; the dashboard simply shows stale data until the next good pass. This is the local/compose
     seam (a bare deployment has no external scheduler); a hosted deployment triggers
     :func:`aggregate_handler` from a scheduled invocation instead.
+
+    ``registry_provider``, when given, is called **each pass** to obtain the registry (falling back to
+    the static ``registry`` when it is ``None``) — this is the re-discovery seam: a hosted host wraps its
+    discovery source (e.g. :class:`~benzene.mesh.aws.AwsLambdaDiscoveryProvider`) here so the fleet is
+    re-enumerated every pass, picking up services that were created after the host booted and dropping
+    ones that went away. A provider that raises is treated as a failed pass (logged, swallowed).
     """
     log = logger or _LOGGER
     stop = stop or asyncio.Event()
     interval = max(0.05, interval_seconds)
     while not stop.is_set():
         try:
-            await aggregator.run_once(registry, out_dir=out_dir)
+            current = registry_provider() if registry_provider is not None else registry
+            await aggregator.run_once(current, out_dir=out_dir)
         except Exception:  # noqa: BLE001 - a failed pass must never crash the host
             log.exception("Mesh aggregation pass failed")
         with contextlib.suppress(asyncio.TimeoutError):
