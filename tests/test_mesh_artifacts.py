@@ -18,6 +18,8 @@ from benzene.mesh import (
     MeshArtifactEmitter,
     MeshCollector,
     ServiceCatalog,
+    TopologyEdge,
+    UsageEntry,
     spec_hash,
 )
 
@@ -187,6 +189,104 @@ def test_usage_entries_from_collector_status_counts() -> None:
     assert by_key[("orders:create", "created")] == 2
     assert by_key[("payment:capture", "ok")] == 1
     assert by_key[("payment:capture", "service-unavailable")] == 1
+
+
+# --- external enrichment sources (X-Ray topology / CloudWatch usage) --------------------------
+class _FakeTopologySource:
+    """A canned external topology source (stands in for the X-Ray source) returning fixed edges."""
+
+    def __init__(self, edges):
+        self._edges = edges
+
+    def topology(self):
+        return self._edges
+
+
+class _FakeUsageSource:
+    """A canned external usage source (stands in for the CloudWatch source) returning fixed entries."""
+
+    def __init__(self, entries):
+        self._entries = entries
+
+    def usage(self):
+        return self._entries
+
+
+def test_topology_source_edge_wins_its_pair_collector_fills_gaps() -> None:
+    # The collector derives orders→payments (from trace parentage). X-Ray enriches that same pair with
+    # real timing, and adds orders→shipping that the collector never saw.
+    xray = _FakeTopologySource([
+        TopologyEdge("orders", "payments", "xray", requests_per_minute=86.4, error_rate=0.18,
+                     p50_latency_ms=45.0, p95_latency_ms=420.0, p99_latency_ms=890.0),
+        TopologyEdge("orders", "shipping", "xray", requests_per_minute=24.1, error_rate=0.004,
+                     p50_latency_ms=12.0, p95_latency_ms=35.0, p99_latency_ms=58.0),
+    ])
+    emitter = MeshArtifactEmitter(
+        [_orders(), _payments(None)], _collector(),
+        generated_at=_AT, window_start=_AT, window_end=_AT, topology_source=xray,
+    )
+    edges = {(e["client"], e["server"]): e for e in emitter.build_topology()["edges"]}
+    # The X-Ray edge wins the orders→payments pair: source flips to xray and carries real percentiles.
+    op = edges[("orders", "payments")]
+    assert op["source"] == "xray"
+    assert (op["requestsPerMinute"], op["p50LatencyMs"], op["p95LatencyMs"], op["p99LatencyMs"]) == (
+        86.4, 45.0, 420.0, 890.0,
+    )
+    # The X-Ray-only pair appears too; edges stay sorted by (client, server).
+    assert list(edges) == [("orders", "payments"), ("orders", "shipping")]
+    assert edges[("orders", "shipping")]["source"] == "xray"
+
+
+def test_topology_unchanged_without_a_source() -> None:
+    baseline = _emitter([_orders(), _payments(None)]).build_topology()
+    assert [e["source"] for e in baseline["edges"]] == ["collector"]
+    assert baseline["edges"][0]["p50LatencyMs"] is None
+
+
+def test_usage_source_replaces_collector_per_covered_topic() -> None:
+    # CloudWatch covers orders:create + payment:capture (with transport/duration); it does NOT cover
+    # payment:capture's peer... nothing else, so any topic it omits keeps its collector entries.
+    cloudwatch = _FakeUsageSource([
+        UsageEntry("orders:create", 8460, "cloudwatch", transport="AspNet", status="created",
+                   avg_duration_ms=38.1),
+        UsageEntry("payment:capture", 10290, "cloudwatch", transport="Sqs", status="ok",
+                   avg_duration_ms=55.0),
+    ])
+    emitter = MeshArtifactEmitter(
+        [_orders(), _payments(None)], _collector(),
+        generated_at=_AT, window_start=_AT, window_end=_AT, usage_source=cloudwatch,
+    )
+    entries = emitter.build_usage()["entries"]
+    by_key = {(e["topic"], e["status"], e["source"]): e for e in entries}
+    # Covered topics now carry the cloudwatch rows (transport + duration + source tag), replacing collector.
+    assert ("orders:create", "created", "cloudwatch") in by_key
+    assert by_key[("orders:create", "created", "cloudwatch")]["transport"] == "AspNet"
+    assert by_key[("orders:create", "created", "cloudwatch")]["avgDurationMs"] == 38.1
+    assert ("payment:capture", "ok", "cloudwatch") in by_key
+    # No collector row survives for a covered topic (cloudwatch replaced it wholesale).
+    assert not any(e["topic"] == "payment:capture" and e["source"] == "collector" for e in entries)
+
+
+def test_usage_keeps_collector_entries_for_uncovered_topics() -> None:
+    # CloudWatch only covers orders:create; payment:capture stays a collector feed (the fixture's mix).
+    cloudwatch = _FakeUsageSource([
+        UsageEntry("orders:create", 8460, "cloudwatch", transport="AspNet", status="created",
+                   avg_duration_ms=38.1),
+    ])
+    emitter = MeshArtifactEmitter(
+        [_orders(), _payments(None)], _collector(),
+        generated_at=_AT, window_start=_AT, window_end=_AT, usage_source=cloudwatch,
+    )
+    entries = emitter.build_usage()["entries"]
+    capture = [e for e in entries if e["topic"] == "payment:capture"]
+    assert capture and all(e["source"] == "collector" for e in capture)
+    assert {e["status"] for e in capture} == {"ok", "service-unavailable"}
+
+
+def test_usage_unchanged_without_a_source() -> None:
+    baseline = _emitter([_orders(), _payments(None)]).build_usage()
+    assert all(e["source"] == "collector" for e in baseline["entries"])
+    assert all(e["avgDurationMs"] is None for e in baseline["entries"])
 
 
 # --- annotations.json -------------------------------------------------------------------------
