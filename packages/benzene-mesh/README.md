@@ -101,6 +101,49 @@ collector, and emits the six mesh-UI artifacts. Services report in over HTTP wit
 over `benzene.http.InvokeMessageSender` (the outbound counterpart of `/benzene/invoke`). See
 [`deploy/mesh`](../../deploy/mesh) for a runnable multi-process stack + a browser-driven proof.
 
+## Enrich with AWS observability data (`benzene-mesh[aws]`)
+
+The collector plane derives `topology.json` edges from trace parentage (no timing) and `usage.json`
+counts from observed invocations (no transport/duration). Two optional **enrichment sources** layer real
+data from AWS on top, via the emitter's `topology_source` / `usage_source` hooks:
+
+- **`XRayTopologySource`** — queries AWS X-Ray's `GetServiceGraph` and maps each `client → server` edge to
+  real `requestsPerMinute` (`TotalCount` ÷ window), `errorRate` (error + fault counts ÷ total), and
+  `p50/p95/p99LatencyMs` (from the edge's response-time histogram), tagged `source: "xray"`.
+- **`CloudWatchUsageSource`** — lists the `benzene.messages.processed` counter's live dimension
+  combinations and sums each per (topic, transport, status), plus the `benzene.message.duration` timer
+  (`Sum` ÷ `SampleCount`) for `avgDurationMs`, tagged `source: "cloudwatch"`.
+
+```python
+from benzene.mesh import MeshArtifactEmitter
+from benzene.mesh.aws import (
+    Boto3CloudWatchClient, Boto3XRayServiceGraphClient,
+    CloudWatchUsageSource, XRayTopologySource,
+)
+
+emitter = MeshArtifactEmitter(
+    services, collector, generated_at=now,
+    topology_source=XRayTopologySource(Boto3XRayServiceGraphClient()),
+    usage_source=CloudWatchUsageSource(Boto3CloudWatchClient()),
+)
+```
+
+**Merge rule (deterministic, mirrors .NET's `Benzene.Mesh.Aggregator` layering).** The external source is
+richer, so it wins over the collector baseline: a topology edge's `(client, server)` pair is replaced by
+the X-Ray edge when present (collector edges survive only for pairs X-Ray didn't observe); a usage topic's
+entries are replaced wholesale by the CloudWatch rows for every topic CloudWatch reports (topics it doesn't
+cover keep their collector entries). With no source wired, output is unchanged (pure collector plane).
+
+Each AWS client is a minimal `typing.Protocol` (`XRayServiceGraphClient`, `CloudWatchClient`), so unit
+tests pass hand-written fakes with **no `boto3`**; only the thin `Boto3*Client` adapters import `boto3`,
+behind the `aws` extra (`pip install benzene-mesh[aws]`) — importing `benzene.mesh` stays SDK-free.
+[`examples/mesh_fleet/prove_enriched.py`](../../examples/mesh_fleet) renders the enriched artifacts in the
+mesh UI (X-Ray latency percentiles + a CloudWatch usage feed) and asserts them from the live DOM.
+
+Ports .NET's `Benzene.Mesh.Fleet.Aws.XRay` + `Benzene.Mesh.Usage.CloudWatch`. **Bend from the .NET port:**
+the CloudWatch source additionally fills `avgDurationMs` from the duration timer (the .NET adapter leaves
+it null — its documented follow-up), because the pinned `usage.json` fixture carries mean durations.
+
 ---
 
 Mirrors .NET's `Benzene.Mesh` (+ its `Benzene.Mesh.Aggregator` / `deploy/Mesh/Benzene.Mesh.Host`), and
