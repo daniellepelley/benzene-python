@@ -144,6 +144,44 @@ Ports .NET's `Benzene.Mesh.Fleet.Aws.XRay` + `Benzene.Mesh.Usage.CloudWatch`. **
 the CloudWatch source additionally fills `avgDurationMs` from the duration timer (the .NET adapter leaves
 it null — its documented follow-up), because the pinned `usage.json` fixture carries mean durations.
 
+### Self-discover the fleet from tagged Lambda functions (`AwsLambdaDiscoveryProvider`)
+
+Instead of hand-feeding the aggregator a `mesh.json`, discover the mesh's services from the AWS account:
+`AwsLambdaDiscoveryProvider` enumerates the Lambda functions (paginated `list_functions`), reads each
+function's tags (`list_tags`, over a bounded thread pool), keeps the ones matching a `MeshDiscoveryFilter`
+(by default: they carry the `benzene` tag), and emits them as `MeshServiceEntry` records in a
+`MeshServiceRegistry` the aggregator then polls.
+
+```python
+from benzene.mesh.aws import AwsLambdaDiscoveryProvider, Boto3LambdaClient, MeshDiscoveryFilter
+
+registry = AwsLambdaDiscoveryProvider(Boto3LambdaClient()).discover()   # → MeshServiceRegistry
+# registry.services is the aggregator's input (MeshAggregator / MeshHost read it)
+```
+
+- **Interrogation transport = HTTP.** .NET binds discovered functions to a *Lambda-Invoke* interrogation
+  source; the Python aggregator instead fetches every service's `/benzene/spec` + `/benzene/health` **over
+  HTTP** (`SpecHealthSource`). So this port emits **HTTP registry entries**: a discovered function's
+  `base_url` is the HTTP API it fronts (API Gateway stage / Function URL), read from the `benzene:mesh-url`
+  tag — keeping discovery on the aggregator's one existing transport rather than adding an Invoke path.
+- **`benzene:mesh-path`** (optional) overrides the entry's `/benzene` prefix (`{base_url}{prefix}/spec`),
+  the Python analog of the .NET `SourceOptions["meshPath"]` descriptor-path override.
+- A mesh-tagged function **without** a reachable URL is still emitted (visible as a fleet member); the
+  aggregator records it `unreachable` until a URL is supplied — an honest state, not a silent drop.
+- The `LambdaClient` seam is a two-method `typing.Protocol` (`list_functions` / `list_tags`), so unit
+  tests drive it with a hand-written fake and **no `boto3`**; only `Boto3LambdaClient` imports `boto3`
+  (lazily), behind the same `aws` extra. Ports .NET's `Benzene.Mesh.Discovery.Aws`.
+
+### HTTP route mappings over the wire (`topics[].http`)
+
+The derived spec is transport-neutral (topics + schemas, no route table), so a distributed aggregator
+reading a peer's `/benzene/spec` over HTTP could not recover that peer's `(method, path)` mappings — the
+mesh "producer gap". `benzene-http` now **optionally** rides those mappings along on `/benzene/spec` as an
+additive `topics[].http: [{method, path}]` field (default on; `StandardPaths(spec_http_mappings=False)` to
+opt out), and `MeshAggregator` reads them back into `ServiceCatalog.http_mappings` → `topics.json`
+`consumers[].httpMappings`. Purely additive and Python-only for now; the cross-language spec follow-up is
+drafted in [`docs/proposals/topic-http-mappings.md`](../../docs/proposals/topic-http-mappings.md).
+
 ---
 
 Mirrors .NET's `Benzene.Mesh` (+ its `Benzene.Mesh.Aggregator` / `deploy/Mesh/Benzene.Mesh.Host`), and
