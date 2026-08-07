@@ -42,74 +42,28 @@ from benzene.core import Handler
 from benzene.http import HttpGet, stdlib_get_transport
 from benzene.results import Result
 
-from .artifacts import MeshArtifactEmitter, ServiceCatalog
+from .artifacts import HttpMapping, MeshArtifactEmitter, ServiceCatalog
 from .collector import MeshCollector
+from .registry import MeshServiceEntry, MeshServiceRegistry
+
+# MeshServiceEntry / MeshServiceRegistry are defined in the dependency-light .registry module (no
+# benzene-http) so a discovery source can produce a registry without importing this HTTP-fetching
+# aggregator; they are re-exported here so ``from benzene.mesh.aggregator import MeshServiceEntry`` keeps
+# working for every existing caller.
+__all__ = [
+    "AGGREGATE_TOPIC",
+    "MeshAggregator",
+    "MeshServiceEntry",
+    "MeshServiceRegistry",
+    "SpecHealthSource",
+    "aggregate_handler",
+    "run_poll_loop",
+]
 
 _LOGGER = logging.getLogger("benzene.mesh.aggregator")
 
 #: The reserved topic a hosted deployment triggers to run one aggregation pass (scheduled seam).
 AGGREGATE_TOPIC = "mesh:aggregate"
-
-
-@dataclass(frozen=True)
-class MeshServiceEntry:
-    """One service the aggregator polls: its name and where to fetch its spec + health.
-
-    ``base_url`` is the convenience form — ``spec_url``/``health_url`` default to
-    ``{base_url}/benzene/spec`` and ``{base_url}/benzene/health`` (the profile's well-known paths). Give
-    ``spec_url``/``health_url`` explicitly to override (a relocated prefix, R7). Mirrors .NET's
-    ``MeshServiceRegistryEntry`` (name + specUrl + healthUrl), the human-maintained registry input.
-    """
-
-    name: str
-    base_url: str | None = None
-    spec_url: str | None = None
-    health_url: str | None = None
-    prefix: str = "/benzene"
-
-    def resolved_spec_url(self) -> str:
-        if self.spec_url is not None:
-            return self.spec_url
-        return f"{self._base()}{self.prefix}/spec"
-
-    def resolved_health_url(self) -> str:
-        if self.health_url is not None:
-            return self.health_url
-        return f"{self._base()}{self.prefix}/health"
-
-    def _base(self) -> str:
-        if self.base_url is None:
-            raise ValueError(
-                f"Service {self.name!r} needs either base_url or explicit spec_url/health_url"
-            )
-        return self.base_url.rstrip("/")
-
-
-@dataclass(frozen=True)
-class MeshServiceRegistry:
-    """The set of services an aggregator polls each pass — the human-maintained registry (mesh config).
-
-    Mirrors .NET's ``MeshServiceRegistry``: not generated, this is the input a
-    :class:`MeshAggregator` reads.
-    """
-
-    services: Sequence[MeshServiceEntry] = ()
-
-    @classmethod
-    def from_config(cls, entries: Sequence[Mapping[str, Any]]) -> MeshServiceRegistry:
-        """Build a registry from plain dicts (e.g. parsed ``mesh.json``): ``[{"name", "baseUrl", ...}]``."""
-        return cls(
-            [
-                MeshServiceEntry(
-                    name=str(entry["name"]),
-                    base_url=entry.get("baseUrl") or entry.get("base_url"),
-                    spec_url=entry.get("specUrl") or entry.get("spec_url"),
-                    health_url=entry.get("healthUrl") or entry.get("health_url"),
-                    prefix=str(entry.get("prefix", "/benzene")),
-                )
-                for entry in entries
-            ]
-        )
 
 
 @dataclass
@@ -258,7 +212,44 @@ class MeshAggregator:
             health_url=entry.resolved_health_url(),
             previous_spec_hash=self._previous_hashes.get(entry.name),
             error=fetched.error,
+            http_mappings=_http_mappings_from_spec(fetched.spec),
         )
+
+
+def _http_mappings_from_spec(
+    spec: Mapping[str, Any] | None,
+) -> dict[str, list[HttpMapping]]:
+    """Read the optional per-topic HTTP routes off a fetched ``/benzene/spec`` into the emitter's shape.
+
+    The transport-neutral spec (topics + schemas) carries no route table, so a service's HTTP
+    ``(method, path)`` mappings never reached the distributed aggregator — ``topics.json``
+    ``consumers[].httpMappings`` came back empty for it (the "producer gap"). The Python HTTP binding now
+    *optionally* rides those mappings along on ``/benzene/spec`` as ``topics[].http: [{method, path}]``
+    (see :mod:`benzene.http.standard`); this reads them back into the ``topic id → [HttpMapping]`` map
+    :class:`~benzene.mesh.ServiceCatalog` already threads into the emitter — so the distributed path fills
+    the same HTTP column the in-process demo derives from its router. Purely additive: a spec without the
+    field (every other port, a non-HTTP service) yields an empty map, exactly as before.
+    """
+    if not spec:
+        return {}
+    mappings: dict[str, list[HttpMapping]] = {}
+    for topic in spec.get("topics", []) or []:
+        if not isinstance(topic, Mapping):
+            continue
+        routes = topic.get("http")
+        if not routes:
+            continue
+        topic_id = str(topic.get("id") or "")
+        if not topic_id:
+            continue
+        parsed = [
+            HttpMapping(str(route["method"]), str(route["path"]))
+            for route in routes
+            if isinstance(route, Mapping) and "method" in route and "path" in route
+        ]
+        if parsed:
+            mappings[topic_id] = parsed
+    return mappings
 
 
 async def run_poll_loop(
