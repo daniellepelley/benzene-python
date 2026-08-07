@@ -382,9 +382,39 @@ The optional **issues** feed is supported too: `benzene:mesh:issues` batches mer
 than rejecting the batch, and `issues` appears in a service's `missingFeeds` only when a failing trace
 is unexplained. Conformance-green against both `mesh-collector-cases` and `mesh-issue-cases`.
 
+## The poller — `MeshPoller` (pull aggregator)
+
+`MeshFeedSender` is the **push** side (a service reports in). `MeshPoller` is the **pull** side,
+mirroring the .NET Mesh Host: it reaches out to a configured fleet on a timer, reads each service's
+`/benzene/spec` + `/benzene/health` (the [`StandardPaths`](http.md) surfaces), and folds the result
+into the **same** `MeshCollector` — so a service appears in the mesh with no egress wiring, just by
+being pollable.
+
+```python
+from benzene.mesh import MeshCollector, MeshPoller, HttpServiceSource
+
+collector = MeshCollector()
+poller = MeshPoller(collector, [
+    HttpServiceSource("orders", "https://orders.svc"),
+    HttpServiceSource("inventory", "https://inventory.svc"),
+])
+await poller.poll_once()               # one sweep (call on a timer); collector now reflects the fleet
+collector.query_fleet({})
+```
+
+- `HttpServiceSource(name, base_url, *, prefix="/benzene", fetch=None)` — GET-polls `{prefix}/spec` and
+  `{prefix}/health` (a `503` health reply is read as the unhealthy aggregate, not an error). `fetch` is
+  an injectable `async (url) -> (status, body)`, so a test drives it with no network; the default uses
+  `urllib` on a worker thread. `CallableServiceSource(name, spec=, health=)` backs a source with two
+  async callables — for tests or a bespoke transport (e.g. a Lambda invoke).
+- `poll_once()` sweeps all sources concurrently and returns a `PollResult` per source; a down service is
+  a failed result, never a broken sweep. Pull covers identity, topics, and health; **consumer-edge
+  topology still comes from traces** (the push feed), and the two compose in one collector.
+
 ## Exports
 
 `ServiceInfo`, `ServiceDescriptor`, `TopicDescriptor`, `MESH_TOPIC`, `Schema`, `json_schema`,
+`MeshPoller`, `HttpServiceSource`, `CallableServiceSource`, `ServiceSource`, `PollResult`, `PollError`,
 `mesh_interception`, `DescriptorSource`, `trace_middleware`, `TraceEvent`, `TraceExporter`,
 `InMemoryTraceExporter`, `QueueTraceExporter`, `parse_traceparent`, `new_trace_id`, `new_span_id`,
 `current_traceparent`, `with_trace_propagation`, `TracePropagatingMessageSender`,

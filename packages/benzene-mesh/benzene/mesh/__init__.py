@@ -52,6 +52,14 @@ from .issues import (
     classify,
     issue_fingerprint,
 )
+from .poller import (
+    CallableServiceSource,
+    HttpServiceSource,
+    MeshPoller,
+    PollError,
+    PollResult,
+    ServiceSource,
+)
 from .schema import Schema, json_schema
 from .trace import (
     InMemoryTraceExporter,
@@ -69,6 +77,12 @@ from .trace import (
 
 __all__ = [
     "CLASSIFICATIONS",
+    "CallableServiceSource",
+    "HttpServiceSource",
+    "MeshPoller",
+    "PollError",
+    "PollResult",
+    "ServiceSource",
     "CollectorBadRequest",
     "CollectorError",
     "CollectorNotFound",
