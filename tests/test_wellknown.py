@@ -142,6 +142,31 @@ def test_spec_source_may_be_a_callable_redrived_each_request() -> None:
     assert doc["service"] == "greeter"
 
 
+def test_spec_carries_optional_http_route_mappings_by_default() -> None:
+    # Additive Python extension (topic-http-mappings proposal): /benzene/spec annotates each topic with the
+    # (method, path) routes it is reachable at, read off the app's own router — so a mesh aggregator polling
+    # the spec over HTTP recovers the mappings the transport-neutral spec omits (the "producer gap").
+    router, registry = _router_and_registry()
+    spec = ServiceSpec.derive(registry, service="greeter")
+    app = BenzeneHttpApp(
+        router, application=BenzeneMessageApplication(registry), standard_paths=StandardPaths(spec=spec)
+    )
+    topics = {t["id"]: t for t in json.loads(asyncio.run(app.handle("GET", "/benzene/spec")).body)["topics"]}
+    assert topics["say:hello"]["http"] == [{"method": "POST", "path": "/greet"}]
+
+
+def test_spec_http_mappings_can_be_turned_off_for_the_bare_neutral_spec() -> None:
+    router, registry = _router_and_registry()
+    spec = ServiceSpec.derive(registry, service="greeter")
+    app = BenzeneHttpApp(
+        router,
+        application=BenzeneMessageApplication(registry),
+        standard_paths=StandardPaths(spec=spec, spec_http_mappings=False),
+    )
+    topics = {t["id"]: t for t in json.loads(asyncio.run(app.handle("GET", "/benzene/spec")).body)["topics"]}
+    assert "http" not in topics["say:hello"]  # opt-out → the byte-for-byte transport-neutral spec
+
+
 # --- R7: prefix convention ----------------------------------------------------------------------
 
 def test_prefix_is_configurable_and_relocates_every_surface() -> None:

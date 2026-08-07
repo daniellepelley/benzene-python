@@ -180,8 +180,14 @@ class BenzeneHttpApp:
         if std.spec is not None and verb == "GET" and path == std.spec_path:
             spec = std.resolved_spec()
             if spec is not None:
+                payload = spec.to_payload()
+                if std.spec_http_mappings:
+                    # Additive, HTTP-only enrichment: annotate each topic with the (method, path) routes it
+                    # is reachable at, read off this app's own route table, so a mesh aggregator polling
+                    # this spec over HTTP can recover the mappings the transport-neutral spec omits.
+                    _attach_http_mappings(payload, self._router)
                 return HttpResponse(
-                    200, {"content-type": "application/json"}, json.dumps(spec.to_payload())
+                    200, {"content-type": "application/json"}, json.dumps(payload)
                 )
 
         return None
@@ -229,6 +235,25 @@ class BenzeneHttpApp:
                 "body": response.body.encode("utf-8"),
             }
         )
+
+
+def _attach_http_mappings(payload: dict[str, Any], router: HttpRouter) -> None:
+    """Annotate a ``/benzene/spec`` payload's topics with the HTTP routes they are reachable at, in place.
+
+    Projects the router's endpoints into a ``topic id → [{method, path}]`` map and attaches it as an
+    optional ``http`` field on each matching topic entry. Additive by construction: a topic with no HTTP
+    route gets no ``http`` key, so the spec of a service with no routes is byte-for-byte unchanged. This is
+    the read-side counterpart of :func:`benzene.mesh.aggregator._http_mappings_from_spec`.
+    """
+    by_topic: dict[str, list[dict[str, str]]] = {}
+    for endpoint in router.endpoints():
+        by_topic.setdefault(endpoint.topic, []).append(
+            {"method": endpoint.method, "path": endpoint.path}
+        )
+    for topic in payload.get("topics", []):
+        routes = by_topic.get(topic.get("id"))
+        if routes:
+            topic["http"] = routes
 
 
 async def _read_body(receive: Any) -> str:

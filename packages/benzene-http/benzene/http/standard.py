@@ -43,6 +43,14 @@ class StandardPaths:
     invoke: bool = True
     health: HealthChecks | None = None
     spec: SpecSource | None = None
+    #: Ride the app's HTTP route table along on ``/benzene/spec`` as an **optional** per-topic
+    #: ``topics[].http: [{method, path}]`` field (default on). The derived :class:`~benzene.core.ServiceSpec`
+    #: is transport-neutral — topics + schemas, no route table — so a fleet aggregator reading a peer's spec
+    #: over HTTP cannot recover that peer's ``(method, path)`` mappings (the mesh "producer gap"). This is a
+    #: backward-compatible, additive extension: the field is present only for topics that actually have HTTP
+    #: routes, the transport-neutral ``benzene:spec`` interception never carries it, and a service with no
+    #: routes (or any other language port) is unaffected. Set ``False`` to serve the bare neutral spec.
+    spec_http_mappings: bool = True
 
     @property
     def invoke_path(self) -> str:

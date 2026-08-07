@@ -59,6 +59,20 @@ def test_distributed_fleet_reaches_the_host_and_renders_the_three_states() -> No
             assert [c["service"] for c in book["consumers"]] == ["shipping"]
             assert [p["service"] for p in book["producers"]] == ["orders", "payments"]
 
+            # 3b. The HTTP route mappings now travel over the wire: orders' /benzene/spec carries the
+            #     optional topics[].http field, so topics.json consumers[].httpMappings are populated for
+            #     the HTTP-fronted topics — closing the "producer gap" the distributed path used to show
+            #     (orders:create / orders:get-all were `gap` because the neutral spec had no route table).
+            by_topic = {t["topic"]: t for t in topics["topics"]}
+            create = by_topic["orders:create"]
+            create_consumer = next(c for c in create["consumers"] if c["service"] == "orders")
+            assert create_consumer["httpMappings"] == [{"method": "POST", "path": "/orders"}]
+            assert create["status"] != "gap"
+            get_all = by_topic["orders:get-all"]
+            get_all_consumer = next(c for c in get_all["consumers"] if c["service"] == "orders")
+            assert get_all_consumer["httpMappings"] == [{"method": "GET", "path": "/orders"}]
+            assert get_all["status"] != "gap"
+
             # 4. The topology edges were derived by the collector from trace parentage that crossed
             #    process boundaries over HTTP — the distinguishing win.
             topology = await _fetch_json(f"{base}/topology.json")
