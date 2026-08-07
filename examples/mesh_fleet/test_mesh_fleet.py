@@ -83,3 +83,44 @@ def test_usage_reports_observed_counts_per_status_from_the_collector() -> None:
     assert by_key[("payment:capture", "ok")] == 10
     assert by_key[("payment:capture", "service-unavailable")] == 2
     assert all(e["source"] == "collector" for e in entries)
+
+
+# --- AWS-enriched artifacts (the prove_enriched wiring, minus Chromium) ------------------------
+def _enriched_artifacts() -> dict:
+    """The same emit path :mod:`mesh_fleet.prove_enriched` renders: canned X-Ray + CloudWatch sources."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from .prove_enriched import emit_enriched
+
+    with tempfile.TemporaryDirectory() as out_dir:
+        emit_enriched(out_dir)
+        root = Path(out_dir)
+        return {
+            "topology": json.loads((root / "topology.json").read_text()),
+            "usage": json.loads((root / "usage.json").read_text()),
+        }
+
+
+def test_enriched_topology_carries_xray_edges_with_real_latency() -> None:
+    edges = _enriched_artifacts()["topology"]["edges"]
+    xray = [e for e in edges if e["source"] == "xray"]
+    assert xray, "expected the X-Ray topology source to enrich the edges"
+    op = next(e for e in xray if (e["client"], e["server"]) == ("orders", "payments"))
+    # Real X-Ray timing, not the collector plane's nulls.
+    assert op["requestsPerMinute"] == 86.4
+    assert (op["p50LatencyMs"], op["p95LatencyMs"], op["p99LatencyMs"]) == (45.0, 420.0, 890.0)
+
+
+def test_enriched_usage_carries_cloudwatch_rows_and_collector_fallback() -> None:
+    entries = _enriched_artifacts()["usage"]["entries"]
+    cloudwatch = [e for e in entries if e["source"] == "cloudwatch"]
+    assert cloudwatch, "expected the CloudWatch usage source to enrich the feed"
+    getall = next(
+        e for e in cloudwatch if e["topic"] == "orders:get-all" and e["status"] == "ok"
+    )
+    assert getall["transport"] == "AspNet" and getall["avgDurationMs"] == 14.2
+    # shipping:book isn't in the CloudWatch feed, so it stays a collector entry (the fixture's mix).
+    shipping = [e for e in entries if e["topic"] == "shipping:book"]
+    assert shipping and all(e["source"] == "collector" for e in shipping)

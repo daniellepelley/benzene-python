@@ -12,3 +12,5 @@ venv/
 
 # Mesh-fleet proof: transient emitted artifacts (the committed deliverable is mesh-fleet-proof.png)
 .mesh-fleet-artifacts/
+# Mesh-enriched proof: transient emitted artifacts (the committed deliverable is mesh-enriched-proof.png)
+.mesh-enriched-artifacts/
