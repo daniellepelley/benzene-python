@@ -69,3 +69,16 @@ def test_with_services_override_wins_over_startup_defaults() -> None:
 def test_with_config_layers_onto_startup() -> None:
     definition, _ = build_application(GreetStartUp, config={"prefix": "yo"})
     assert _greet(definition, "x") == {"message": "yo x"}
+
+
+def test_harness_with_config_threads_config_into_the_built_host() -> None:
+    """The harness's ``with_config`` seam (parallel to ``with_services``) must reach the composition root."""
+    import pytest
+
+    pytest.importorskip("benzene.aws")
+    from benzene.testing import create_test_host
+
+    host = create_test_host(GreetStartUp).with_config({"prefix": "yo"}).build_aws()
+    assert host.scope is not None
+    # Config supplied through the harness reached configure_services and shaped the resolved service.
+    assert host.scope.get_service(Greeter).prefix == "yo"
