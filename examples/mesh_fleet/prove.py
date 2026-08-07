@@ -106,7 +106,16 @@ _EXTRACT_JS = """
     return { client: tds[0] && tds[0].textContent.trim(), server: tds[1] && tds[1].textContent.trim(),
              source: src ? src.textContent.trim() : null };
   });
-  return { services, edges, docTitle: (document.getElementById('doc-title') || {}).textContent };
+  // The catalog's topics table: column order is Topic, Version, Type, Producers, Consumers, HTTP, Status.
+  // The HTTP cell (td[5], .t-http) shows the (method, path) mappings, or "–" when none are known.
+  const topicRows = Array.from(document.querySelectorAll('#topics-tbody tr'));
+  const topics = topicRows.map(r => {
+    const tds = r.querySelectorAll('td');
+    return { topic: tds[0] && tds[0].textContent.trim(),
+             http: tds[5] ? tds[5].textContent.trim() : '',
+             status: tds[6] ? tds[6].textContent.trim() : '' };
+  }).filter(t => t.topic);
+  return { services, edges, topics, docTitle: (document.getElementById('doc-title') || {}).textContent };
 }
 """
 

@@ -61,6 +61,27 @@ def _stop_stack(stack: Stack, loop: asyncio.AbstractEventLoop, thread: threading
     loop.close()
 
 
+def _assert_topic_http_mappings(facts: dict) -> None:
+    """The distributed win for the route-mapping change: the topics table's HTTP column is populated.
+
+    Before the ``topics[].http`` spec extension, ``orders:create`` / ``orders:get-all`` rendered as ``gap``
+    because the transport-neutral ``/benzene/spec`` carried no route table, so ``consumers[].httpMappings``
+    came back empty over the wire. After it, orders' spec rides its HTTP routes along, the aggregator reads
+    them into ``topics.json``, and the UI's HTTP cell for those topics is non-empty and the ``gap`` clears.
+    """
+    topics = {t["topic"]: t for t in facts.get("topics", [])}
+    for name in ("orders:create", "orders:get-all"):
+        assert name in topics, f"topic {name} missing from the topics table: {sorted(topics)}"
+        cell = topics[name]
+        assert cell["http"] and cell["http"] != "–", (
+            f"{name} HTTP cell is empty — the producer gap is not closed: {cell}"
+        )
+        assert "gap" not in cell["status"].lower(), f"{name} still shows a gap status: {cell}"
+    # The exact mappings orders exposes, now visible on the distributed path.
+    assert "POST /orders" in topics["orders:create"]["http"], topics["orders:create"]
+    assert "GET /orders" in topics["orders:get-all"]["http"], topics["orders:get-all"]
+
+
 def drive_and_assert(ui_url: str, screenshot: str) -> dict:
     """Load the host-served UI in headless Chromium, assert the live DOM, and screenshot it."""
     from playwright.sync_api import sync_playwright
@@ -72,6 +93,9 @@ def drive_and_assert(ui_url: str, screenshot: str) -> dict:
         page.goto(ui_url, wait_until="networkidle")
         page.wait_for_selector("article.svc", timeout=15000)
         page.wait_for_selector("#topology-table tbody tr", state="attached", timeout=15000)
+        # The catalog's topics table renders on load too (its section is collapsed) — wait for a row to be
+        # attached so the HTTP-mapping assertions can read it from the DOM regardless of visibility.
+        page.wait_for_selector("#topics-tbody tr", state="attached", timeout=15000)
         facts = page.evaluate(_EXTRACT_JS)
         toggle = page.query_selector('button[data-sec-toggle="topology-content"]')
         if toggle:
@@ -81,6 +105,7 @@ def drive_and_assert(ui_url: str, screenshot: str) -> dict:
         browser.close()
 
     _assert_facts(facts)
+    _assert_topic_http_mappings(facts)
     return facts
 
 
