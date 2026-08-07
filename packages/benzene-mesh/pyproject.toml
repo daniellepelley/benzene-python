@@ -32,6 +32,13 @@ dependencies = ["benzene-core>=0.0.1"]
 [project.optional-dependencies]
 host = ["benzene-http>=0.0.1"]
 
+# The AWS enrichment sources (benzene.mesh.aws) — the X-Ray topology source and the CloudWatch usage
+# source — need the AWS SDK for their real clients. Opt-in so installing benzene-mesh for
+# descriptors/tracing/collector/emitter never pulls in boto3; `pip install benzene-mesh[aws]` turns the
+# AWS sources on. Their Protocol seams keep benzene.mesh.aws importable (and unit-testable with fakes)
+# without boto3 — only the thin Boto3*Client adapters import it. Mirrors benzene-aws's `[boto3]` extra.
+aws = ["boto3>=1.26"]
+
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"
 Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
