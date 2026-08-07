@@ -31,6 +31,17 @@ test that proves the `GrpcMessageSender` client over a live channel. Because the
 topic as one generic method, the domain's `POST /orders` / `GET /orders/{id}` routes are reached as the
 `orders:place` / `orders:get` topics.
 
+## The mesh demo
+
+| Example | What it shows | Package |
+|---|---|---|
+| [`mesh_fleet/`](mesh_fleet) | A three-service mesh (`orders` / `payments` / `shipping`) that self-describes, heartbeats + traces into a shared `MeshCollector`, and whose `MeshArtifactEmitter` output renders in the **canonical Mesh UI** (proven with headless Chromium) | `benzene-mesh` |
+
+`orders` calls `payments` (forwarding its mesh span) so the collector derives the `payments ← orders`
+edge; the emitter projects the fleet's spec + health + live collector into the six mesh-UI artifacts.
+`python -m mesh_fleet.prove` renders them in a real browser and screenshots the result. See its
+[`README`](mesh_fleet/README.md).
+
 ## Running the tests
 
 All example tests run as part of the normal suite (they're on `testpaths`):

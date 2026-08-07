@@ -9,3 +9,6 @@ dist/
 venv/
 .mypy_cache/
 .ruff_cache/
+
+# Mesh-fleet proof: transient emitted artifacts (the committed deliverable is mesh-fleet-proof.png)
+.mesh-fleet-artifacts/
