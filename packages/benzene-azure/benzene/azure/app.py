@@ -18,6 +18,7 @@ example's ``function_app.py`` for the v2-model wiring.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -65,8 +66,9 @@ class AzureFunctionsApp:
         body: str = "",
     ) -> AzureHttpResponse:
         if self._http_app is None:
-            return AzureHttpResponse(501, {"content-type": "application/json"},
-                                     '{"status": "not-implemented"}')
+            return AzureHttpResponse(
+                501, {"content-type": "application/json"}, '{"status": "not-implemented"}'
+            )
         response = asyncio.run(
             self._http_app.handle(
                 method=method,
@@ -100,14 +102,14 @@ class AzureFunctionsApp:
             raise MessageHandlingError(envelope["topic"], response["statusCode"], response["body"])
 
 
-def http_function(app: AzureFunctionsApp):
+def http_function(app: AzureFunctionsApp) -> Callable[[Any], Any]:
     """Return an Azure Functions HTTP entry point adapting ``azure.functions.HttpRequest``.
 
     Mirrors ``benzene.gcp.http_function`` / ``benzene.aws.to_lambda_handler`` so the entry-point
     idiom is the same across clouds. ``azure-functions`` is imported lazily inside the callable.
     """
 
-    def entry(req: Any):
+    def entry(req: Any) -> Any:
         from urllib.parse import urlsplit
 
         import azure.functions as func  # lazy: only needed at deploy time
@@ -128,7 +130,7 @@ def http_function(app: AzureFunctionsApp):
     return entry
 
 
-def service_bus_function(app: AzureFunctionsApp):
+def service_bus_function(app: AzureFunctionsApp) -> Callable[[Any], None]:
     """Return a Service Bus entry point: ``def entry(message)``."""
 
     def entry(message: Any) -> None:
@@ -137,7 +139,7 @@ def service_bus_function(app: AzureFunctionsApp):
     return entry
 
 
-def event_hub_function(app: AzureFunctionsApp):
+def event_hub_function(app: AzureFunctionsApp) -> Callable[[Any], None]:
     """Return an Event Hub entry point: ``def entry(events)`` (single event or a batch)."""
 
     def entry(events: Any) -> None:

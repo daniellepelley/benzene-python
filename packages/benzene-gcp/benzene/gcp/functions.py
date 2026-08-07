@@ -15,6 +15,7 @@ Functions Framework expects.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 from benzene.core import BenzeneMessageApplication, MessageHandlingError, Registry
@@ -77,19 +78,19 @@ class GcpFunctionsApp:
             raise MessageHandlingError(envelope["topic"], response["statusCode"], response["body"])
 
 
-def http_function(app: GcpFunctionsApp):
+def http_function(app: GcpFunctionsApp) -> Callable[[Any], Any]:
     """Return the plain HTTP entry point the Functions Framework calls: ``def entry(request)``."""
 
-    def entry(request: Any):
+    def entry(request: Any) -> Any:
         return app.handle_http(request)
 
     return entry
 
 
-def pubsub_function(app: GcpFunctionsApp):
+def pubsub_function(app: GcpFunctionsApp) -> Callable[[Any], None]:
     """Return the plain CloudEvent entry point: ``def entry(cloud_event)``."""
 
-    def entry(cloud_event: Any):
+    def entry(cloud_event: Any) -> None:
         return app.handle_pubsub(cloud_event)
 
     return entry

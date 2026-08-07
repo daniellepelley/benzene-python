@@ -16,6 +16,7 @@ Topic for the messaging transports comes from the ``topic`` message attribute. T
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 from benzene.core import BenzeneMessageApplication, MessageHandlingError, Registry
@@ -64,8 +65,11 @@ class AwsLambdaApp:
     # --- API Gateway -----------------------------------------------------------------------
     def _handle_api_gateway(self, event: dict[str, Any]) -> dict[str, Any]:
         if self._http_app is None:
-            return {"statusCode": 501, "headers": {"content-type": "application/json"},
-                    "body": '{"status": "not-implemented"}'}
+            return {
+                "statusCode": 501,
+                "headers": {"content-type": "application/json"},
+                "body": '{"status": "not-implemented"}',
+            }
         req = api_gateway_request(event)
         response = asyncio.run(self._http_app.handle(**req))
         return {
@@ -101,7 +105,7 @@ class AwsLambdaApp:
         asyncio.run(run())
 
 
-def to_lambda_handler(app: AwsLambdaApp):
+def to_lambda_handler(app: AwsLambdaApp) -> Callable[..., Any]:
     """Return the ``handler(event, context)`` callable AWS Lambda invokes."""
 
     def handler(event: dict[str, Any], context: Any = None) -> Any:

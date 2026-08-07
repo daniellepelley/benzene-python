@@ -71,12 +71,40 @@ class Result(Generic[T]):
         return Result.failure(Status.VALIDATION_ERROR, *errors)
 
     @staticmethod
+    def unauthorized(*errors: str) -> Result[Any]:
+        return Result.failure(Status.UNAUTHORIZED, *errors)
+
+    @staticmethod
+    def forbidden(*errors: str) -> Result[Any]:
+        return Result.failure(Status.FORBIDDEN, *errors)
+
+    @staticmethod
     def not_found(*errors: str) -> Result[Any]:
         return Result.failure(Status.NOT_FOUND, *errors)
 
     @staticmethod
+    def conflict(*errors: str) -> Result[Any]:
+        return Result.failure(Status.CONFLICT, *errors)
+
+    @staticmethod
+    def too_many_requests(*errors: str) -> Result[Any]:
+        return Result.failure(Status.TOO_MANY_REQUESTS, *errors)
+
+    @staticmethod
+    def timeout(*errors: str) -> Result[Any]:
+        return Result.failure(Status.TIMEOUT, *errors)
+
+    @staticmethod
+    def not_implemented(*errors: str) -> Result[Any]:
+        return Result.failure(Status.NOT_IMPLEMENTED, *errors)
+
+    @staticmethod
     def service_unavailable(*errors: str) -> Result[Any]:
         return Result.failure(Status.SERVICE_UNAVAILABLE, *errors)
+
+    @staticmethod
+    def unexpected_error(*errors: str) -> Result[Any]:
+        return Result.failure(Status.UNEXPECTED_ERROR, *errors)
 
 
 def result_with_errors(status: str, errors: Sequence[str]) -> Result[Any]:

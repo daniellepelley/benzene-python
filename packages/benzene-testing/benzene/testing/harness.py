@@ -26,8 +26,18 @@ dependency; ``.build_aws()`` raises a clear error if ``benzene-aws`` isn't insta
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING
 
 from benzene.core import BenzeneStartUp, Container, application_from, build_application
+
+if TYPE_CHECKING:
+    # Return types for editor/mypy help only — the cloud packages stay lazy runtime imports so
+    # benzene-testing keeps its benzene-core-only dependency.
+    from benzene.aws.testing import AwsLambdaTestHost
+    from benzene.azure.testing import AzureFunctionsTestHost
+    from benzene.core import AppDefinition, Scope
+    from benzene.gcp.testing import GcpFunctionsTestHost
+    from benzene.grpc.testing import GrpcTestHost
 
 
 class TestHostBuilder:
@@ -48,16 +58,18 @@ class TestHostBuilder:
         self._config.update(values)
         return self
 
-    def _build(self):
+    def _build(self) -> tuple[AppDefinition, Scope]:
         return build_application(self._startup, overrides=self._overrides, config=self._config)
 
-    def build_gcp(self):
+    def build_gcp(self) -> GcpFunctionsTestHost:
         """Specialize to a GCP Cloud Functions test host (requires ``benzene-gcp``)."""
         try:
             from benzene.gcp import GcpFunctionsApp
             from benzene.gcp.testing import GcpFunctionsTestHost
         except ImportError as ex:  # pragma: no cover - environment-specific
-            raise ImportError("build_gcp() requires the 'benzene-gcp' package to be installed") from ex
+            raise ImportError(
+                "build_gcp() requires the 'benzene-gcp' package to be installed"
+            ) from ex
         definition, scope = self._build()
         host = GcpFunctionsTestHost(
             GcpFunctionsApp(
@@ -69,13 +81,15 @@ class TestHostBuilder:
         host.scope = scope
         return host
 
-    def build_aws(self):
+    def build_aws(self) -> AwsLambdaTestHost:
         """Specialize to an AWS Lambda test host (requires ``benzene-aws``)."""
         try:
             from benzene.aws import AwsLambdaApp
             from benzene.aws.testing import AwsLambdaTestHost
         except ImportError as ex:  # pragma: no cover - environment-specific
-            raise ImportError("build_aws() requires the 'benzene-aws' package to be installed") from ex
+            raise ImportError(
+                "build_aws() requires the 'benzene-aws' package to be installed"
+            ) from ex
         definition, scope = self._build()
         host = AwsLambdaTestHost(
             AwsLambdaApp(
@@ -87,7 +101,7 @@ class TestHostBuilder:
         host.scope = scope
         return host
 
-    def build_grpc(self):
+    def build_grpc(self) -> GrpcTestHost:
         """Specialize to a gRPC test host (requires ``benzene-grpc[transport]`` — grpcio).
 
         The gRPC binding serves every topic as a generic unary method, so there is no router to
@@ -105,13 +119,15 @@ class TestHostBuilder:
         host.scope = scope
         return host
 
-    def build_azure(self):
+    def build_azure(self) -> AzureFunctionsTestHost:
         """Specialize to an Azure Functions test host (requires ``benzene-azure``)."""
         try:
             from benzene.azure import AzureFunctionsApp
             from benzene.azure.testing import AzureFunctionsTestHost
         except ImportError as ex:  # pragma: no cover - environment-specific
-            raise ImportError("build_azure() requires the 'benzene-azure' package to be installed") from ex
+            raise ImportError(
+                "build_azure() requires the 'benzene-azure' package to be installed"
+            ) from ex
         definition, scope = self._build()
         host = AzureFunctionsTestHost(
             AzureFunctionsApp(
