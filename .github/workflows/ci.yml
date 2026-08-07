@@ -92,4 +92,4 @@ jobs:
         # (site-packages) rather than the packages/ source tree.
         run: |
           python -m tests.conformance_runner
-          pytest -q -o "pythonpath=examples"
+          pytest -q -o "pythonpath=examples" --ignore=deploy

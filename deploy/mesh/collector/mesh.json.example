@@ -1,0 +1,8 @@
+{
+  "pollIntervalSeconds": 30,
+  "services": [
+    {"name": "orders", "baseUrl": "https://REPLACE-orders-id.execute-api.eu-west-1.amazonaws.com"},
+    {"name": "inventory", "baseUrl": "https://REPLACE-inventory-id.execute-api.eu-west-1.amazonaws.com"},
+    {"name": "notifications", "baseUrl": "https://REPLACE-notifications-id.execute-api.eu-west-1.amazonaws.com", "prefix": "/benzene"}
+  ]
+}

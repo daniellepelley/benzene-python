@@ -38,7 +38,7 @@ python_version = "3.10"
 namespace_packages = true
 explicit_package_bases = true
 ignore_missing_imports = true # third-party (grpcio, pydantic, cloud SDKs) ship without stubs
-mypy_path = "packages/benzene-results:packages/benzene-core:packages/benzene-http:packages/benzene-grpc:packages/benzene-mesh:packages/benzene-pydantic:packages/benzene-testing:packages/benzene-gcp:packages/benzene-aws:packages/benzene-azure"
+mypy_path = "packages/benzene-results:packages/benzene-core:packages/benzene-http:packages/benzene-grpc:packages/benzene-mesh:packages/benzene-pydantic:packages/benzene-testing:packages/benzene-gcp:packages/benzene-aws:packages/benzene-azure:deploy/mesh"
 files = [
     "packages/benzene-results/benzene",
     "packages/benzene-core/benzene",
@@ -50,6 +50,7 @@ files = [
     "packages/benzene-gcp/benzene",
     "packages/benzene-aws/benzene",
     "packages/benzene-azure/benzene",
+    "deploy/mesh/collector",
 ]
 check_untyped_defs = true
 warn_redundant_casts = true
@@ -66,7 +67,7 @@ module = "benzene.grpc"
 warn_unused_ignores = false
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "examples"]
+testpaths = ["tests", "examples", "deploy/mesh/collector"]
 pythonpath = [
     "packages/benzene-results",
     "packages/benzene-core",
@@ -79,4 +80,5 @@ pythonpath = [
     "packages/benzene-aws",
     "packages/benzene-azure",
     "examples",
+    "deploy/mesh",
 ]
