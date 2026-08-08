@@ -151,6 +151,24 @@ def test_topics_carry_consumers_producers_and_reserved_flag() -> None:
     assert arts["topics"]["removedTopics"] == []
 
 
+def test_dropped_topic_moves_to_removed_topics() -> None:
+    c = MeshCollector()
+    c.ingest_register(
+        {"service": "orders", "topics": [{"id": "order:create"}], "descriptorHash": "h1"}
+    )
+    # Re-register dropping order:create for order:cancel — nobody provides order:create anymore.
+    c.ingest_register(
+        {"service": "orders", "topics": [{"id": "order:cancel"}], "descriptorHash": "h2"}
+    )
+    topics = build_artifacts(c, generated_at=_AT)["topics"]
+    active = {t["topic"] for t in topics["topics"]}
+    assert "order:cancel" in active
+    assert "order:create" not in active  # dropped from the active functional map...
+    assert topics["removedTopics"] == [
+        "order:create"
+    ]  # ...and surfaced as removed (deprecation view)
+
+
 def test_topics_carry_schemas_version_and_schema_mismatch() -> None:
     arts = build_artifacts(_fleet(), generated_at=_AT)
     create = {t["topic"]: t for t in arts["topics"]["topics"]}["order:create"]

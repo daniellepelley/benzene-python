@@ -106,6 +106,9 @@ class MeshCollector:
     def __init__(self, *, store: CollectorStore | None = None) -> None:
         self._services: dict[str, _Service] = {}
         self._topics: set[str] = set()  # every topic ever seen (registered or traced); grows only
+        self._ever_provided: set[str] = (
+            set()
+        )  # topics some service ever declared (for removed-topic detection)
         self._events: list[_Event] = []
         self._span_owner: dict[str, str] = {}  # span id -> the service that emitted it
         self._issues: dict[str, dict[str, Any]] = {}  # fingerprint -> merged issue
@@ -129,6 +132,9 @@ class MeshCollector:
         record.has_descriptor = True
         record.descriptor_hash = new_hash
         self._topics.update(record.provided)
+        self._ever_provided.update(
+            record.provided
+        )  # remember it was declared, even if later dropped
         return self._persisted({"accepted": 1})
 
     def ingest_heartbeat(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -236,6 +242,7 @@ class MeshCollector:
                 for record in self._services.values()
             ],
             "topics": sorted(self._topics),
+            "everProvided": sorted(self._ever_provided),
             "events": [
                 {
                     "traceId": event.trace_id,
@@ -281,6 +288,7 @@ class MeshCollector:
             )
             self._services[record.name] = record
         self._topics = set(snapshot.get("topics", []))
+        self._ever_provided = set(snapshot.get("everProvided", []))
         self._events = [
             _Event(
                 trace_id=str(raw.get("traceId", "")),

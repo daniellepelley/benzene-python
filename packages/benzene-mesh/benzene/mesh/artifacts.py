@@ -88,12 +88,13 @@ def build_artifacts(
     fleet = collector.query_fleet({})
     snapshot = collector.snapshot()
     services = {entry["name"]: entry for entry in snapshot["services"]}
+    ever_provided = set(snapshot.get("everProvided", []))
     endpoints = _endpoints(sources)
     names = [entry["service"] for entry in fleet["services"]]
     return {
         "manifest": _manifest(collector, fleet, endpoints, generated_at),
         "topology": _topology(collector, fleet, generated_at),
-        "topics": _topics(collector, fleet, services, generated_at),
+        "topics": _topics(collector, fleet, services, ever_provided, generated_at),
         "services": {name: _service(collector, name, services, generated_at) for name in names},
         "usage": _usage(snapshot, generated_at),
     }
@@ -164,11 +165,20 @@ def _topics(
     collector: MeshCollector,
     fleet: dict[str, Any],
     services: dict[str, dict[str, Any]],
+    ever_provided: set[str],
     generated_at: str,
 ) -> dict[str, Any]:
+    # A topic that was once declared but is now provided by no one has been retired from the fleet's
+    # contract — surface it as removed (the deprecation view) and drop it from the active list.
+    currently_provided = {
+        topic for entry in services.values() for topic in entry.get("provided", [])
+    }
+    removed = sorted(ever_provided - currently_provided)
     topics = []
     for topic_entry in fleet["topics"]:
         topic = topic_entry["topic"]
+        if topic in removed:
+            continue
         detail = collector.query_topic({"topic": topic})
         providers = detail.get("providers", [])
         # Each provider's retained contract for this topic (from its descriptor/spec feed).
@@ -192,7 +202,7 @@ def _topics(
                 "changes": [],
             }
         )
-    return {"generatedAtUtc": generated_at, "topics": topics, "removedTopics": []}
+    return {"generatedAtUtc": generated_at, "topics": topics, "removedTopics": removed}
 
 
 def _service(
