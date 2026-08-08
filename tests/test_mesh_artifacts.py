@@ -7,12 +7,15 @@ it can't derive degrade to null/empty rather than being invented.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
 from benzene.mesh import (
+    CallableServiceSource,
     HttpServiceSource,
     MeshCollector,
+    MeshPoller,
     build_artifacts,
     write_artifacts,
 )
@@ -298,3 +301,30 @@ def test_write_artifacts_lays_out_the_files_the_ui_fetches(tmp_path: Path) -> No
     assert not list(tmp_path.glob(".*.tmp"))
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert {s["name"] for s in manifest["services"]} == {"orders", "inventory", "notifications"}
+
+
+# --- pull path: a polled fleet enriches the artifacts (schemas + per-check health) --------------
+
+
+def test_polled_fleet_enriches_topics_and_service_health() -> None:
+    # A pull source exposes /benzene/spec (schemas) and /benzene/health (per-check detail); the
+    # poller folds both into the collector, so the artifacts carry them just like the push path.
+    async def spec() -> dict:
+        return {
+            "service": "inventory",
+            "topics": [{"id": "stock:reserve", "requestSchema": _RESERVE_SCHEMA}],
+        }
+
+    async def health() -> dict:
+        return {"isHealthy": True, "healthChecks": {"db": {"status": "ok", "type": "sql"}}}
+
+    collector = MeshCollector()
+    poller = MeshPoller(collector, [CallableServiceSource("inventory", spec=spec, health=health)])
+    asyncio.run(poller.poll_once())
+
+    arts = build_artifacts(collector, generated_at=_AT)
+    topic = {t["topic"]: t for t in arts["topics"]["topics"]}["stock:reserve"]
+    assert topic["requestSchema"] == _RESERVE_SCHEMA  # schema pulled from /benzene/spec
+    service = arts["services"]["inventory"]
+    assert service["health"]["healthChecks"] == {"db": {"status": "ok", "type": "sql"}}
+    assert service["health"]["isHealthy"] is True
