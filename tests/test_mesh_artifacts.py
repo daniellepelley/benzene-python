@@ -328,3 +328,23 @@ def test_polled_fleet_enriches_topics_and_service_health() -> None:
     service = arts["services"]["inventory"]
     assert service["health"]["healthChecks"] == {"db": {"status": "ok", "type": "sql"}}
     assert service["health"]["isHealthy"] is True
+
+
+def test_anonymous_service_known_only_via_traces_degrades_cleanly() -> None:
+    # A service the collector only ever saw as a trace emitter (never registered) has no descriptor:
+    # its per-service doc carries no spec/hash, and the estate lists it as unreachable.
+    c = MeshCollector()
+    c.ingest_traces(
+        {
+            "events": [
+                {"traceId": "t", "spanId": "s", "service": "ghost", "topic": "x:y", "status": "ok"}
+            ]
+        }
+    )
+    arts = build_artifacts(c, generated_at=_AT)
+    ghost = arts["services"]["ghost"]
+    assert ghost["specJson"] is None  # no descriptor -> no reconstructed spec
+    assert ghost["specHash"] is None
+    assert ghost["health"]["healthChecks"] == {}
+    status = {s["name"]: s["status"] for s in arts["manifest"]["services"]}
+    assert status["ghost"] == "unreachable"
