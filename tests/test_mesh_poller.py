@@ -57,7 +57,10 @@ def _fleet_fetch(apps: dict[str, BenzeneHttpApp]):
 
 
 def test_poller_folds_a_fleet_into_the_collector() -> None:
-    apps = {"orders": _service("orders", "orders:place"), "inventory": _service("inventory", "inventory:reserve")}
+    apps = {
+        "orders": _service("orders", "orders:place"),
+        "inventory": _service("inventory", "inventory:reserve"),
+    }
     fetch = _fleet_fetch(apps)
     collector = MeshCollector()
     poller = MeshPoller(
@@ -75,18 +78,20 @@ def test_poller_folds_a_fleet_into_the_collector() -> None:
     by_name = {s["service"]: s for s in fleet["services"]}
     assert set(by_name) == {"orders", "inventory"}
     assert by_name["orders"]["health"] == "healthy"
-    assert by_name["orders"]["topics"] == 1                      # one provided topic, from the spec
+    assert by_name["orders"]["topics"] == 1  # one provided topic, from the spec
     assert "orders:place" in {t["topic"] for t in fleet["topics"]}
 
 
 def test_poller_reports_an_unhealthy_service() -> None:
     apps = {"orders": _service("orders", "orders:place", healthy=False)}
     collector = MeshCollector()
-    poller = MeshPoller(collector, [HttpServiceSource("orders", "http://orders", fetch=_fleet_fetch(apps))])
+    poller = MeshPoller(
+        collector, [HttpServiceSource("orders", "http://orders", fetch=_fleet_fetch(apps))]
+    )
 
     asyncio.run(poller.poll_once())
     fleet = collector.query_fleet({})
-    assert fleet["services"][0]["health"] == "unhealthy"          # 503 aggregate read as unhealthy
+    assert fleet["services"][0]["health"] == "unhealthy"  # 503 aggregate read as unhealthy
 
 
 def test_a_down_service_is_a_failed_result_not_a_broken_sweep() -> None:
@@ -135,3 +140,26 @@ def test_poll_hash_is_stable_and_drifts_with_the_contract() -> None:
     assert second["instances"][0]["hashMatches"] is True
     asyncio.run(poller.poll_once())  # third poll: topics changed -> a new hash is registered
     assert first is not second  # (distinct query snapshots)
+
+
+def test_a_malformed_service_response_is_a_failed_result_not_a_broken_sweep() -> None:
+    # A service that answers 200 but with junk (non-JSON, or a JSON array instead of an object) must
+    # be a failed PollResult, never an exception out of the sweep — the rest of the fleet still folds.
+    async def non_json(url: str) -> tuple[int, str]:
+        return 200, "this is not json"
+
+    async def json_array(url: str) -> tuple[int, str]:
+        return 200, "[1, 2, 3]"
+
+    collector = MeshCollector()
+    poller = MeshPoller(
+        collector,
+        [
+            HttpServiceSource("garbage", "http://garbage", fetch=non_json),
+            HttpServiceSource("wrongshape", "http://wrongshape", fetch=json_array),
+        ],
+    )
+    results = asyncio.run(poller.poll_once())
+    assert {r.service: r.ok for r in results} == {"garbage": False, "wrongshape": False}
+    assert all(r.error for r in results)  # each carries a reason
+    assert collector.query_fleet({})["services"] == []  # nothing malformed leaked into the catalog
