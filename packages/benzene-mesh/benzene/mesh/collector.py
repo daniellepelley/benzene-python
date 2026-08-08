@@ -68,6 +68,7 @@ class CollectorNotFound(CollectorError):
 class _Instance:
     healthy: bool
     descriptor_hash: str | None
+    health_checks: dict[str, Any] = field(default_factory=dict)  # the heartbeat's per-check detail
 
 
 @dataclass
@@ -75,7 +76,10 @@ class _Service:
     name: str
     has_descriptor: bool = False
     descriptor_hash: str | None = None
+    previous_descriptor_hash: str | None = None  # the hash before the last contract change (drift)
     provided: list[str] = field(default_factory=list)  # topic ids this service currently provides
+    # Per-topic contract detail from the descriptor/spec feed: id -> {version, requestSchema, responseSchema}.
+    topic_specs: dict[str, dict[str, Any]] = field(default_factory=dict)
     instances: dict[str, _Instance] = field(default_factory=dict)
     reported_issues: bool = False  # has sent any issues batch (even empty) — the feed's liveness
 
@@ -114,10 +118,16 @@ class MeshCollector:
     def ingest_register(self, body: dict[str, Any]) -> dict[str, Any]:
         service = _require(body, "service")
         record = self._service(service)
-        # Re-registration replaces wholesale: drop this service's old provider edges first.
-        record.provided = [str(t["id"]) for t in body.get("topics", []) if "id" in t]
+        new_hash = body.get("descriptorHash")
+        # A changed contract hash on a service we already knew is drift — remember the prior hash.
+        if record.has_descriptor and record.descriptor_hash and new_hash != record.descriptor_hash:
+            record.previous_descriptor_hash = record.descriptor_hash
+        # Re-registration replaces wholesale: drop this service's old provider edges + specs first.
+        topics = [t for t in body.get("topics", []) if isinstance(t, dict) and "id" in t]
+        record.provided = [str(t["id"]) for t in topics]
+        record.topic_specs = {str(t["id"]): _topic_spec(t) for t in topics}
         record.has_descriptor = True
-        record.descriptor_hash = body.get("descriptorHash")
+        record.descriptor_hash = new_hash
         self._topics.update(record.provided)
         return self._persisted({"accepted": 1})
 
@@ -126,9 +136,11 @@ class MeshCollector:
         record = self._service(service)
         instance_id = str(body.get("instanceId", ""))
         health = body.get("health") or {}
+        checks = health.get("healthChecks")
         record.instances[instance_id] = _Instance(
             healthy=bool(health.get("isHealthy", False)),
             descriptor_hash=body.get("descriptorHash"),
+            health_checks=dict(checks) if isinstance(checks, dict) else {},
         )
         return self._persisted({"accepted": 1})
 
@@ -207,13 +219,16 @@ class MeshCollector:
                     "name": record.name,
                     "hasDescriptor": record.has_descriptor,
                     "descriptorHash": record.descriptor_hash,
+                    "previousDescriptorHash": record.previous_descriptor_hash,
                     "provided": record.provided,
+                    "topicSpecs": copy.deepcopy(record.topic_specs),
                     "reportedIssues": record.reported_issues,
                     "instances": [
                         {
                             "instanceId": instance_id,
                             "healthy": instance.healthy,
                             "descriptorHash": instance.descriptor_hash,
+                            "healthChecks": copy.deepcopy(instance.health_checks),
                         }
                         for instance_id, instance in record.instances.items()
                     ],
@@ -251,12 +266,15 @@ class MeshCollector:
                 name=str(entry["name"]),
                 has_descriptor=bool(entry.get("hasDescriptor", False)),
                 descriptor_hash=entry.get("descriptorHash"),
+                previous_descriptor_hash=entry.get("previousDescriptorHash"),
                 provided=list(entry.get("provided", [])),
+                topic_specs=copy.deepcopy(entry.get("topicSpecs", {})),
                 reported_issues=bool(entry.get("reportedIssues", False)),
                 instances={
                     str(inst["instanceId"]): _Instance(
                         healthy=bool(inst.get("healthy", False)),
                         descriptor_hash=inst.get("descriptorHash"),
+                        health_checks=copy.deepcopy(inst.get("healthChecks", {})),
                     )
                     for inst in entry.get("instances", [])
                 },
@@ -422,6 +440,22 @@ def _safe_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _topic_spec(topic: dict[str, Any]) -> dict[str, Any]:
+    """The contract detail on a descriptor/spec topic entry: version + non-empty payload schemas.
+
+    An empty schema (``{}``) means "no schema" in the descriptor, so it is omitted rather than stored —
+    the artifact projection then renders it as absent rather than an empty object.
+    """
+    spec: dict[str, Any] = {}
+    version = topic.get("version")
+    if version:
+        spec["version"] = str(version)
+    for key in ("requestSchema", "responseSchema", "messageSchema"):
+        if topic.get(key):
+            spec[key] = topic[key]
+    return spec
 
 
 _CollectorMethod = Callable[[dict[str, Any]], dict[str, Any]]

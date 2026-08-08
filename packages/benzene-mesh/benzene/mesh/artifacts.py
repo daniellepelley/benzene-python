@@ -2,17 +2,18 @@
 
 The language-neutral **Benzene Mesh UI** (``mesh-ui.html``, one canonical page across every port) is
 data-driven from a fixed set of static JSON artifacts an aggregator publishes — ``manifest.json``,
-``services/{name}.json``, ``topics.json``, ``topology.json`` (plus ``usage.json`` / ``annotations.json``
-that need feeds this collector doesn't have). Their shapes are the cross-language read-model contract
+``services/{name}.json``, ``topics.json``, ``topology.json``, ``usage.json`` (``annotations.json`` needs
+a write-plane this static floor doesn't have). Their shapes are the cross-language read-model contract
 documented in the main repo's ``docs/guides/mesh-ui.md`` and pinned by the ``website/demos/mesh/``
 fixtures. This module is the Python aggregator's projection into that contract.
 
 The UI **must not invent fields and degrades gracefully when any is absent** (mesh.md §6), so this
-emits exactly what the collector's catalog knows and leaves the rest ``null``/empty rather than
-fabricating it: payload schemas, per-check health detail, spec history, and latency/rate metrics are
-not in the pull+trace catalog, so those fields render as reduced. What *is* derivable — the estate
-(names, health, contract-drift), the functional map (topics with consumers/producers), the topology
-(who calls whom, from trace parentage), and per-service health/drift — is emitted in full.
+emits exactly what the collector's catalog knows. From the descriptor/spec feed it derives the estate
+(names, health, contract-drift + spec-hash history), the functional map (topics with consumers/producers,
+**request/response schemas, version, and schema-mismatch**), and per-service **spec + per-check health**;
+from the trace feed, the topology (who calls whom) and **usage** (exercise counts per topic/service/
+status). What genuinely needs feeds this collector doesn't have — latency/rate metrics, a usage time
+window, transports, and annotations — stays ``null``/empty rather than being fabricated.
 
 Pure and transport-neutral: :func:`build_artifacts` returns plain dicts (inject ``generated_at`` for a
 deterministic result); :func:`write_artifacts` lays them out on disk for the UI to fetch by relative
@@ -25,6 +26,7 @@ import contextlib
 import json
 import os
 import tempfile
+from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Protocol
@@ -84,14 +86,16 @@ def build_artifacts(
     ``sources`` supplies each service's ``specUrl`` / ``healthUrl`` for the manifest links.
     """
     fleet = collector.query_fleet({})
-    hashes = {s["name"]: s.get("descriptorHash") for s in collector.snapshot()["services"]}
+    snapshot = collector.snapshot()
+    services = {entry["name"]: entry for entry in snapshot["services"]}
     endpoints = _endpoints(sources)
     names = [entry["service"] for entry in fleet["services"]]
     return {
         "manifest": _manifest(collector, fleet, endpoints, generated_at),
         "topology": _topology(collector, fleet, generated_at),
-        "topics": _topics(collector, fleet, generated_at),
-        "services": {name: _service(collector, name, hashes, generated_at) for name in names},
+        "topics": _topics(collector, fleet, services, generated_at),
+        "services": {name: _service(collector, name, services, generated_at) for name in names},
+        "usage": _usage(snapshot, generated_at),
     }
 
 
@@ -156,25 +160,35 @@ def _topology(collector: MeshCollector, fleet: dict[str, Any], generated_at: str
     return {"generatedAtUtc": generated_at, "edges": edges}
 
 
-def _topics(collector: MeshCollector, fleet: dict[str, Any], generated_at: str) -> dict[str, Any]:
+def _topics(
+    collector: MeshCollector,
+    fleet: dict[str, Any],
+    services: dict[str, dict[str, Any]],
+    generated_at: str,
+) -> dict[str, Any]:
     topics = []
     for topic_entry in fleet["topics"]:
         topic = topic_entry["topic"]
         detail = collector.query_topic({"topic": topic})
+        providers = detail.get("providers", [])
+        # Each provider's retained contract for this topic (from its descriptor/spec feed).
+        provider_specs = [services.get(p, {}).get("topicSpecs", {}).get(topic) for p in providers]
+        present = [spec for spec in provider_specs if spec]
+        representative = present[0] if present else {}
+        # Two providers of one topic declaring different contracts is a real mismatch signal.
+        schema_mismatch = any(spec != representative for spec in present[1:])
         topics.append(
             {
                 "topic": topic,
-                "version": "",
+                "version": representative.get("version", ""),
                 "reserved": _is_reserved(topic),
                 "consumers": [{"service": c} for c in detail.get("consumers", [])],
-                "producers": [{"service": p} for p in detail.get("providers", [])],
+                "producers": [{"service": p} for p in providers],
                 "status": None,
-                # Payload schemas aren't retained in the pull+trace catalog (the descriptor's
-                # per-topic schemas are not stored), so these degrade rather than being invented.
-                "requestSchema": None,
-                "responseSchema": None,
-                "messageSchema": None,
-                "schemaMismatch": False,
+                "requestSchema": representative.get("requestSchema"),
+                "responseSchema": representative.get("responseSchema"),
+                "messageSchema": representative.get("messageSchema"),
+                "schemaMismatch": schema_mismatch,
                 "changes": [],
             }
         )
@@ -184,19 +198,71 @@ def _topics(collector: MeshCollector, fleet: dict[str, Any], generated_at: str) 
 def _service(
     collector: MeshCollector,
     name: str,
-    hashes: dict[str, Any],
+    services: dict[str, dict[str, Any]],
     generated_at: str,
 ) -> dict[str, Any]:
     detail = collector.query_service({"service": name})
+    entry = services.get(name, {})
     return {
         "name": name,
         "fetchedAtUtc": generated_at,
-        "specJson": None,  # the collector retains the hash, not the spec document text
-        "specHash": hashes.get(name),
-        "previousSpecHash": None,  # no per-service hash history in the catalog
+        "specJson": _spec_json(name, entry),
+        "specHash": entry.get("descriptorHash"),
+        "previousSpecHash": entry.get("previousDescriptorHash"),
         "contractDrift": _drifted(detail),
-        "health": {"isHealthy": detail.get("health") == "healthy", "healthChecks": {}},
+        "health": _service_health(detail, entry),
         "error": None,
+    }
+
+
+def _spec_json(name: str, entry: dict[str, Any]) -> str | None:
+    """Reconstruct the service's spec document (as a JSON string) from its retained topic contracts."""
+    if not entry.get("hasDescriptor"):
+        return None
+    specs = entry.get("topicSpecs", {})
+    topics = []
+    for topic_id in sorted(entry.get("provided", [])):
+        spec = specs.get(topic_id, {})
+        topics.append({"id": topic_id, **spec})
+    return json.dumps({"service": name, "topics": topics}, ensure_ascii=False)
+
+
+def _service_health(detail: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    # The aggregate isHealthy (from the query read model) plus the per-check detail retained from the
+    # heartbeats — merged across instances, latest-wins, so the service page can render each check.
+    checks: dict[str, Any] = {}
+    for instance in entry.get("instances", []):
+        checks.update(instance.get("healthChecks", {}))
+    return {"isHealthy": detail.get("health") == "healthy", "healthChecks": checks}
+
+
+def _usage(snapshot: dict[str, Any], generated_at: str) -> dict[str, Any]:
+    """Derive usage from the observed traces: exercise counts per (topic, service, status).
+
+    The pull+trace catalog has no time window, transport, or durations, so those fields are null —
+    but the counts are enough for the UI's usage view and its zero-traffic deprecation signal.
+    """
+    counts: Counter[tuple[str, str, str]] = Counter()
+    for event in snapshot.get("events", []):
+        counts[(event["topic"], event["service"], event["status"])] += 1
+    entries = [
+        {
+            "topic": topic,
+            "version": None,
+            "service": service,
+            "transport": None,
+            "status": status,
+            "count": count,
+            "avgDurationMs": None,
+            "source": "collector",
+        }
+        for (topic, service, status), count in sorted(counts.items())
+    ]
+    return {
+        "generatedAtUtc": generated_at,
+        "windowStartUtc": None,
+        "windowEndUtc": None,
+        "entries": entries,
     }
 
 
@@ -218,6 +284,7 @@ def write_artifacts(
     _write_json(root / "manifest.json", artifacts["manifest"])
     _write_json(root / "topology.json", artifacts["topology"])
     _write_json(root / "topics.json", artifacts["topics"])
+    _write_json(root / "usage.json", artifacts["usage"])
     services_dir = root / "services"
     for name, document in artifacts["services"].items():
         _write_json(services_dir / f"{name}.json", document)

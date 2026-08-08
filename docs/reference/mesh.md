@@ -428,13 +428,15 @@ write_artifacts("/data/mesh-ui", collector, sources=poller_sources, generated_at
 - **`write_artifacts(dir, ...)`** lays them out on disk (atomically) for the UI to fetch by relative
   path.
 
-The projection honours the contract's **"must not invent fields, degrade when absent"** rule: the
-estate (health mapped to healthy/unhealthy/unreachable, contract-drift from hash mismatch), the
-functional map (topics with derived consumers/producers, `benzene:*` flagged `reserved`), the topology
-(client→server edges from trace parentage with error rate), and per-service health/drift derive in
-full; fields that need feeds the pull+trace catalog doesn't have (payload schemas, per-check health
-detail, spec history, latency/rate metrics, usage, annotations) are emitted as `null`/empty so the UI
-renders them as reduced rather than fabricated. See `deploy/mesh` for the host that serves them.
+The projection honours the contract's **"must not invent fields, degrade when absent"** rule. From the
+descriptor/spec feed it derives the estate (health mapped to healthy/unhealthy/unreachable,
+contract-drift + `previousSpecHash` history), the functional map (topics with consumers/producers,
+`benzene:*` flagged `reserved`, **request/response schemas, version, and `schemaMismatch`** when two
+providers of a topic disagree), and per-service **spec + per-check health**; from the trace feed, the
+topology (client→server edges from parentage with error rate) and **`usage.json`** (exercise counts per
+topic/service/status). Only what genuinely needs feeds the collector doesn't have — latency/rate
+metrics, a usage time window, transports, and annotations — is emitted as `null`/empty. See
+`deploy/mesh` for the host that serves them.
 
 ## The poller — `MeshPoller` (pull aggregator)
 

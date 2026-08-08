@@ -20,14 +20,26 @@ from benzene.mesh import (
 _AT = "2026-08-08T00:00:00+00:00"
 
 
+_ORDER_SCHEMA = {"type": "object", "properties": {"sku": {"type": "string"}}}
+_RESERVE_SCHEMA = {"type": "object", "properties": {"qty": {"type": "integer"}}}
+
+
 def _fleet() -> MeshCollector:
     c = MeshCollector()
     # Three services; one healthy, one unhealthy + drifted, one registered-but-never-beat (unreachable).
     c.ingest_register(
-        {"service": "orders", "topics": [{"id": "order:create"}], "descriptorHash": "h-ord"}
+        {
+            "service": "orders",
+            "topics": [{"id": "order:create", "version": "1", "requestSchema": _ORDER_SCHEMA}],
+            "descriptorHash": "h-ord",
+        }
     )
     c.ingest_register(
-        {"service": "inventory", "topics": [{"id": "stock:reserve"}], "descriptorHash": "h-inv"}
+        {
+            "service": "inventory",
+            "topics": [{"id": "stock:reserve", "responseSchema": _RESERVE_SCHEMA}],
+            "descriptorHash": "h-inv",
+        }
     )
     c.ingest_register(
         {"service": "notifications", "topics": [{"id": "notify:send"}], "descriptorHash": "h-not"}
@@ -37,7 +49,7 @@ def _fleet() -> MeshCollector:
             "service": "orders",
             "instanceId": "i1",
             "descriptorHash": "h-ord",
-            "health": {"isHealthy": True},
+            "health": {"isHealthy": True, "healthChecks": {"db": {"status": "ok", "type": "sql"}}},
         }
     )
     # inventory's live instance runs a different descriptor hash -> unhealthy + contract drift.
@@ -132,10 +144,34 @@ def test_topics_carry_consumers_producers_and_reserved_flag() -> None:
     assert reserve["producers"] == [{"service": "inventory"}]
     assert reserve["consumers"] == [{"service": "orders"}]
     assert reserve["reserved"] is False
-    assert reserve["responseSchema"] is None  # schemas not retained -> degraded
+    assert reserve["responseSchema"] == _RESERVE_SCHEMA  # retained from the descriptor feed
+    assert reserve["requestSchema"] is None  # not declared -> absent, not fabricated
 
     assert by_topic["benzene:mesh:query:fleet"]["reserved"] is True  # benzene:* is plumbing
     assert arts["topics"]["removedTopics"] == []
+
+
+def test_topics_carry_schemas_version_and_schema_mismatch() -> None:
+    arts = build_artifacts(_fleet(), generated_at=_AT)
+    create = {t["topic"]: t for t in arts["topics"]["topics"]}["order:create"]
+    assert create["requestSchema"] == _ORDER_SCHEMA
+    assert create["version"] == "1"
+    assert create["schemaMismatch"] is False
+
+
+def test_schema_mismatch_when_two_providers_disagree() -> None:
+    c = MeshCollector()
+    c.ingest_register(
+        {"service": "a", "topics": [{"id": "shared:topic", "responseSchema": _ORDER_SCHEMA}]}
+    )
+    c.ingest_register(
+        {"service": "b", "topics": [{"id": "shared:topic", "responseSchema": _RESERVE_SCHEMA}]}
+    )
+    topic = {t["topic"]: t for t in build_artifacts(c, generated_at=_AT)["topics"]["topics"]}[
+        "shared:topic"
+    ]
+    assert {p["service"] for p in topic["producers"]} == {"a", "b"}
+    assert topic["schemaMismatch"] is True  # two providers, different contracts
 
 
 # --- per-service ------------------------------------------------------------------------------
@@ -153,6 +189,41 @@ def test_service_document_reports_hash_drift_and_health() -> None:
     assert inventory["error"] is None
 
 
+def test_service_document_carries_spec_and_per_check_health() -> None:
+    orders = build_artifacts(_fleet(), generated_at=_AT)["services"]["orders"]
+    # The reconstructed spec document names the topic + its retained schema.
+    spec = json.loads(orders["specJson"])
+    assert spec["service"] == "orders"
+    assert spec["topics"][0]["id"] == "order:create"
+    assert spec["topics"][0]["requestSchema"] == _ORDER_SCHEMA
+    # Per-check health detail from the heartbeat surfaces on the service page.
+    assert orders["health"]["healthChecks"] == {"db": {"status": "ok", "type": "sql"}}
+
+
+def test_previous_spec_hash_records_a_contract_change() -> None:
+    c = MeshCollector()
+    c.ingest_register(
+        {"service": "orders", "topics": [{"id": "order:create"}], "descriptorHash": "h1"}
+    )
+    c.ingest_register(
+        {"service": "orders", "topics": [{"id": "order:create"}], "descriptorHash": "h2"}
+    )
+    orders = build_artifacts(c, generated_at=_AT)["services"]["orders"]
+    assert orders["specHash"] == "h2"
+    assert orders["previousSpecHash"] == "h1"  # the hash before the change
+
+
+def test_usage_counts_come_from_the_traces() -> None:
+    usage = build_artifacts(_fleet(), generated_at=_AT)["usage"]
+    assert usage["generatedAtUtc"] == _AT
+    assert usage["windowStartUtc"] is None  # no time window in the trace catalog -> degraded
+    by_key = {(e["topic"], e["service"], e["status"]): e for e in usage["entries"]}
+    reserve = by_key[("stock:reserve", "inventory", "service-unavailable")]
+    assert reserve["count"] == 1
+    assert reserve["source"] == "collector"
+    assert reserve["transport"] is None  # trace catalog has no transport -> degraded
+
+
 # --- write to disk ----------------------------------------------------------------------------
 
 
@@ -161,6 +232,7 @@ def test_write_artifacts_lays_out_the_files_the_ui_fetches(tmp_path: Path) -> No
     assert (tmp_path / "manifest.json").exists()
     assert (tmp_path / "topology.json").exists()
     assert (tmp_path / "topics.json").exists()
+    assert (tmp_path / "usage.json").exists()
     # One services/{name}.json per service, each valid JSON with the contract's top-level name.
     for name in ("orders", "inventory", "notifications"):
         doc = json.loads((tmp_path / "services" / f"{name}.json").read_text())

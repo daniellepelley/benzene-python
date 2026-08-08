@@ -56,9 +56,12 @@ replaced task rehydrates the fleet it already knew.
 cross-language read-model artifacts the canonical `mesh-ui.html` renders — `manifest.json`,
 `topology.json`, `topics.json`, `services/{name}.json` — matching the contract in the main repo's
 `docs/guides/mesh-ui.md` (pinned by `website/demos/mesh/`). The Fargate host republishes them after each
-poll sweep and serves them, plus the vendored UI, under `/mesh-ui/`. Faithful to the contract's
-"don't invent fields, degrade when absent" rule: the estate, functional map, topology, and per-service
-health derive in full; schemas / usage / latency (which need feeds this collector doesn't have) degrade.
+poll sweep and serves them, plus the vendored UI, under `/mesh-ui/`. The collector retains the
+descriptor's per-topic **schemas + version**, a **previousSpecHash** across contract changes, and the
+heartbeat's **healthChecks**, so the functional map (schemas, schema-mismatch), per-service (spec +
+per-check health + drift history), and **usage.json** (from traces) all populate. Only true
+observability metrics (latency/rate, usage window/transports) and annotations degrade — they need
+feeds this collector doesn't have.
 
 **Phase 4 — verify live.** An integration/smoke test: `terraform apply`, drive traffic across the
 fleet, assert the mesh shows the full fleet + edges + health, then `terraform destroy`. A runbook, and

@@ -113,13 +113,14 @@ The collector serves the canonical, cross-language **Benzene Mesh UI** at **`/me
 kept verbatim in [`collector/ui/`](collector/ui/) with its provenance banner.
 
 After each poll sweep the host projects its catalog into the read-model artifacts the UI renders —
-`manifest.json`, `topology.json`, `topics.json`, and `services/{name}.json` — via
+`manifest.json`, `topology.json`, `topics.json`, `usage.json`, and `services/{name}.json` — via
 [`benzene.mesh.write_artifacts`](../../docs/reference/mesh.md#the-mesh-ui-artifacts--build_artifacts--write_artifacts),
 writing them to `MESH_ARTIFACTS_DIR` (the volume) and serving them alongside the page. The UI fetches
-them by relative path, so no UI configuration is needed. What the pull+trace catalog can derive — the
-estate (health, contract-drift), the functional map (topics + consumers/producers), the topology, and
-per-service health — renders in full; fields that need feeds this collector doesn't have (payload
-schemas, latency/rate metrics, usage, annotations) degrade gracefully rather than being invented.
+them by relative path, so no UI configuration is needed. From the descriptor/spec feed it derives the
+estate (health, contract-drift + spec-hash history), the functional map (topics + consumers/producers,
+**payload schemas, version, schema-mismatch**), and per-service **spec + per-check health**; from the
+traces, the topology and **usage** counts. Only what genuinely needs feeds this collector doesn't have
+— latency/rate metrics, a usage time window, transports, and annotations — degrades gracefully.
 
 Set `MESH_ARTIFACTS_DIR` (Terraform sets it automatically) to enable it; unset disables the UI.
 
@@ -155,9 +156,9 @@ it — a fresh `apply` starts from an empty catalog and refills from the fleet.
 
 ## Next
 
-- **Richer artifacts** — the UI degrades gracefully for what the pull+trace catalog can't derive today:
-  per-topic payload **schemas** (retain the descriptor's topic schemas on `register`), **usage.json**
-  (a metrics feed), and per-check **health detail** (retain the heartbeat's `healthChecks`). Each is an
-  additive collector enhancement that lights up more of the same UI.
+- **A metrics feed** — the topology's rate/latency (`requestsPerMinute`, p50/p95/p99) and `usage.json`'s
+  time window / transports / durations need a real metrics source (CloudWatch, Tempo). The structural
+  usage counts derived from traces already drive the usage + deprecation views; a metrics feed would
+  fill in the observability numbers the UI leaves reduced today.
 - **Live-plane enhancements** — `annotations.json` writes and other backend-gated features (mesh-ui.md
   §4) are out of scope for the static floor served here.
