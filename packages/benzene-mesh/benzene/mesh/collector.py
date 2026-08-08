@@ -80,6 +80,8 @@ class _Service:
     provided: list[str] = field(default_factory=list)  # topic ids this service currently provides
     # Per-topic contract detail from the descriptor/spec feed: id -> {version, requestSchema, responseSchema}.
     topic_specs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # The topic_specs from the register before the current one, for per-topic schema-change detection.
+    previous_topic_specs: dict[str, dict[str, Any]] = field(default_factory=dict)
     instances: dict[str, _Instance] = field(default_factory=dict)
     reported_issues: bool = False  # has sent any issues batch (even empty) — the feed's liveness
 
@@ -128,6 +130,8 @@ class MeshCollector:
         # Re-registration replaces wholesale: drop this service's old provider edges + specs first.
         topics = [t for t in body.get("topics", []) if isinstance(t, dict) and "id" in t]
         record.provided = [str(t["id"]) for t in topics]
+        # Keep the prior contracts so the artifact writer can flag which topics changed schema.
+        record.previous_topic_specs = record.topic_specs
         record.topic_specs = {str(t["id"]): _topic_spec(t) for t in topics}
         record.has_descriptor = True
         record.descriptor_hash = new_hash
@@ -228,6 +232,7 @@ class MeshCollector:
                     "previousDescriptorHash": record.previous_descriptor_hash,
                     "provided": record.provided,
                     "topicSpecs": copy.deepcopy(record.topic_specs),
+                    "previousTopicSpecs": copy.deepcopy(record.previous_topic_specs),
                     "reportedIssues": record.reported_issues,
                     "instances": [
                         {
@@ -276,6 +281,7 @@ class MeshCollector:
                 previous_descriptor_hash=entry.get("previousDescriptorHash"),
                 provided=list(entry.get("provided", [])),
                 topic_specs=copy.deepcopy(entry.get("topicSpecs", {})),
+                previous_topic_specs=copy.deepcopy(entry.get("previousTopicSpecs", {})),
                 reported_issues=bool(entry.get("reportedIssues", False)),
                 instances={
                     str(inst["instanceId"]): _Instance(

@@ -164,6 +164,29 @@ def _topology(collector: MeshCollector, fleet: dict[str, Any], generated_at: str
     return {"generatedAtUtc": generated_at, "edges": edges}
 
 
+def _topic_changes(
+    topic: str, providers: list[str], services: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Contract-evolution signals for a topic — currently ``schema-changed`` (mesh-ui.md §3.2).
+
+    A provider whose retained contract for this topic differs from the one it declared on its prior
+    register has changed the schema; the UI surfaces it inline on the functional map.
+    """
+    changes: list[dict[str, Any]] = []
+    for provider in providers:
+        entry = services.get(provider, {})
+        current = entry.get("topicSpecs", {}).get(topic)
+        previous = entry.get("previousTopicSpecs", {}).get(topic)
+        if previous is not None and current is not None and current != previous:
+            changes.append(
+                {
+                    "kind": "schema-changed",
+                    "description": f"{provider} changed the contract for {topic}",
+                }
+            )
+    return changes
+
+
 def _topics(
     collector: MeshCollector,
     fleet: dict[str, Any],
@@ -202,7 +225,7 @@ def _topics(
                 "responseSchema": representative.get("responseSchema"),
                 "messageSchema": representative.get("messageSchema"),
                 "schemaMismatch": schema_mismatch,
-                "changes": [],
+                "changes": _topic_changes(topic, providers, services),
             }
         )
     return {"generatedAtUtc": generated_at, "topics": topics, "removedTopics": removed}

@@ -218,6 +218,24 @@ def test_service_document_carries_spec_and_per_check_health() -> None:
     assert orders["health"]["healthChecks"] == {"db": {"status": "ok", "type": "sql"}}
 
 
+def test_topic_schema_change_is_flagged_in_changes() -> None:
+    c = MeshCollector()
+    c.ingest_register(
+        {"service": "orders", "topics": [{"id": "order:create", "requestSchema": _ORDER_SCHEMA}]}
+    )
+    by_topic = {t["topic"]: t for t in build_artifacts(c, generated_at=_AT)["topics"]["topics"]}
+    assert by_topic["order:create"]["changes"] == []  # first registration — nothing changed yet
+    # Re-register the same topic with a different schema -> schema-changed.
+    c.ingest_register(
+        {"service": "orders", "topics": [{"id": "order:create", "requestSchema": _RESERVE_SCHEMA}]}
+    )
+    change = {t["topic"]: t for t in build_artifacts(c, generated_at=_AT)["topics"]["topics"]}[
+        "order:create"
+    ]["changes"]
+    assert len(change) == 1 and change[0]["kind"] == "schema-changed"
+    assert "order:create" in change[0]["description"]
+
+
 def test_previous_spec_hash_records_a_contract_change() -> None:
     c = MeshCollector()
     c.ingest_register(
