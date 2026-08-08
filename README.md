@@ -93,6 +93,47 @@ async def hello(request: dict) -> Result:
 app = BenzeneHttpApp(HttpRouter().add(hello))   # run: uvicorn module:app
 ```
 
+## Scaffold a new service
+
+The **`dotnet new` equivalent** for the Python port: generate a runnable Benzene service — a
+`BenzeneStartUp` composition root, a demo handler with one injected `Greeter`, the transport host and
+entry point, a `pyproject.toml`, and an optional pytest component test — with a single command. The
+starters live in [`templates/`](templates) and are driven by [**Copier**](https://copier.readthedocs.io/):
+
+```bash
+pip install copier
+
+# From GitHub (the templates live in this subdirectory of the repo):
+copier copy gh:daniellepelley/benzene-python/templates my-service
+
+# ...or from a local checkout of this repo:
+copier copy templates my-service
+```
+
+Copier then asks a few questions — the service name, its Python package slug, which **transport** to
+wire, and whether to include tests:
+
+| `transport` | Host | Demo handler wired as |
+|---|---|---|
+| `aws-apigateway` | AWS Lambda behind API Gateway (HTTP) | `GET /hello/{name}` route |
+| `aws-sqs` | AWS Lambda triggered by SQS (fire-and-forget) | `hello:world` topic |
+| `grpc` | a gRPC server (method = topic, host anywhere) | `hello:world` topic |
+
+The `include_tests` toggle (default `true`) adds a pytest component test that boots the **same** app
+`StartUp` configures for deployment, swaps the `Greeter` for a spy, and pushes a message through the
+whole pipeline via the transport's own front door. We use Copier rather than Cookiecutter for one
+reason — `copier update`: a generated project records its answers in `.copier-answers.yml`, so when
+the templates improve you re-run `copier update` inside your project and pull the changes in
+(three-way-merged against your edits).
+
+> **Heads up:** a generated `pyproject.toml` depends on the real `benzene-*` package names, which are
+> **not published to PyPI yet**. Until they are, install the `benzene-*` deps from a local checkout of
+> this repo first (editable) and then install the generated project with `--no-deps` — the generated
+> `README.md` and [`templates/README.md`](templates/README.md) spell out the exact recipe.
+
+See [`templates/README.md`](templates/README.md) for the full question list, the transport details,
+and the local-install recipe.
+
 ## Repository layout
 
 A monorepo of independently-publishable distributions:

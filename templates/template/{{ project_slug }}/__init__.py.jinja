@@ -1,0 +1,7 @@
+"""{{ project_name }} — a Benzene service on {% if transport == "aws-apigateway" %}AWS Lambda (API Gateway){% elif transport == "aws-sqs" %}AWS Lambda (SQS){% else %}gRPC{% endif %}."""
+
+from __future__ import annotations
+
+from .startup import {{ startup_class }}
+
+__all__ = ["{{ startup_class }}"]

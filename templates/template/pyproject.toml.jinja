@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "{{ project_slug | replace('_', '-') }}"
+version = "0.1.0"
+description = "{{ project_name }} — a Benzene service."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+{%- if transport in ("aws-apigateway", "aws-sqs") %}
+    # The AWS Lambda host + API Gateway/SQS/SNS bindings. Add the [boto3] extra
+    # (benzene-aws[boto3]) when you register a real SNS/SQS outbound client for egress.
+    "benzene-aws>=0.0.1",
+{%- else %}
+    # The gRPC host; the [transport] extra pulls in grpcio (the server/client transport).
+    "benzene-grpc[transport]>=0.0.1",
+{%- endif %}
+]
+
+{% if include_tests -%}
+[project.optional-dependencies]
+# Test-only deps: the in-memory Benzene test host + native-event builders, and pytest.
+test = [
+    "benzene-testing>=0.0.1",
+    "pytest>=7",
+]
+
+{% endif -%}
+# NOTE: the benzene-* packages are referenced by their published (PyPI) names. Until they are
+# published you can install them from a local benzene-python checkout, e.g.:
+#   pip install -e /path/to/benzene-python/packages/benzene-core \
+#               -e /path/to/benzene-python/packages/benzene-results \
+#               -e /path/to/benzene-python/packages/benzene-http \
+{%- if transport in ("aws-apigateway", "aws-sqs") %}
+#               -e /path/to/benzene-python/packages/benzene-aws \
+{%- else %}
+#               -e /path/to/benzene-python/packages/benzene-grpc \
+{%- endif %}
+{%- if include_tests %}
+#               -e /path/to/benzene-python/packages/benzene-testing \
+{%- endif %}
+# then `pip install -e . --no-deps` for this project.
+
+[tool.hatch.build.targets.wheel]
+packages = ["{{ project_slug }}"]
+{% if include_tests %}
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+{%- endif %}

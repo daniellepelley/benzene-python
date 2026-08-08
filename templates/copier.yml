@@ -1,0 +1,76 @@
+# Copier configuration for the Benzene Python starter templates — the `dotnet new` equivalent for
+# Python. Generate a runnable Benzene service (composition root + demo handler + transport host +
+# optional component test) with one command:
+#
+#     copier copy gh:daniellepelley/benzene-python/templates my-service      # from GitHub (this subdir)
+#     copier copy templates my-service                                       # from a local checkout
+#
+# then answer the prompts (project name, transport, include-tests). See templates/README.md for the
+# full guide, the file tree each transport produces, and how to verify against the local packages.
+
+# The templated project tree lives under templates/template/ so this copier.yml and the templates
+# README stay out of every generated project.
+_subdirectory: template
+
+# Only files ending in .jinja are rendered; everything else is copied verbatim. (This is Copier's
+# default suffix, stated explicitly for clarity.)
+_templates_suffix: .jinja
+
+# Keep Copier's answers file in the generated project so `copier update` can pull in later template
+# improvements — the whole reason to use Copier over Cookiecutter.
+_answers_file: .copier-answers.yml
+
+_message_after_copy: |
+  Your Benzene service '{{ project_name }}' is ready in {{ _copier_conf.dst_path }}.
+
+  Next steps:
+    cd {{ _copier_conf.dst_path }}
+    pip install -e .{% if include_tests %}[test]{% endif %}     # installs benzene-* from PyPI
+  {%- if include_tests %}
+    pytest                                     # run the component test
+  {%- endif %}
+
+  Edit {{ project_slug }}/handlers.py to replace the demo greeter with your own logic.
+
+# ------------------------------------------------------------------------------------------------
+# Questions
+# ------------------------------------------------------------------------------------------------
+
+project_name:
+  type: str
+  help: "Human-readable name of your service (e.g. 'Orders Service')"
+  default: "My Benzene Service"
+
+project_slug:
+  type: str
+  help: "Python package name (importable; lowercase, underscores)"
+  default: "{{ project_name | lower | replace(' ', '_') | replace('-', '_') }}"
+  validator: >-
+    {% if not (project_slug | regex_search('^[a-z_][a-z0-9_]*$')) %}
+    project_slug must be a valid Python identifier: lowercase letters, digits, and underscores,
+    not starting with a digit (got '{{ project_slug }}').
+    {% endif %}
+
+transport:
+  type: str
+  help: "Which transport/host should the generated service run on?"
+  default: aws-apigateway
+  choices:
+    "AWS Lambda + API Gateway (HTTP request/response)": aws-apigateway
+    "AWS Lambda + SQS (fire-and-forget queue consumer)": aws-sqs
+    "gRPC server (method = topic, host anywhere)": grpc
+
+include_tests:
+  type: bool
+  help: "Include a pytest component test that drives the demo handler through the real pipeline?"
+  default: true
+
+# ------------------------------------------------------------------------------------------------
+# Computed values (not prompted — derived from the answers above)
+# ------------------------------------------------------------------------------------------------
+
+# PascalCase composition-root class name, e.g. orders_service -> OrdersServiceStartUp.
+startup_class:
+  type: str
+  when: false
+  default: "{{ project_slug.split('_') | map('capitalize') | join('') }}StartUp"

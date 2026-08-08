@@ -1,0 +1,63 @@
+"""The demo handler and its one injected collaborator — replace these with your own logic.
+
+This is where your business logic lives (not in ``host.py``/``startup.py``): a handler receives a
+typed request and returns a :class:`~benzene.results.Result`, and knows nothing about {{ transport }},
+Lambda, HTTP, or gRPC — the *same* handler shape runs unchanged on every host Benzene supports.
+
+The handler takes its collaborator (:class:`Greeter`) via a ``make_*`` factory that closes over it —
+the Pythonic take on constructor injection. That is exactly what makes it testable: a test injects a
+spy ``Greeter`` and asserts the handler actually ran with the routed message (see ``tests/``).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Protocol
+
+from benzene.core import Handler
+from benzene.results import Result
+
+#: Every Benzene transport routes by topic, so this identifier stays constant across HTTP, SQS, and
+#: gRPC (core-concepts §2 — the ``:`` separator convention).
+HELLO_TOPIC = "hello:world"
+
+
+@dataclass
+class HelloRequest:
+    """The request payload — an HTTP path param, an SQS body, or a gRPC body all cast to this."""
+
+    name: str = "World"
+
+
+@dataclass
+class HelloResponse:
+    """The response payload (used by the request/response transports; ignored fire-and-forget)."""
+
+    message: str = ""
+
+
+class Greeter(Protocol):
+    """A tiny example dependency — a handler depends on this interface, the app registers a real
+    implementation (:class:`ConsoleGreeter`), and a test swaps in a spy. Replace it with your own
+    services (a repository, an HTTP client, ...)."""
+
+    def greet(self, name: str) -> str: ...
+
+
+class ConsoleGreeter:
+    """The real implementation registered in ``startup.py`` — prints and returns the greeting."""
+
+    def greet(self, name: str) -> str:
+        message = f"Hello {name}!"
+        print(message)
+        return message
+
+
+def make_hello_handler(greeter: Greeter) -> Handler:
+    """Build the demo handler, injecting its one collaborator."""
+
+    async def hello(request: HelloRequest) -> Result:
+        message = greeter.greet(request.name)
+        return Result.ok(HelloResponse(message=message))
+
+    return hello

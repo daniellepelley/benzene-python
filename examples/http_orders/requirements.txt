@@ -1,0 +1,4 @@
+# Runtime dependencies for running the standalone HTTP orders example.
+# (In this monorepo the benzene-* packages resolve locally; on a real deploy they come from PyPI.)
+benzene-http
+uvicorn>=0.30

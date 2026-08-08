@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from benzene.core import AppDefinition, Scope
     from benzene.gcp.testing import GcpFunctionsTestHost
     from benzene.grpc.testing import GrpcTestHost
+    from benzene.http.testing import HttpTestHost
 
 
 class TestHostBuilder:
@@ -60,6 +61,29 @@ class TestHostBuilder:
 
     def _build(self) -> tuple[AppDefinition, Scope]:
         return build_application(self._startup, overrides=self._overrides, config=self._config)
+
+    def build_http(self) -> HttpTestHost:
+        """Specialize to a standalone HTTP test host (requires ``benzene-http``).
+
+        Boots the same app onto the plain ASGI binding (:class:`~benzene.http.BenzeneHttpApp`) — no
+        cloud — so a service hosted on a standalone HTTP server is tested through the same
+        ``send_http`` front door as the API Gateway / Cloud Functions hosts.
+        """
+        try:
+            from benzene.http import BenzeneHttpApp
+            from benzene.http.testing import HttpTestHost
+        except ImportError as ex:  # pragma: no cover - environment-specific
+            raise ImportError("build_http() requires the 'benzene-http' package to be installed") from ex
+        definition, scope = self._build()
+        host = HttpTestHost(
+            BenzeneHttpApp(
+                definition.router,
+                application=application_from(definition),
+                standard_paths=definition.standard_paths,
+            )
+        )
+        host.scope = scope
+        return host
 
     def build_gcp(self) -> GcpFunctionsTestHost:
         """Specialize to a GCP Cloud Functions test host (requires ``benzene-gcp``)."""
