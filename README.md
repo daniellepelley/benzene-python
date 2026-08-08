@@ -274,6 +274,14 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     publishes them via **trusted publishing** (OIDC, no stored tokens) on a `vX.Y.Z` tag; see
     [`docs/publishing.md`](docs/publishing.md). The first publish awaits the one-time PyPI
     trusted-publisher setup and a version tag.
+15. **(done)** The mesh on real infrastructure — a Fargate **Mesh Host** (poller + collector + durable
+    EFS-backed store) and a demo fleet on Lambda, stood up by one dispatchable `terraform apply`
+    ([`deploy/mesh`](deploy/mesh)). It projects the catalog into the cross-language **mesh-ui** read-model
+    artifacts (`benzene.mesh.build_artifacts`/`write_artifacts` — manifest, topics with schemas +
+    version + `schemaMismatch` + `changes[]` + `removedTopics`, topology, usage, an AsyncAPI export,
+    annotations, and per-service spec + per-check health) and serves the canonical `mesh-ui.html` at
+    `/mesh-ui/`. Verified live end to end (estate, functional map, topology, usage) then torn down; the
+    artifact field set is pinned against the contract by `tests/test_mesh_artifact_contract.py`.
 
 ## Documentation
 

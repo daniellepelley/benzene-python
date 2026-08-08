@@ -418,25 +418,29 @@ pinned by `website/demos/mesh/`):
 from benzene.mesh import write_artifacts
 
 write_artifacts("/data/mesh-ui", collector, sources=poller_sources, generated_at=now_iso)
-# -> manifest.json, topology.json, topics.json, services/{name}.json  (the UI fetches these by path)
+# manifest.json, topology.json, topics.json, usage.json, asyncapi.json, annotations.json,
+# and services/{name}.json — the UI fetches all of these by relative path.
 ```
 
 - **`build_artifacts(collector, *, sources=(), generated_at)`** returns the artifacts as dicts
-  (`{"manifest", "topology", "topics", "services": {name: doc}}`) — pure and deterministic (inject
-  `generated_at`); `sources` (any objects with `name` / `spec_url` / `health_url`, e.g.
-  `HttpServiceSource`) supply the manifest's `specUrl` / `healthUrl` links.
+  (`{"manifest", "topology", "topics", "usage", "asyncapi", "annotations", "services": {name: doc}}`) —
+  pure and deterministic (inject `generated_at`); `sources` (any objects with `name` / `spec_url` /
+  `health_url`, e.g. `HttpServiceSource`) supply the manifest's `specUrl` / `healthUrl` links.
 - **`write_artifacts(dir, ...)`** lays them out on disk (atomically) for the UI to fetch by relative
   path.
 
 The projection honours the contract's **"must not invent fields, degrade when absent"** rule. From the
 descriptor/spec feed it derives the estate (health mapped to healthy/unhealthy/unreachable,
 contract-drift + `previousSpecHash` history), the functional map (topics with consumers/producers,
-`benzene:*` flagged `reserved`, **request/response schemas, version, and `schemaMismatch`** when two
-providers of a topic disagree), and per-service **spec + per-check health**; from the trace feed, the
-topology (client→server edges from parentage with error rate) and **`usage.json`** (exercise counts per
-topic/service/status). Only what genuinely needs feeds the collector doesn't have — latency/rate
-metrics, a usage time window, transports, and annotations — is emitted as `null`/empty. See
-`deploy/mesh` for the host that serves them.
+`benzene:*` flagged `reserved`, **request/response schemas, version, `schemaMismatch`** when two
+providers disagree, **`changes[]`** when a provider re-registers a topic with a new schema, and
+**`removedTopics`** for a topic no longer provided), per-service **spec + per-check health**, and an
+**AsyncAPI 3.0** export of the domain topics; from the trace feed, the topology (client→server edges
+with error rate) and **usage** (exercise counts per topic/service/status). `annotations.json` is an
+honest empty read-model (writing is a backend-gated live-plane feature). Only what genuinely needs
+feeds the collector doesn't have — latency/rate metrics, a usage time window, and transports — is
+emitted as `null`. The field set is pinned by `tests/test_mesh_artifact_contract.py`. See `deploy/mesh`
+for the host that serves them.
 
 ## The poller — `MeshPoller` (pull aggregator)
 
