@@ -231,6 +231,25 @@ def test_previous_spec_hash_records_a_contract_change() -> None:
     assert orders["previousSpecHash"] == "h1"  # the hash before the change
 
 
+def test_asyncapi_export_projects_the_domain_topics() -> None:
+    doc = build_artifacts(_fleet(), generated_at=_AT)["asyncapi"]
+    assert doc["asyncapi"] == "3.0.0"
+    # order:create is a domain channel with its schema as the message payload...
+    assert "order_create" in doc["channels"]
+    assert doc["channels"]["order_create"]["address"] == "order:create"
+    assert doc["components"]["messages"]["order_createMessage"]["payload"] == _ORDER_SCHEMA
+    # ...and benzene:* plumbing is excluded from the domain export.
+    assert not any(c.startswith("benzene") for c in doc["channels"])
+    # stock:reserve has a provider (receive) and a consumer (send) operation.
+    assert doc["operations"]["stock_reserve_receive"]["action"] == "receive"
+    assert doc["operations"]["stock_reserve_send"]["action"] == "send"
+
+
+def test_annotations_is_an_honest_empty_read_model() -> None:
+    doc = build_artifacts(_fleet(), generated_at=_AT)["annotations"]
+    assert doc == {"generatedAtUtc": _AT, "annotations": []}
+
+
 def test_usage_counts_come_from_the_traces() -> None:
     usage = build_artifacts(_fleet(), generated_at=_AT)["usage"]
     assert usage["generatedAtUtc"] == _AT
@@ -251,6 +270,8 @@ def test_write_artifacts_lays_out_the_files_the_ui_fetches(tmp_path: Path) -> No
     assert (tmp_path / "topology.json").exists()
     assert (tmp_path / "topics.json").exists()
     assert (tmp_path / "usage.json").exists()
+    assert (tmp_path / "asyncapi.json").exists()
+    assert (tmp_path / "annotations.json").exists()
     # One services/{name}.json per service, each valid JSON with the contract's top-level name.
     for name in ("orders", "inventory", "notifications"):
         doc = json.loads((tmp_path / "services" / f"{name}.json").read_text())

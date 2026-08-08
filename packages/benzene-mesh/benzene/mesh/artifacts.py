@@ -2,18 +2,19 @@
 
 The language-neutral **Benzene Mesh UI** (``mesh-ui.html``, one canonical page across every port) is
 data-driven from a fixed set of static JSON artifacts an aggregator publishes — ``manifest.json``,
-``services/{name}.json``, ``topics.json``, ``topology.json``, ``usage.json`` (``annotations.json`` needs
-a write-plane this static floor doesn't have). Their shapes are the cross-language read-model contract
-documented in the main repo's ``docs/guides/mesh-ui.md`` and pinned by the ``website/demos/mesh/``
-fixtures. This module is the Python aggregator's projection into that contract.
+``services/{name}.json``, ``topics.json``, ``topology.json``, ``usage.json``, ``asyncapi.json``, and
+``annotations.json``. Their shapes are the cross-language read-model contract documented in the main
+repo's ``docs/guides/mesh-ui.md`` and pinned by the ``website/demos/mesh/`` fixtures. This module is
+the Python aggregator's projection into that contract.
 
 The UI **must not invent fields and degrades gracefully when any is absent** (mesh.md §6), so this
 emits exactly what the collector's catalog knows. From the descriptor/spec feed it derives the estate
 (names, health, contract-drift + spec-hash history), the functional map (topics with consumers/producers,
-**request/response schemas, version, and schema-mismatch**), and per-service **spec + per-check health**;
-from the trace feed, the topology (who calls whom) and **usage** (exercise counts per topic/service/
-status). What genuinely needs feeds this collector doesn't have — latency/rate metrics, a usage time
-window, transports, and annotations — stays ``null``/empty rather than being fabricated.
+**request/response schemas, version, and schema-mismatch**), per-service **spec + per-check health**,
+and an **AsyncAPI** export of the domain topics; from the trace feed, the topology (who calls whom) and
+**usage** (exercise counts per topic/service/status). ``annotations.json`` is an honest empty read-model
+(writing is a backend-gated live-plane feature). What genuinely needs feeds this collector doesn't have
+— latency/rate metrics, a usage time window, transports — stays ``null`` rather than being fabricated.
 
 Pure and transport-neutral: :func:`build_artifacts` returns plain dicts (inject ``generated_at`` for a
 deterministic result); :func:`write_artifacts` lays them out on disk for the UI to fetch by relative
@@ -97,6 +98,8 @@ def build_artifacts(
         "topics": _topics(collector, fleet, services, ever_provided, generated_at),
         "services": {name: _service(collector, name, services, generated_at) for name in names},
         "usage": _usage(snapshot, generated_at),
+        "asyncapi": _asyncapi(collector, fleet, services, generated_at),
+        "annotations": _annotations(generated_at),
     }
 
 
@@ -276,6 +279,78 @@ def _usage(snapshot: dict[str, Any], generated_at: str) -> dict[str, Any]:
     }
 
 
+def _annotations(generated_at: str) -> dict[str, Any]:
+    """The annotations read-model. Writing is a backend-gated live-plane feature (mesh-ui.md §4); on
+    the static floor there are none, so this is an honest empty feed (the UI shows "no notes", not a
+    missing artifact)."""
+    return {"generatedAtUtc": generated_at, "annotations": []}
+
+
+def _channel_key(topic: str) -> str:
+    """A safe AsyncAPI component/channel key for a Benzene topic id (``order:create`` -> ``order_create``)."""
+    return topic.replace(":", "_")
+
+
+def _asyncapi(
+    collector: MeshCollector,
+    fleet: dict[str, Any],
+    services: dict[str, dict[str, Any]],
+    generated_at: str,
+) -> dict[str, Any]:
+    """Project the domain topics into an AsyncAPI 3.0 document (the UI's download / Studio deep-link).
+
+    One channel per non-reserved topic (payload = its retained schema), and an operation per role:
+    a provider ``receive``s the topic, a consumer ``send``s it. A faithful export of what the catalog
+    knows — schemas populate where the descriptor declared them, else the message is left open.
+    """
+    channels: dict[str, Any] = {}
+    operations: dict[str, Any] = {}
+    messages: dict[str, Any] = {}
+    for topic_entry in fleet["topics"]:
+        topic = topic_entry["topic"]
+        if _is_reserved(topic):
+            continue  # the UI hides benzene:* plumbing; keep it out of the domain export too
+        detail = collector.query_topic({"topic": topic})
+        providers = detail.get("providers", [])
+        spec: dict[str, Any] = {}
+        for provider in providers:
+            spec = services.get(provider, {}).get("topicSpecs", {}).get(topic) or spec
+            if spec:
+                break
+        key = _channel_key(topic)
+        message_key = f"{key}Message"
+        payload = spec.get("requestSchema") or spec.get("responseSchema")
+        messages[message_key] = {
+            "name": topic,
+            "payload": payload if payload else {"type": "object"},
+        }
+        channels[key] = {
+            "address": topic,
+            "messages": {message_key: {"$ref": f"#/components/messages/{message_key}"}},
+        }
+        if providers:
+            operations[f"{key}_receive"] = {
+                "action": "receive",
+                "channel": {"$ref": f"#/channels/{key}"},
+            }
+        if detail.get("consumers"):
+            operations[f"{key}_send"] = {
+                "action": "send",
+                "channel": {"$ref": f"#/channels/{key}"},
+            }
+    return {
+        "asyncapi": "3.0.0",
+        "info": {
+            "title": "Benzene Mesh",
+            "version": "1.0.0",
+            "description": f"Derived from the mesh catalog at {generated_at}.",
+        },
+        "channels": channels,
+        "operations": operations,
+        "components": {"messages": messages},
+    }
+
+
 def write_artifacts(
     directory: str | os.PathLike[str],
     collector: MeshCollector,
@@ -295,6 +370,8 @@ def write_artifacts(
     _write_json(root / "topology.json", artifacts["topology"])
     _write_json(root / "topics.json", artifacts["topics"])
     _write_json(root / "usage.json", artifacts["usage"])
+    _write_json(root / "asyncapi.json", artifacts["asyncapi"])
+    _write_json(root / "annotations.json", artifacts["annotations"])
     services_dir = root / "services"
     for name, document in artifacts["services"].items():
         _write_json(services_dir / f"{name}.json", document)
