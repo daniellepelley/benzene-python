@@ -1,0 +1,171 @@
+"""The mesh-ui artifact projection — MeshCollector catalog → the cross-language read-model artifacts.
+
+Shapes follow the main repo's docs/guides/mesh-ui.md and its website/demos/mesh fixtures. These pin
+what the Python aggregator derives (estate, topology, functional map, per-service) and that the fields
+it can't derive degrade to null/empty rather than being invented.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from benzene.mesh import (
+    HttpServiceSource,
+    MeshCollector,
+    build_artifacts,
+    write_artifacts,
+)
+
+_AT = "2026-08-08T00:00:00+00:00"
+
+
+def _fleet() -> MeshCollector:
+    c = MeshCollector()
+    # Three services; one healthy, one unhealthy + drifted, one registered-but-never-beat (unreachable).
+    c.ingest_register(
+        {"service": "orders", "topics": [{"id": "order:create"}], "descriptorHash": "h-ord"}
+    )
+    c.ingest_register(
+        {"service": "inventory", "topics": [{"id": "stock:reserve"}], "descriptorHash": "h-inv"}
+    )
+    c.ingest_register(
+        {"service": "notifications", "topics": [{"id": "notify:send"}], "descriptorHash": "h-not"}
+    )
+    c.ingest_heartbeat(
+        {
+            "service": "orders",
+            "instanceId": "i1",
+            "descriptorHash": "h-ord",
+            "health": {"isHealthy": True},
+        }
+    )
+    # inventory's live instance runs a different descriptor hash -> unhealthy + contract drift.
+    c.ingest_heartbeat(
+        {
+            "service": "inventory",
+            "instanceId": "i1",
+            "descriptorHash": "h-OLD",
+            "health": {"isHealthy": False},
+        }
+    )
+    # orders calls inventory (its span parents the inventory event) -> consumer edge; the call errored.
+    c.ingest_traces(
+        {
+            "events": [
+                {
+                    "traceId": "t",
+                    "spanId": "s1",
+                    "service": "orders",
+                    "topic": "order:create",
+                    "status": "ok",
+                },
+                {
+                    "traceId": "t",
+                    "spanId": "s2",
+                    "parentSpanId": "s1",
+                    "service": "inventory",
+                    "topic": "stock:reserve",
+                    "status": "service-unavailable",
+                },
+            ]
+        }
+    )
+    return c
+
+
+def _sources() -> list[HttpServiceSource]:
+    return [
+        HttpServiceSource("orders", "https://orders.example"),
+        HttpServiceSource("inventory", "https://inventory.example"),
+    ]
+
+
+# --- manifest ----------------------------------------------------------------------------------
+
+
+def test_manifest_reports_estate_status_drift_and_links() -> None:
+    arts = build_artifacts(_fleet(), sources=_sources(), generated_at=_AT)
+    manifest = arts["manifest"]
+    assert manifest["generatedAtUtc"] == _AT
+    by_name = {s["name"]: s for s in manifest["services"]}
+
+    assert by_name["orders"]["status"] == "healthy"
+    assert by_name["orders"]["contractDrift"] is False
+    assert by_name["orders"]["specUrl"] == "https://orders.example/benzene/spec"
+    assert by_name["orders"]["healthUrl"] == "https://orders.example/benzene/health"
+
+    assert by_name["inventory"]["status"] == "unhealthy"
+    assert by_name["inventory"]["contractDrift"] is True  # instance hash != registered hash
+
+    # Registered but never sent a heartbeat -> no health signal reached us -> unreachable, no links.
+    assert by_name["notifications"]["status"] == "unreachable"
+    assert by_name["notifications"]["specUrl"] is None
+
+
+# --- topology ----------------------------------------------------------------------------------
+
+
+def test_topology_edges_come_from_trace_parentage_with_error_rate() -> None:
+    arts = build_artifacts(_fleet(), generated_at=_AT)
+    edges = arts["topology"]["edges"]
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge["client"] == "orders" and edge["server"] == "inventory"
+    assert edge["source"] == "collector"
+    assert edge["errorRate"] == 1.0  # the one traced call failed
+    # Rate/latency need a metrics feed the collector doesn't have -> degraded, not invented.
+    assert edge["requestsPerMinute"] is None
+    assert edge["p95LatencyMs"] is None
+
+
+# --- topics (functional map) -------------------------------------------------------------------
+
+
+def test_topics_carry_consumers_producers_and_reserved_flag() -> None:
+    c = _fleet()
+    c.ingest_register({"service": "collector", "topics": [{"id": "benzene:mesh:query:fleet"}]})
+    arts = build_artifacts(c, generated_at=_AT)
+    by_topic = {t["topic"]: t for t in arts["topics"]["topics"]}
+
+    reserve = by_topic["stock:reserve"]
+    assert reserve["producers"] == [{"service": "inventory"}]
+    assert reserve["consumers"] == [{"service": "orders"}]
+    assert reserve["reserved"] is False
+    assert reserve["responseSchema"] is None  # schemas not retained -> degraded
+
+    assert by_topic["benzene:mesh:query:fleet"]["reserved"] is True  # benzene:* is plumbing
+    assert arts["topics"]["removedTopics"] == []
+
+
+# --- per-service ------------------------------------------------------------------------------
+
+
+def test_service_document_reports_hash_drift_and_health() -> None:
+    arts = build_artifacts(_fleet(), generated_at=_AT)
+    inventory = arts["services"]["inventory"]
+    assert inventory["name"] == "inventory"
+    assert inventory["fetchedAtUtc"] == _AT
+    assert inventory["specHash"] == "h-inv"
+    assert inventory["previousSpecHash"] is None
+    assert inventory["contractDrift"] is True
+    assert inventory["health"]["isHealthy"] is False
+    assert inventory["error"] is None
+
+
+# --- write to disk ----------------------------------------------------------------------------
+
+
+def test_write_artifacts_lays_out_the_files_the_ui_fetches(tmp_path: Path) -> None:
+    write_artifacts(tmp_path, _fleet(), sources=_sources(), generated_at=_AT)
+    assert (tmp_path / "manifest.json").exists()
+    assert (tmp_path / "topology.json").exists()
+    assert (tmp_path / "topics.json").exists()
+    # One services/{name}.json per service, each valid JSON with the contract's top-level name.
+    for name in ("orders", "inventory", "notifications"):
+        doc = json.loads((tmp_path / "services" / f"{name}.json").read_text())
+        assert doc["name"] == name
+    # No stray temp siblings from the atomic writes.
+    assert not list(tmp_path.glob(".*.tmp"))
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert {s["name"] for s in manifest["services"]} == {"orders", "inventory", "notifications"}

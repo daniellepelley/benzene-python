@@ -18,6 +18,7 @@ Mirrors .NET's ``Benzene.Mesh``. Contributes the ``benzene.mesh`` subpackage to 
 
 from __future__ import annotations
 
+from .artifacts import build_artifacts, write_artifacts
 from .collector import (
     QUERY_FLEET_TOPIC,
     QUERY_SERVICE_TOPIC,
@@ -120,6 +121,7 @@ __all__ = [
     "TraceEvent",
     "TraceExporter",
     "TracePropagatingMessageSender",
+    "build_artifacts",
     "classify",
     "current_traceparent",
     "with_trace_propagation",
@@ -130,4 +132,5 @@ __all__ = [
     "new_trace_id",
     "parse_traceparent",
     "trace_middleware",
+    "write_artifacts",
 ]

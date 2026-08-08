@@ -82,11 +82,21 @@ class HttpServiceSource:
         self._prefix = prefix
         self._fetch = fetch or _stdlib_get()
 
+    @property
+    def spec_url(self) -> str:
+        """The service's ``{prefix}/spec`` URL (also what the mesh-ui manifest links to)."""
+        return f"{self._base}{self._prefix}/spec"
+
+    @property
+    def health_url(self) -> str:
+        """The service's ``{prefix}/health`` URL (also what the mesh-ui manifest links to)."""
+        return f"{self._base}{self._prefix}/health"
+
     async def fetch_spec(self) -> dict[str, Any]:
-        return await self._get_json(f"{self._base}{self._prefix}/spec")
+        return await self._get_json(self.spec_url)
 
     async def fetch_health(self) -> dict[str, Any]:
-        return await self._get_json(f"{self._base}{self._prefix}/health")
+        return await self._get_json(self.health_url)
 
     async def _get_json(self, url: str) -> dict[str, Any]:
         status, body = await self._fetch(url)
@@ -168,7 +178,9 @@ def _stdlib_get(*, timeout: float = 10.0) -> HttpGet:
             try:
                 with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310 - fixed https/http base
                     return response.status, response.read().decode("utf-8")
-            except urllib.error.HTTPError as exc:  # a 503 health reply still carries the aggregate body
+            except (
+                urllib.error.HTTPError
+            ) as exc:  # a 503 health reply still carries the aggregate body
                 return exc.code, exc.read().decode("utf-8")
 
         return await asyncio.to_thread(_do)
