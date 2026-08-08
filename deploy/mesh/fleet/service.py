@@ -44,6 +44,22 @@ from benzene.results import Result
 
 
 @dataclass
+class FleetRequest:
+    """The demo request payload — typed so ``/benzene/spec`` carries a real request schema."""
+
+    sku: str = ""
+    quantity: int = 1
+
+
+@dataclass
+class FleetReply:
+    """The demo response payload — typed so ``/benzene/spec`` carries a real response schema."""
+
+    service: str
+    handled: bool = True
+
+
+@dataclass
 class ServiceConfig:
     name: str
     topic: str
@@ -75,7 +91,9 @@ class FleetService:
     feeds: MeshFeedSender | None
 
 
-def build_service(config: ServiceConfig, *, next_sender: MessageSender | None = None) -> FleetService:
+def build_service(
+    config: ServiceConfig, *, next_sender: MessageSender | None = None
+) -> FleetService:
     """Build the service. ``next_sender`` is injectable for tests; production derives it from the env."""
     exporter = QueueTraceExporter()
 
@@ -86,18 +104,28 @@ def build_service(config: ServiceConfig, *, next_sender: MessageSender | None = 
             HttpMessageSender({config.next_topic: config.next_url})
         )
 
-    async def handle(_request: dict) -> Result:
+    async def handle(request: FleetRequest) -> Result:
         if next_sender is not None and config.next_topic:
-            await next_sender.send_message(config.next_topic, {"from": config.name})
-        return Result.ok({"service": config.name})
+            await next_sender.send_message(
+                config.next_topic, FleetRequest(sku=request.sku, quantity=request.quantity)
+            )
+        return Result.ok(FleetReply(service=config.name))
 
-    router = HttpRouter().register("POST", config.route, config.topic, handle)
+    router = HttpRouter().register(
+        "POST",
+        config.route,
+        config.topic,
+        handle,
+        request_type=FleetRequest,
+        response_type=FleetReply,
+    )
     registry = Registry.from_definitions(router)
     pipeline = MiddlewarePipeline().use(
         trace_middleware(exporter, service=config.name, instance_id=config.name)
     )
     standard = StandardPaths(
-        health=HealthChecks().add("core", lambda: True),
+        # Two named checks so the mesh-ui per-service page shows real per-check health detail.
+        health=HealthChecks().add("core", lambda: True).add("trace-exporter", lambda: True),
         spec=ServiceSpec.derive(registry, service=config.name),
     )
     app = AwsLambdaApp(
@@ -124,7 +152,9 @@ def lambda_handler_for(service: FleetService):
         if service.feeds is not None:
             events = service.exporter.drain()
             if events:
-                with contextlib.suppress(Exception):  # trace push is best-effort, never fails the request
+                with contextlib.suppress(
+                    Exception
+                ):  # trace push is best-effort, never fails the request
                     asyncio.run(service.feeds.publish_traces(events))
         return result
 
@@ -132,4 +162,6 @@ def lambda_handler_for(service: FleetService):
 
 
 # The module-level entrypoint Lambda targets: `service.handler`.
-handler = lambda_handler_for(build_service(config_from_env())) if os.environ.get("SERVICE_NAME") else None
+handler = (
+    lambda_handler_for(build_service(config_from_env())) if os.environ.get("SERVICE_NAME") else None
+)

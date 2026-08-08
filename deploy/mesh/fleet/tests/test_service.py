@@ -13,6 +13,7 @@ from benzene.aws.testing import ApiGatewayRequestBuilder
 from benzene.results import Result
 
 from fleet.service import (
+    FleetRequest,
     FleetService,
     ServiceConfig,
     build_service,
@@ -57,15 +58,21 @@ def test_invocation_calls_the_next_service() -> None:
     response = handler(event)
 
     assert response["statusCode"] == 200
-    assert sender.calls == [("inventory:reserve", {"from": "orders"})]  # the hop happened
+    # The hop happened, carrying the typed request payload on to the sibling.
+    assert sender.calls == [("inventory:reserve", FleetRequest(sku="A", quantity=1))]
 
 
-def test_spec_surface_is_served_through_the_lambda() -> None:
+def test_spec_surface_carries_the_typed_request_response_schemas() -> None:
     service = build_service(ServiceConfig("orders", "orders:place", "/orders"))
     handler = lambda_handler_for(service)
     response = handler(ApiGatewayRequestBuilder("GET", "/benzene/spec").build())
     assert response["statusCode"] == 200
-    assert json.loads(response["body"])["service"] == "orders"
+    spec = json.loads(response["body"])
+    assert spec["service"] == "orders"
+    # The derived spec now carries real schemas (so the mesh-ui functional map shows them).
+    topic = next(t for t in spec["topics"] if t["id"] == "orders:place")
+    assert "sku" in topic["requestSchema"]["properties"]
+    assert "service" in topic["responseSchema"]["properties"]
 
 
 def test_traces_are_pushed_to_the_collector_after_an_invocation() -> None:
@@ -89,4 +96,7 @@ def test_no_collector_configured_means_no_push() -> None:
     service = build_service(ServiceConfig("orders", "orders:place", "/orders"))
     assert service.feeds is None  # COLLECTOR_URL absent -> nothing to push to, no network
     handler = lambda_handler_for(service)
-    assert handler(ApiGatewayRequestBuilder("POST", "/orders").with_body({}).build())["statusCode"] == 200
+    assert (
+        handler(ApiGatewayRequestBuilder("POST", "/orders").with_body({}).build())["statusCode"]
+        == 200
+    )
