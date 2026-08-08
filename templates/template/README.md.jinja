@@ -1,0 +1,84 @@
+# {{ project_name }}
+
+A [Benzene](https://github.com/daniellepelley/benzene-python) service on
+{% if transport == "aws-apigateway" %}**AWS Lambda**, triggered by **API Gateway** HTTP requests{% elif transport == "aws-sqs" %}**AWS Lambda**, triggered by **SQS**{% else %}**gRPC** (method = topic){% endif %},
+generated from the Benzene Python `{{ transport }}` template.
+
+## Layout
+
+```
+{{ project_slug }}/
+  handlers.py   # your logic — the demo Greeter service + hello handler (replace these)
+  startup.py    # the composition root ({{ startup_class }}) — every host and test boots from it
+  host.py       # {% if transport in ("aws-apigateway", "aws-sqs") %}builds the AWS Lambda app{% else %}builds the gRPC server{% endif %} (the only transport-specific file)
+  main.py       # {% if transport in ("aws-apigateway", "aws-sqs") %}Lambda entry point ({{ project_slug }}.main.handler){% else %}server entry point (python -m {{ project_slug }}.main){% endif %}
+{%- if include_tests %}
+tests/
+  test_hello.py # component test: drives the demo handler through the real pipeline
+{%- endif %}
+```
+
+## Install
+
+The `benzene-*` packages are referenced by their published PyPI names. **Until they are published**,
+install them from a local `benzene-python` checkout first:
+
+```bash
+pip install -e /path/to/benzene-python/packages/benzene-core \
+            -e /path/to/benzene-python/packages/benzene-results \
+            -e /path/to/benzene-python/packages/benzene-http \
+{%- if transport in ("aws-apigateway", "aws-sqs") %}
+            -e /path/to/benzene-python/packages/benzene-aws \
+{%- else %}
+            -e /path/to/benzene-python/packages/benzene-grpc \
+{%- endif %}
+{%- if include_tests %}
+            -e /path/to/benzene-python/packages/benzene-testing \
+{%- endif %}
+pip install -e . --no-deps
+```
+
+Once the packages are on PyPI this is just:
+
+```bash
+pip install -e .{% if include_tests %}[test]{% endif %}
+```
+
+{% if include_tests -%}
+## Test
+
+```bash
+pytest
+```
+
+The component test boots the **same** app `{{ project_slug }}/startup.py` configures for a real
+deployment, swaps the `Greeter` for a spy, then pushes a message through the whole Benzene pipeline
+via the {% if transport == "aws-apigateway" %}API Gateway{% elif transport == "aws-sqs" %}SQS{% else %}gRPC{% endif %} front door and asserts the handler ran.
+
+{% endif -%}
+## Run / deploy
+
+{% if transport == "aws-apigateway" -%}
+Point your Lambda function's handler at `{{ project_slug }}.main.handler` and put an API Gateway HTTP
+trigger in front of it. `GET /hello/{name}` returns a greeting. See the
+[AWS host guide](https://github.com/daniellepelley/benzene-python/blob/main/examples/aws_orders).
+{%- elif transport == "aws-sqs" -%}
+Point your Lambda function's handler at `{{ project_slug }}.main.handler` and add an SQS event-source
+mapping. Each message is routed by its `topic` message attribute to the matching handler; failures
+are reported via the SQS partial-batch response. See the
+[AWS host guide](https://github.com/daniellepelley/benzene-python/blob/main/examples/aws_orders).
+{%- else -%}
+```bash
+python -m {{ project_slug }}.main      # serves on [::]:50051
+```
+
+Every Benzene topic is one generic gRPC unary method (`/benzene.Benzene/<topic>`). A client is a
+`MessageSender` over a channel — see the
+[gRPC example](https://github.com/daniellepelley/benzene-python/blob/main/examples/grpc_orders).
+{%- endif %}
+
+## Where to go next
+
+- **`{{ project_slug }}/handlers.py`** is where your logic goes — replace the demo, or add more
+  handlers alongside it.
+- **`{{ project_slug }}/startup.py`** registers your dependencies and wires the routes/topics.

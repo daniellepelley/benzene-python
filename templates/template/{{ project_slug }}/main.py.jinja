@@ -1,0 +1,37 @@
+{% if transport in ("aws-apigateway", "aws-sqs") -%}
+"""AWS Lambda entry point — point your Lambda function's handler at ``{{ project_slug }}.main.handler``.
+
+``to_lambda_handler`` builds the pipeline once on cold start and returns the ``handler(event, context)``
+callable Lambda invokes.{% if transport == "aws-apigateway" %} The API Gateway trigger delivers HTTP requests;{% else %} The SQS trigger delivers a batch of records (partial-batch-failure aware);{% endif %} add
+more event sources (SQS/SNS/API Gateway) to the same function by wiring them in ``startup.py``.
+"""
+
+from __future__ import annotations
+
+from benzene.aws import to_lambda_handler
+
+from .host import build_app
+
+handler = to_lambda_handler(build_app())
+{%- else -%}
+"""gRPC server entry point — run ``python -m {{ project_slug }}.main`` to serve.
+
+Registers a real ``GrpcMessageSender`` for egress in production if this service calls out to a next
+hop (see ``startup.py``); the demo has no egress.
+"""
+
+from __future__ import annotations
+
+from .host import build_server
+
+
+def serve(bind: str = "[::]:50051") -> None:
+    server, port = build_server(bind)
+    server.start()
+    print(f"{{ project_name }} gRPC server listening on port {port}")
+    server.wait_for_termination()
+
+
+if __name__ == "__main__":
+    serve()
+{%- endif %}

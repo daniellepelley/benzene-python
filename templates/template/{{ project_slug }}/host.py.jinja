@@ -1,0 +1,58 @@
+{% if transport in ("aws-apigateway", "aws-sqs") -%}
+"""AWS host wiring: boot the shared ``{{ startup_class }}`` and specialize it to Lambda.
+
+Deployment and tests build the app from the *same* composition root (``{{ startup_class }}``); a test
+overrides a registration with a fake, nothing else changes. Only this file is AWS-specific.
+"""
+
+from __future__ import annotations
+
+from benzene.aws import AwsLambdaApp
+from benzene.core import application_from, build_application
+
+from .startup import {{ startup_class }}
+
+
+def build_app() -> AwsLambdaApp:
+    """Build the AWS Lambda app for {{ project_name }}, booting from ``{{ startup_class }}``."""
+    definition, _ = build_application({{ startup_class }})
+    return AwsLambdaApp(
+        http_router=definition.router,
+        application=application_from(definition),
+        standard_paths=definition.standard_paths,
+    )
+{%- else -%}
+"""gRPC host wiring: boot the shared ``{{ startup_class }}`` and serve it over gRPC.
+
+Deployment and tests build the app from the *same* composition root (``{{ startup_class }}``); a test
+overrides a registration with a fake, nothing else changes. Only this file is gRPC-specific.
+
+The gRPC binding is a generic handler: the method name *is* the topic, so the whole registry is
+served by one ``add_benzene_handler`` call — no route table to mirror.
+"""
+
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
+
+from benzene.core import application_from, build_application
+from benzene.grpc import add_benzene_handler
+
+from .startup import {{ startup_class }}
+
+
+def build_server(bind: str = "[::]:50051", *, max_workers: int = 4) -> tuple[Any, int]:
+    """Build a ``grpc.Server`` serving {{ project_name }}, booting from ``{{ startup_class }}``.
+
+    Returns ``(server, port)`` — the caller starts it (``server.start()``) and stops it. ``bind``
+    defaults to a fixed port; pass ``[::]:0`` for an ephemeral one (the resolved port is returned).
+    """
+    import grpc
+
+    definition, _ = build_application({{ startup_class }})
+    server = grpc.server(ThreadPoolExecutor(max_workers=max_workers))
+    add_benzene_handler(server, application_from(definition))
+    port = server.add_insecure_port(bind)
+    return server, port
+{%- endif %}

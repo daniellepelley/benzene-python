@@ -1,0 +1,98 @@
+"""Component test: boot the SAME app ``{{ startup_class }}`` configures for a real deployment, swap the
+demo ``Greeter`` for a spy, then push a message through the whole Benzene pipeline via the
+{% if transport == "aws-apigateway" %}API Gateway{% elif transport == "aws-sqs" %}SQS{% else %}gRPC{% endif %} front door — only that trigger is simulated. ``with_services`` is the seam for overriding
+any dependency the test needs; here we swap the real ``Greeter`` for a spy so we can assert the
+handler actually ran with the routed message.
+
+The setup is identical whatever the transport bar the single ``.build_*()`` call and the ``send_*``
+shape — the harness consistency law the whole port is built around.
+"""
+
+from __future__ import annotations
+
+{% if transport == "grpc" -%}
+import pytest
+
+pytest.importorskip("grpc")  # the gRPC transport needs grpcio (the benzene-grpc[transport] extra)
+
+{% endif -%}
+from benzene.testing import create_test_host
+from {{ project_slug }} import {{ startup_class }}
+from {{ project_slug }}.handlers import {% if transport != "aws-apigateway" %}HELLO_TOPIC, {% endif %}Greeter
+
+
+class SpyGreeter:
+    """A stand-in ``Greeter`` that records who it greeted, so a test can assert the handler ran."""
+
+    def __init__(self) -> None:
+        self.greeted: list[str] = []
+
+    def greet(self, name: str) -> str:
+        self.greeted.append(name)
+        return f"Hello {name}!"
+
+
+def make_host():
+    """Boot the real app from ``{{ startup_class }}``, overriding only the ``Greeter`` with a spy."""
+    greeter = SpyGreeter()
+
+    def overrides(services):
+        services.add_instance(Greeter, greeter)
+
+    host = create_test_host({{ startup_class }}).with_services(overrides).build_{% if transport in ("aws-apigateway", "aws-sqs") %}aws{% else %}grpc{% endif %}()
+    return host, greeter
+
+{% if transport == "aws-apigateway" %}
+def test_get_hello_returns_a_greeting() -> None:
+    host, greeter = make_host()
+
+    response = host.send_http("GET", "/hello/World")
+
+    assert response.status_code == 200
+    assert "Hello World!" in response.body
+    assert greeter.greeted == ["World"]  # the handler actually ran with the routed name
+
+
+def test_an_unmapped_route_returns_not_found() -> None:
+    host, greeter = make_host()
+
+    response = host.send_http("GET", "/does-not-exist")
+
+    assert response.status_code == 404
+    assert greeter.greeted == []
+{% elif transport == "aws-sqs" %}
+def test_routing_the_demo_topic_invokes_the_handler() -> None:
+    host, greeter = make_host()
+
+    response = host.send_sqs(HELLO_TOPIC, {"name": "World"})
+
+    assert response.batch_item_failures == []   # the record was processed successfully
+    assert greeter.greeted == ["World"]          # the handler actually ran with the routed message
+
+
+def test_an_unknown_topic_does_not_reach_the_handler() -> None:
+    host, greeter = make_host()
+
+    response = host.send_sqs("does:not-exist", {"name": "World"})
+
+    assert response.batch_item_failures == [{"itemIdentifier": "msg-1"}]  # no handler -> record fails
+    assert greeter.greeted == []
+{% else %}
+def test_calling_the_demo_topic_invokes_the_handler() -> None:
+    host, greeter = make_host()
+
+    reply = host.send_grpc(HELLO_TOPIC, body={"name": "World"})
+
+    assert reply.status == "ok"
+    assert reply.payload["message"] == "Hello World!"
+    assert greeter.greeted == ["World"]  # the handler actually ran with the routed message
+
+
+def test_an_unknown_topic_is_not_found() -> None:
+    host, greeter = make_host()
+
+    reply = host.send_grpc("does:not-exist", body={"name": "World"})
+
+    assert reply.status == "not-found"
+    assert greeter.greeted == []
+{% endif %}

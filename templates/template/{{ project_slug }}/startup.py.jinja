@@ -1,0 +1,44 @@
+"""The composition root — one ``BenzeneStartUp`` every host and test boots from.
+
+This is the "boot the real app from its startup" seam: it registers the service's dependencies
+(:class:`~{{ project_slug }}.handlers.Greeter`) and wires the demo handler onto its {% if transport == "aws-apigateway" %}HTTP route{% else %}topic{% endif %}.
+A deployment host (``host.py``) and a test (``tests/``) build the app from this *same* class; a test
+overrides any registration with a fake, and nothing else changes.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+
+from benzene.core import AppDefinition, BenzeneStartUp, Container, Registry, Scope
+{% if transport == "aws-apigateway" -%}
+from benzene.http import HttpRouter
+{% endif %}
+from .handlers import HELLO_TOPIC, ConsoleGreeter, Greeter, HelloRequest, make_hello_handler
+
+
+class {{ startup_class }}(BenzeneStartUp):
+    """Registers the service's dependencies and wires the demo handler."""
+
+    def configure_services(self, services: Container, config: Mapping[str, str]) -> None:
+        # Register your application services here — a test can override any of them (see tests/).
+        # ``Greeter`` is the demo handler's one dependency.
+        services.try_add_singleton(Greeter, lambda _scope: ConsoleGreeter())
+
+    def configure(self, services: Scope, config: Mapping[str, str]) -> AppDefinition:
+        hello = make_hello_handler(services.get_service(Greeter))
+{% if transport == "aws-apigateway" %}
+        # Map the handler onto an HTTP method + path; the route also defines the topic. ``name`` is
+        # captured from the path and cast into ``HelloRequest``.
+        router = HttpRouter()
+        router.register(
+            "GET", "/hello/{name}", HELLO_TOPIC, hello, request_type=HelloRequest
+        )
+        return AppDefinition(registry=Registry.from_definitions(router), router=router)
+{% else %}
+        # Map the handler onto its topic. Every transport routes by topic; the incoming body is cast
+        # into ``HelloRequest``.
+        registry = Registry()
+        registry.register(HELLO_TOPIC, hello, request_type=HelloRequest)
+        return AppDefinition(registry=registry)
+{% endif %}
