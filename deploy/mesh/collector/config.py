@@ -31,6 +31,7 @@ class MeshConfig:
     sources: list[HttpServiceSource]
     poll_interval_seconds: float
     store: CollectorStore | None = None
+    artifacts_dir: str | None = None
 
 
 def load_config(env: Mapping[str, str] | None = None) -> MeshConfig:
@@ -38,6 +39,8 @@ def load_config(env: Mapping[str, str] | None = None) -> MeshConfig:
 
     ``MESH_STORE_PATH``, when set, points the collector at a durable snapshot file on the mounted
     volume, so the fleet view survives a task restart; unset keeps the catalog purely in-memory.
+    ``MESH_ARTIFACTS_DIR``, when set, is where the host writes the mesh-ui artifacts after each poll
+    and serves them (and the vendored UI) under ``/mesh-ui/``; unset disables the UI.
     """
     env = os.environ if env is None else env
     raw = _read_raw(env)
@@ -55,7 +58,12 @@ def load_config(env: Mapping[str, str] | None = None) -> MeshConfig:
     interval = float(raw.get("pollIntervalSeconds", DEFAULT_POLL_INTERVAL))
     store_path = env.get("MESH_STORE_PATH")
     store = JsonFileCollectorStore(store_path) if store_path else None
-    return MeshConfig(sources=sources, poll_interval_seconds=interval, store=store)
+    return MeshConfig(
+        sources=sources,
+        poll_interval_seconds=interval,
+        store=store,
+        artifacts_dir=env.get("MESH_ARTIFACTS_DIR") or None,
+    )
 
 
 def _read_raw(env: Mapping[str, str]) -> dict:

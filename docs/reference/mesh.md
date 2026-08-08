@@ -407,6 +407,35 @@ two-method `Protocol` (`load() -> dict | None`, `save(dict)`), so any backend fi
 The snapshot is a plain JSON-able dict — `collector.snapshot()` / `collector.restore(snap)` are public,
 so you can persist it anywhere (S3, a database) by implementing the two-method protocol over them.
 
+### The mesh-ui artifacts — `build_artifacts` / `write_artifacts`
+
+The canonical, cross-language **Benzene Mesh UI** (`mesh-ui.html`, one page every port vendors) is
+data-driven from a fixed set of static JSON artifacts an aggregator publishes. `benzene.mesh.artifacts`
+projects a collector's catalog into that read-model contract (the main repo's `docs/guides/mesh-ui.md`,
+pinned by `website/demos/mesh/`):
+
+```python
+from benzene.mesh import write_artifacts
+
+write_artifacts("/data/mesh-ui", collector, sources=poller_sources, generated_at=now_iso)
+# -> manifest.json, topology.json, topics.json, services/{name}.json  (the UI fetches these by path)
+```
+
+- **`build_artifacts(collector, *, sources=(), generated_at)`** returns the artifacts as dicts
+  (`{"manifest", "topology", "topics", "services": {name: doc}}`) — pure and deterministic (inject
+  `generated_at`); `sources` (any objects with `name` / `spec_url` / `health_url`, e.g.
+  `HttpServiceSource`) supply the manifest's `specUrl` / `healthUrl` links.
+- **`write_artifacts(dir, ...)`** lays them out on disk (atomically) for the UI to fetch by relative
+  path.
+
+The projection honours the contract's **"must not invent fields, degrade when absent"** rule: the
+estate (health mapped to healthy/unhealthy/unreachable, contract-drift from hash mismatch), the
+functional map (topics with derived consumers/producers, `benzene:*` flagged `reserved`), the topology
+(client→server edges from trace parentage with error rate), and per-service health/drift derive in
+full; fields that need feeds the pull+trace catalog doesn't have (payload schemas, per-check health
+detail, spec history, latency/rate metrics, usage, annotations) are emitted as `null`/empty so the UI
+renders them as reduced rather than fabricated. See `deploy/mesh` for the host that serves them.
+
 ## The poller — `MeshPoller` (pull aggregator)
 
 `MeshFeedSender` is the **push** side (a service reports in). `MeshPoller` is the **pull** side,

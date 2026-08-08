@@ -12,6 +12,9 @@ locals {
   efs_root_path = "/mesh"
   state_mount   = "/data"
   state_file    = "mesh-state.json"
+  # Where the host writes + serves the mesh-ui artifacts. On the durable volume when persistence is
+  # on (survives a restart); an ephemeral container path otherwise (regenerated on the next poll).
+  artifacts_dir = local.persist ? "${local.state_mount}/mesh-ui" : "/tmp/mesh-ui"
 }
 
 resource "aws_efs_file_system" "state" {

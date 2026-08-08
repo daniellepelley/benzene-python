@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from benzene.core import (
@@ -94,13 +94,22 @@ def build_mesh_host(
     return MeshHost(app=app, collector=collector, poller=poller)
 
 
-async def run_poll_loop(poller: MeshPoller, *, interval_seconds: float) -> None:
+async def run_poll_loop(
+    poller: MeshPoller,
+    *,
+    interval_seconds: float,
+    after_sweep: Callable[[], None] | None = None,
+) -> None:
     """Poll the fleet forever on ``interval_seconds`` — the background task the container runs.
 
     A sweep never raises (a down service is a failed :class:`~benzene.mesh.PollResult`), so the loop
-    keeps the mesh fresh regardless of any one service's state.
+    keeps the mesh fresh regardless of any one service's state. ``after_sweep`` (if given) runs after
+    each sweep — the host uses it to (re)publish the mesh-ui artifacts — and, like the sweep, is
+    guarded so a hiccup never kills the loop.
     """
     while True:
         with contextlib.suppress(Exception):  # defensive: the loop must outlive any sweep hiccup
             await poller.poll_once()
+            if after_sweep is not None:
+                after_sweep()
         await asyncio.sleep(interval_seconds)

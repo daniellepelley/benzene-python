@@ -172,6 +172,8 @@ resource "aws_ecs_task_definition" "collector" {
         [
           { name = "PORT", value = tostring(var.container_port) },
           { name = "MESH_SERVICES", value = local.effective_mesh_services },
+          # Publish + serve the mesh-ui artifacts (and the vendored UI) under /mesh-ui/.
+          { name = "MESH_ARTIFACTS_DIR", value = local.artifacts_dir },
         ],
         local.persist ? [
           { name = "MESH_STORE_PATH", value = "${local.state_mount}/${local.state_file}" }

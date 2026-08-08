@@ -8,6 +8,11 @@ output "mesh_url" {
   value       = "http://${aws_lb.mesh.dns_name}"
 }
 
+output "mesh_ui_url" {
+  description = "The Benzene Mesh UI (the estate dashboard), served by the collector from its artifacts."
+  value       = "http://${aws_lb.mesh.dns_name}/mesh-ui/"
+}
+
 output "cluster" {
   description = "ECS cluster name (for `aws ecs` commands / log tailing)."
   value       = aws_ecs_cluster.mesh.name

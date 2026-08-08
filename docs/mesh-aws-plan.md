@@ -52,10 +52,13 @@ on a mounted volume); the collector restores on boot and saves after each ingest
 the Fargate service, task role, and an EFS volume mounted at `/data` (gated on `persist_state`), so a
 replaced task rehydrates the fleet it already knew.
 
-**Phase 3 — topology + UI.** Emit `manifest.json` / per-service JSON / `topology.json` in the shape the
-main-repo `mesh-ui` renders (**open item**: inspect `mesh-ui`'s expected schema and add an artifact
-writer / adapter; the collector's query models are close but not confirmed byte-compatible). Serve the
-UI (static assets from the collector container or S3+CloudFront).
+**Phase 3 — topology + UI.** *(done.)* `benzene.mesh.artifacts` projects the collector catalog into the
+cross-language read-model artifacts the canonical `mesh-ui.html` renders — `manifest.json`,
+`topology.json`, `topics.json`, `services/{name}.json` — matching the contract in the main repo's
+`docs/guides/mesh-ui.md` (pinned by `website/demos/mesh/`). The Fargate host republishes them after each
+poll sweep and serves them, plus the vendored UI, under `/mesh-ui/`. Faithful to the contract's
+"don't invent fields, degrade when absent" rule: the estate, functional map, topology, and per-service
+health derive in full; schemas / usage / latency (which need feeds this collector doesn't have) degrade.
 
 **Phase 4 — verify live.** An integration/smoke test: `terraform apply`, drive traffic across the
 fleet, assert the mesh shows the full fleet + edges + health, then `terraform destroy`. A runbook, and
@@ -72,8 +75,9 @@ optionally a CI deploy workflow (OIDC to AWS, gated/manual).
 
 ## Open items / risks
 
-- **mesh-ui artifact compatibility** — the single biggest unknown. Reusing the UI cleanly means the
-  Python collector emits exactly what `mesh-ui` reads. Needs a look at the main-repo `mesh-ui`.
+- **mesh-ui artifact compatibility** — *resolved.* The contract is `docs/guides/mesh-ui.md` in the main
+  repo (pinned by `website/demos/mesh/`); `benzene.mesh.artifacts` emits it and the host serves it at
+  `/mesh-ui/`. The UI degrades for fields the pull+trace catalog can't derive yet (schemas, usage).
 - **Consumer edges need traces** — pull gives identity/topics/health; the call graph needs pushed
   traces. The fleet pushes traces to the collector (hybrid), which the collector already supports.
 - **Collector persistence** — *done.* Fargate + EFS volume mirrors .NET; the `CollectorStore` seam

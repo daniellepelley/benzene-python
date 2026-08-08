@@ -6,11 +6,11 @@ polling a fleet's `/benzene/spec` + `/benzene/health` on a timer and serving the
 directory ships it as a container (`collector/`) and the Terraform to run it on Fargate behind an ALB
 (`terraform/`).
 
-> **Status.** The collector container, the demo fleet Lambdas, and the Terraform are complete and
-> validated locally (both the host and the fleet service are unit-tested — `collector/tests`,
-> `fleet/tests`). One `terraform apply` stands up the whole mesh: the fleet on Lambda + the collector on
-> Fargate, wired together. Only the [`mesh-ui`](../../docs/mesh-aws-plan.md) dashboard is outstanding
-> (awaiting its artifact schema). See [`docs/mesh-aws-plan.md`](../../docs/mesh-aws-plan.md).
+> **Status.** Complete and validated locally (the host, the fleet service, the artifact projection, and
+> the static UI serving are unit-tested — `collector/tests`, `fleet/tests`, `tests/test_mesh_artifacts`).
+> One `terraform apply` stands up the whole mesh: the fleet on Lambda + the collector on Fargate, wired
+> together, **and the [Mesh UI](#the-mesh-ui) served from the collector** at `/mesh-ui/`. See
+> [`docs/mesh-aws-plan.md`](../../docs/mesh-aws-plan.md).
 
 ## What gets created
 
@@ -101,7 +101,27 @@ curl "$MESH/mesh/topic/inventory:reserve"   # providers: [inventory], consumers:
 curl "$MESH/mesh/topic/notify:send"         # providers: [notifications], consumers: [inventory]
 ```
 
+Open the dashboard in a browser: `terraform output -raw mesh_ui_url` (i.e. `$MESH/mesh-ui/`).
+
 Logs: `aws logs tail "$(terraform output -raw log_group)" --follow`.
+
+## The Mesh UI
+
+The collector serves the canonical, cross-language **Benzene Mesh UI** at **`/mesh-ui/`** — the same
+`mesh-ui.html` every port vendors (from the main Benzene repo; see
+[`docs/guides/mesh-ui.md`](https://github.com/daniellepelley/Benzene/blob/main/docs/guides/mesh-ui.md)),
+kept verbatim in [`collector/ui/`](collector/ui/) with its provenance banner.
+
+After each poll sweep the host projects its catalog into the read-model artifacts the UI renders —
+`manifest.json`, `topology.json`, `topics.json`, and `services/{name}.json` — via
+[`benzene.mesh.write_artifacts`](../../docs/reference/mesh.md#the-mesh-ui-artifacts--build_artifacts--write_artifacts),
+writing them to `MESH_ARTIFACTS_DIR` (the volume) and serving them alongside the page. The UI fetches
+them by relative path, so no UI configuration is needed. What the pull+trace catalog can derive — the
+estate (health, contract-drift), the functional map (topics + consumers/producers), the topology, and
+per-service health — renders in full; fields that need feeds this collector doesn't have (payload
+schemas, latency/rate metrics, usage, annotations) degrade gracefully rather than being invented.
+
+Set `MESH_ARTIFACTS_DIR` (Terraform sets it automatically) to enable it; unset disables the UI.
 
 ## Feeding the mesh
 
@@ -135,8 +155,9 @@ it — a fresh `apply` starts from an empty catalog and refills from the fleet.
 
 ## Next
 
-- **mesh-ui** — emit `manifest.json` / `topology.json` in the shape the main-repo dashboard renders,
-  and serve it (from the container or S3+CloudFront). This is the last piece; it needs the `mesh-ui`
-  artifact schema.
-- **First live run** — apply this in a real account and confirm end to end (the port has not yet run on
-  AWS). Consider an integration test that applies, drives an order, asserts the mesh, and destroys.
+- **Richer artifacts** — the UI degrades gracefully for what the pull+trace catalog can't derive today:
+  per-topic payload **schemas** (retain the descriptor's topic schemas on `register`), **usage.json**
+  (a metrics feed), and per-check **health detail** (retain the heartbeat's `healthChecks`). Each is an
+  additive collector enhancement that lights up more of the same UI.
+- **Live-plane enhancements** — `annotations.json` writes and other backend-gated features (mesh-ui.md
+  §4) are out of scope for the static floor served here.

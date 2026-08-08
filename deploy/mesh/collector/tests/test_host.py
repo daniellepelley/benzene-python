@@ -18,8 +18,27 @@ from benzene.mesh import (
     MeshPoller,
 )
 
-from collector.config import load_config
+from collector.config import MeshConfig, load_config
 from collector.host import build_mesh_host, run_poll_loop
+from collector.main import _artifact_writer
+from collector.static import StaticUiApp
+
+
+async def _drive(app, path: str) -> tuple[int, bytes]:
+    """Drive one GET through an ASGI app; return (status, body)."""
+    sent: list[dict] = []
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message_: dict) -> None:
+        sent.append(message_)
+
+    scope = {"type": "http", "method": "GET", "path": path, "headers": [], "query_string": b""}
+    await app(scope, receive, send)
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    body = next(m for m in sent if m["type"] == "http.response.body")["body"]
+    return start["status"], body
 
 
 def test_ingest_and_query_over_http() -> None:
@@ -119,3 +138,49 @@ def test_host_backed_by_a_store_survives_a_rebuild(tmp_path: Path) -> None:
     second = build_mesh_host(sources=[], collector=MeshCollector(store=store))
     fleet = asyncio.run(second.app.handle("GET", "/mesh/fleet"))
     assert "orders" in {s["service"] for s in json.loads(fleet.body)["services"]}
+
+
+# --- mesh-ui: static serving + artifact publishing ------------------------------------------
+
+
+async def _inner_marker(scope, receive, send) -> None:  # noqa: ANN001 - ASGI stand-in
+    await send({"type": "http.response.start", "status": 299, "headers": []})
+    await send({"type": "http.response.body", "body": b"inner"})
+
+
+def test_static_ui_serves_page_and_artifacts_and_delegates_the_rest(tmp_path: Path) -> None:
+    ui = tmp_path / "mesh-ui.html"
+    ui.write_text("<html>MESH UI</html>", encoding="utf-8")
+    arts = tmp_path / "arts"
+    arts.mkdir()
+    (arts / "manifest.json").write_text('{"services": []}', encoding="utf-8")
+    app = StaticUiApp(_inner_marker, ui_html=ui, artifacts_dir=arts)
+
+    status, body = asyncio.run(_drive(app, "/mesh-ui/"))
+    assert status == 200 and b"MESH UI" in body  # the vendored page
+
+    status, body = asyncio.run(_drive(app, "/mesh-ui/manifest.json"))
+    assert status == 200 and json.loads(body) == {"services": []}  # a generated artifact
+
+    assert asyncio.run(_drive(app, "/mesh-ui/missing.json"))[0] == 404
+    assert asyncio.run(_drive(app, "/mesh-ui/../secret.json"))[0] == 404  # no path traversal
+
+    status, body = asyncio.run(_drive(app, "/mesh/fleet"))  # not under the mount -> inner app
+    assert status == 299 and body == b"inner"
+
+
+def test_artifact_writer_publishes_manifest_from_the_catalog(tmp_path: Path) -> None:
+    host = build_mesh_host(sources=[])
+    asyncio.run(
+        host.app.handle(
+            "POST",
+            "/mesh/register",
+            body=json.dumps({"service": "orders", "topics": [{"id": "order:create"}]}),
+        )
+    )
+    config = MeshConfig(sources=[], poll_interval_seconds=1.0, artifacts_dir=str(tmp_path))
+    _artifact_writer(host, config)()  # the after-sweep callback the poll loop runs
+
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert "orders" in {s["name"] for s in manifest["services"]}
+    assert (tmp_path / "services" / "orders.json").exists()
