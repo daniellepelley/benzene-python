@@ -9,6 +9,14 @@ We use [**Copier**](https://copier.readthedocs.io/) rather than Cookiecutter for
 `.copier-answers.yml`, so when the templates improve you re-run `copier update` inside your project
 and pull the changes in (three-way-merged against your edits) — Cookiecutter has no equivalent.
 
+## Templates vs. examples
+
+A **template** (this folder) is where you **start** a real service: vanilla and minimal, with nothing
+to delete before you write your handlers. An [**example**](../examples) is where you **learn a
+technique** — a contrived service built around one demo (the shared `orders_domain` on a given cloud,
+message versioning, a mesh fleet). If the first thing you'd do with an example is strip its
+boilerplate, you wanted a template. Start from a template; borrow techniques from the examples.
+
 ## Usage
 
 ```bash

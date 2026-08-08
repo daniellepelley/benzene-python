@@ -5,6 +5,11 @@ anywhere* — and that are held to the [Port Quality Standards](https://github.c
 each cloud example exercises **multiple transports**, ships its **own tests that dogfood the port's
 own test helpers**, and runs as a **required CI gate** (in-memory, no cloud credentials).
 
+> **These are demos, not starting points.** An example is contrived to show off a technique, so it
+> carries boilerplate you'd delete when adopting it. To *start* a new service, scaffold a vanilla
+> starter from [`../templates/`](../templates) (`copier copy`) and write your handlers into it.
+> Templates are where you start; examples are where you learn a technique.
+
 ## The shared domain: `orders_domain`
 
 The transport-agnostic business logic — order handlers and models — reused by every host. A host
