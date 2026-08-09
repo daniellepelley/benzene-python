@@ -209,8 +209,10 @@ at `POST <host>/mesh/traces` to feed the call graph — and the **query** read m
 
 - [`benzene.mesh` reference](../reference/mesh.md) — every type, signature, and artifact field.
 - [Joining the mesh](joining-the-mesh.md) — the **sending** side: make a service report in.
+- [`mesh_dashboard` example](https://github.com/daniellepelley/benzene-python/tree/main/examples/mesh_dashboard)
+  — a runnable, in-memory version of everything here: a healthy fleet and a mid-rollout fleet, each
+  projected into the full artifact set (and viewable in the canonical UI).
 - [Deploying the mesh collector to AWS (Fargate)](../../deploy/mesh/README.md) — the containerised Mesh
   Host and its Terraform.
 - [mesh specification](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/mesh.md)
   — the language-neutral contract these wire shapes and artifacts implement.
-```
