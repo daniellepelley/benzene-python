@@ -31,6 +31,7 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 - **[`benzene.gcp`](reference/gcp.md)** — the Google Cloud Functions host (HTTP + Pub/Sub).
 - **[`benzene.aws`](reference/aws.md)** — the AWS Lambda host (API Gateway + SQS + SNS).
 - **[`benzene.azure`](reference/azure.md)** — the Azure Functions host (HTTP + Service Bus + Event Hub).
+- **[`benzene.kafka`](reference/kafka.md)** — the Apache Kafka host (self-hosted consumer + produce client).
 - **[`benzene.mesh`](reference/mesh.md)** — self-description, tracing, and collector feeds for the mesh.
 - **[`benzene.pydantic`](reference/pydantic.md)** — validate handler requests with pydantic models.
 - **[`benzene.testing`](reference/testing.md)** — the in-memory test host and test doubles.

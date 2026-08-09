@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene-kafka"
+version = "0.0.1"
+description = "Benzene Kafka transport binding — a self-hosted consumer and a Kafka-produce outbound client."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Benzene" }]
+keywords = ["benzene", "kafka", "confluent-kafka", "streaming", "consumer", "hexagonal"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+dependencies = ["benzene-core>=0.0.1"]
+
+[project.optional-dependencies]
+# Only the default producer/consumer clients need the SDK; the binding (decode, consumer loop,
+# outbound send over an injected producer) and its tests need no broker and no SDK.
+kafka = ["confluent-kafka>=2.0"]
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
+
+# PEP 420 namespace package — see benzene-results/pyproject.toml.
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]

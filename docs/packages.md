@@ -17,6 +17,7 @@ Python equivalent.
 | [`benzene-gcp`](https://pypi.org/project/benzene-gcp/) | `benzene.gcp` | the Google Cloud Functions host (HTTP + Pub/Sub bindings, Pub/Sub outbound client) | `benzene-core`, `benzene-http` |
 | [`benzene-aws`](https://pypi.org/project/benzene-aws/) | `benzene.aws` | the AWS Lambda host (API Gateway + SQS + SNS bindings, SNS/SQS outbound clients) | `benzene-core`, `benzene-http` |
 | [`benzene-azure`](https://pypi.org/project/benzene-azure/) | `benzene.azure` | the Azure Functions host (HTTP + Service Bus + Event Hub bindings, Service Bus outbound client) | `benzene-core`, `benzene-http` |
+| [`benzene-kafka`](https://pypi.org/project/benzene-kafka/) | `benzene.kafka` | the Apache Kafka host (self-hosted consumer + Kafka-produce outbound client; SDK optional) | `benzene-core` |
 | [`benzene-mesh`](https://pypi.org/project/benzene-mesh/) | `benzene.mesh` | mesh self-description (`ServiceDescriptor`), the reserved `benzene:mesh` endpoint, tracing, and collector feeds | `benzene-core` |
 | [`benzene-pydantic`](https://pypi.org/project/benzene-pydantic/) | `benzene.pydantic` | validate handler requests with pydantic models (an optional adapter) | `benzene-core`, `pydantic` |
 | [`benzene-testing`](https://pypi.org/project/benzene-testing/) | `benzene.testing` | in-memory test host + test doubles (a dev/test dependency) | `benzene-core` |

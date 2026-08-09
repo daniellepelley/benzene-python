@@ -7,7 +7,7 @@ name: Release
 # One-time maintainer setup (see docs/publishing.md):
 #   1. On PyPI, add a "pending" trusted publisher for EACH of the ten project names
 #      (benzene-results, benzene-core, benzene-http, benzene-grpc, benzene-mesh, benzene-pydantic,
-#      benzene-testing, benzene-gcp, benzene-aws, benzene-azure), all pointing at:
+#      benzene-testing, benzene-gcp, benzene-aws, benzene-azure, benzene-kafka), all pointing at:
 #         owner/repo = daniellepelley/benzene-python
 #         workflow   = release.yml
 #         environment = pypi

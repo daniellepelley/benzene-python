@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from benzene.gcp.testing import GcpFunctionsTestHost
     from benzene.grpc.testing import GrpcTestHost
     from benzene.http.testing import HttpTestHost
+    from benzene.kafka.testing import KafkaTestHost
 
 
 class TestHostBuilder:
@@ -140,6 +141,25 @@ class TestHostBuilder:
             ) from ex
         definition, scope = self._build()
         host = GrpcTestHost(BenzeneGrpcHandler(application_from(definition)))
+        host.scope = scope
+        return host
+
+    def build_kafka(self) -> KafkaTestHost:
+        """Specialize to a self-hosted Kafka consumer test host (requires ``benzene-kafka``).
+
+        The Kafka binding is a consumer loop, not an HTTP host, so there is no router to mount: the
+        registry is driven one record at a time through a :class:`KafkaConsumerApp`, in memory. Feed
+        records with ``await host.send_kafka(topic, body, headers)``.
+        """
+        try:
+            from benzene.kafka import KafkaConsumerApp
+            from benzene.kafka.testing import KafkaTestHost
+        except ImportError as ex:  # pragma: no cover - environment-specific
+            raise ImportError(
+                "build_kafka() requires the 'benzene-kafka' package to be installed"
+            ) from ex
+        definition, scope = self._build()
+        host = KafkaTestHost(KafkaConsumerApp(application_from(definition)))
         host.scope = scope
         return host
 

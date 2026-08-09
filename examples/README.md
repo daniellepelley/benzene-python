@@ -30,6 +30,7 @@ capability, put the handler in `orders_domain` and wire it from the hosts rather
 |---|---|---|---|
 | [`http_orders/`](http_orders) | standalone HTTP server | HTTP (ASGI) + HTTP egress | `benzene-http` |
 | [`grpc_orders/`](grpc_orders) | gRPC server | gRPC unary (method = topic) + faked egress | `benzene-grpc[transport]` |
+| [`kafka_orders/`](kafka_orders) | self-hosted Kafka consumer | Kafka consume (topic = header) + Kafka produce egress | `benzene-kafka` |
 
 The [`http_orders`](http_orders) example is the Python analog of the .NET `Asp` example: it mounts the
 same `orders_domain` directly on `benzene-http`'s ASGI binding (no cloud runtime) and tests it through

@@ -41,6 +41,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
 | `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + egress) | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` |
 | `benzene-azure` | `benzene.azure` | Azure Functions host (HTTP + Service Bus + Event Hub + egress) | `benzene-core`, `benzene-http` | `Benzene.Azure.Function.*` |
+| `benzene-kafka` | `benzene.kafka` | Apache Kafka host — self-hosted consumer + Kafka-produce egress (`[kafka]`) | `benzene-core` (+ `confluent-kafka`) | `Benzene.Kafka.Core` |
 | `benzene-mesh` | `benzene.mesh` | ServiceDescriptor + `benzene:mesh` endpoint + tracing + collector feeds + a `MeshCollector` | `benzene-core` | `Benzene.Mesh.Wire` + `Benzene.Mesh.Collector` |
 | `benzene-pydantic` | `benzene.pydantic` | validate handler requests with pydantic models | `benzene-core`, `pydantic` | `Benzene.FluentValidation` |
 | `benzene-testing` | `benzene.testing` | in-memory test host + fakes (dev/test) | `benzene-core` | `Benzene.Testing` |
@@ -221,7 +222,7 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 > **Every language-neutral conformance fixture is green** — status vocabulary, HTTP + gRPC status
 > mappings, the envelope, transport metadata, and all four mesh fixtures (descriptor, trace, collector,
 > issues) — and every transport binding in the spec now has an implementation (HTTP, the three clouds,
-> and gRPC), inbound and outbound.
+> gRPC, and Kafka), inbound and outbound.
 
 1. **(done)** Wire contracts + core model + `BenzeneMessage` envelope, conformance-green.
 2. **(done)** An HTTP inbound binding end-to-end (ASGI), including the status-code mapping.
@@ -297,6 +298,14 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     with a reason; the three the spec calls structurally unobservable from outside (R6's collector-
     delivery half, R8, and R7 under a non-default prefix) stay inconclusive by design rather than being
     guessed. The outside-in counterpart to item 16's self-check.
+18. **(done)** Kafka transport (`benzene-kafka`) — a **self-hosted consumer** (Benzene topic from the
+    record's `topic` header, headers UTF-8, one record per pipeline invocation/scope, no response
+    channel → acknowledge/log; `run_consumer_loop` commits offsets on success, at-least-once) **and** a
+    Kafka-produce outbound client (`KafkaMessageSender`, headers forwarded onto Kafka headers). The
+    binding is duck-typed against `confluent-kafka` (an optional `[kafka]` extra), so decode, dispatch,
+    and send run in memory with no broker; tested through the shared harness (`build_kafka()` +
+    `send_kafka`) and dogfooded by [`examples/kafka_orders/`](examples/kafka_orders). Mirrors
+    `Benzene.Kafka.Core`.
 
 ## Documentation
 
