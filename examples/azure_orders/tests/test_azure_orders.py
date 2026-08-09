@@ -12,7 +12,7 @@ import json
 import pytest
 from benzene.core import MessageSender
 from benzene.testing import FakeMessageSender, create_test_host
-from orders_domain import ORDER_CREATED_TOPIC, ORDER_EVENTS_KEY, OrderService, OrdersStartUp
+from orders_domain import ORDER_CREATED_TOPIC, OrderEventLog, OrderService, OrdersStartUp
 
 
 def make_host():
@@ -28,7 +28,7 @@ def make_host():
     def overrides(services):
         services.add_instance(OrderService, service)
         services.add_instance(MessageSender, sender)
-        services.add_instance(ORDER_EVENTS_KEY, seen)
+        services.add_instance(OrderEventLog, seen)
 
     host = create_test_host(OrdersStartUp).with_services(overrides).build_azure()
     return host, service, sender, seen
@@ -42,7 +42,7 @@ def test_http_place_order_creates_and_publishes() -> None:
     assert response.status_code == 201
     order = json.loads(response.body)
     assert order["sku"] == "ABC"
-    assert sender.last_topic == ORDER_CREATED_TOPIC        # ingress -> handler -> egress
+    assert sender.last_topic == ORDER_CREATED_TOPIC  # ingress -> handler -> egress
     assert sender.last_message.id == order["id"]
     assert order["id"] in service.orders
 

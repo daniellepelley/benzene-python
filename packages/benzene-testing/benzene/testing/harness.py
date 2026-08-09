@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
-from benzene.core import BenzeneStartUp, Container, application_from, build_application
+from benzene.core import BenzeneStartUp, Container, build_application
 
 if TYPE_CHECKING:
     # Return types for editor/mypy help only — the cloud packages stay lazy runtime imports so
@@ -74,15 +74,11 @@ class TestHostBuilder:
             from benzene.http import BenzeneHttpApp
             from benzene.http.testing import HttpTestHost
         except ImportError as ex:  # pragma: no cover - environment-specific
-            raise ImportError("build_http() requires the 'benzene-http' package to be installed") from ex
+            raise ImportError(
+                "build_http() requires the 'benzene-http' package to be installed"
+            ) from ex
         definition, scope = self._build()
-        host = HttpTestHost(
-            BenzeneHttpApp(
-                definition.router,
-                application=application_from(definition),
-                standard_paths=definition.standard_paths,
-            )
-        )
+        host = HttpTestHost(BenzeneHttpApp.from_definition(definition))
         host.scope = scope
         return host
 
@@ -96,13 +92,7 @@ class TestHostBuilder:
                 "build_gcp() requires the 'benzene-gcp' package to be installed"
             ) from ex
         definition, scope = self._build()
-        host = GcpFunctionsTestHost(
-            GcpFunctionsApp(
-                http_router=definition.router,
-                application=application_from(definition),
-                standard_paths=definition.standard_paths,
-            )
-        )
+        host = GcpFunctionsTestHost(GcpFunctionsApp.from_definition(definition))
         host.scope = scope
         return host
 
@@ -116,13 +106,7 @@ class TestHostBuilder:
                 "build_aws() requires the 'benzene-aws' package to be installed"
             ) from ex
         definition, scope = self._build()
-        host = AwsLambdaTestHost(
-            AwsLambdaApp(
-                http_router=definition.router,
-                application=application_from(definition),
-                standard_paths=definition.standard_paths,
-            )
-        )
+        host = AwsLambdaTestHost(AwsLambdaApp.from_definition(definition))
         host.scope = scope
         return host
 
@@ -140,7 +124,7 @@ class TestHostBuilder:
                 "build_grpc() requires 'benzene-grpc[transport]' (grpcio) to be installed"
             ) from ex
         definition, scope = self._build()
-        host = GrpcTestHost(BenzeneGrpcHandler(application_from(definition)))
+        host = GrpcTestHost(BenzeneGrpcHandler.from_definition(definition))
         host.scope = scope
         return host
 
@@ -159,7 +143,7 @@ class TestHostBuilder:
                 "build_kafka() requires the 'benzene-kafka' package to be installed"
             ) from ex
         definition, scope = self._build()
-        host = KafkaTestHost(KafkaConsumerApp(application_from(definition)))
+        host = KafkaTestHost(KafkaConsumerApp.from_definition(definition))
         host.scope = scope
         return host
 
@@ -173,13 +157,7 @@ class TestHostBuilder:
                 "build_azure() requires the 'benzene-azure' package to be installed"
             ) from ex
         definition, scope = self._build()
-        host = AzureFunctionsTestHost(
-            AzureFunctionsApp(
-                http_router=definition.router,
-                application=application_from(definition),
-                standard_paths=definition.standard_paths,
-            )
-        )
+        host = AzureFunctionsTestHost(AzureFunctionsApp.from_definition(definition))
         host.scope = scope
         return host
 

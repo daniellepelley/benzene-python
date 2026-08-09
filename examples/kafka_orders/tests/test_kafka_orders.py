@@ -13,7 +13,7 @@ import asyncio
 from benzene.core import MessageSender
 from benzene.results import Status
 from benzene.testing import FakeMessageSender, create_test_host
-from orders_domain import ORDER_CREATED_TOPIC, ORDER_EVENTS_KEY, OrderService, OrdersStartUp
+from orders_domain import ORDER_CREATED_TOPIC, OrderEventLog, OrderService, OrdersStartUp
 
 
 def make_host():
@@ -24,7 +24,7 @@ def make_host():
     def overrides(services):
         services.add_instance(OrderService, service)
         services.add_instance(MessageSender, sender)  # only the external edge is faked
-        services.add_instance(ORDER_EVENTS_KEY, seen)
+        services.add_instance(OrderEventLog, seen)
 
     host = create_test_host(OrdersStartUp).with_services(overrides).build_kafka()
     return host, service, sender, seen

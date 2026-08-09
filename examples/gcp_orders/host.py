@@ -1,50 +1,30 @@
 """GCP host wiring: boot the shared ``OrdersStartUp`` and specialize it to Cloud Functions.
 
 Deployment and tests build the app from the *same* composition root (``OrdersStartUp``); only the
-outbound ``MessageSender`` differs — the real Pub/Sub client here, a fake in tests. Only this file
-is GCP-specific.
+outbound ``MessageSender`` differs — the real Pub/Sub client here, a fake in tests (via
+``create_test_host``). Only this file is GCP-specific.
 """
 
 from __future__ import annotations
 
-from benzene.core import Container, MessageSender, application_from, build_application
+import os
+
+from benzene.core import Container, MessageSender, build_application
 from benzene.gcp import GcpFunctionsApp, PubSubMessageSender
-from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
+from orders_domain import OrdersStartUp
 
 
-def build_gcp_orders_app(
-    service: OrderService | None = None,
-    sender: MessageSender | None = None,
-    seen: list[str] | None = None,
-) -> GcpFunctionsApp:
-    """Build the GCP Functions app for the order domain, booting from ``OrdersStartUp``.
+def build_gcp_orders_app() -> GcpFunctionsApp:
+    """Boot ``OrdersStartUp`` and specialize it to Cloud Functions, publishing to the Pub/Sub topic."""
+    topic = os.environ.get("BENZENE_PUBSUB_TOPIC")
+    if not topic:
+        raise RuntimeError(
+            "Set BENZENE_PUBSUB_TOPIC (projects/<project>/topics/<topic>) to run the GCP host "
+            "(tests use create_test_host instead)."
+        )
 
-    Pass a store / outbound client / event log to override the defaults (tests do this via the test
-    harness instead); in production the default publishes ``orders:created`` to the Pub/Sub topic
-    named by ``BENZENE_PUBSUB_TOPIC``.
-    """
+    def use_pubsub(services: Container) -> None:
+        services.add_instance(MessageSender, PubSubMessageSender(topic))
 
-    def overrides(services: Container) -> None:
-        if service is not None:
-            services.add_instance(OrderService, service)
-        if seen is not None:
-            services.add_instance(ORDER_EVENTS_KEY, seen)
-        if sender is not None:
-            services.add_instance(MessageSender, sender)
-        else:
-            import os
-
-            topic = os.environ.get("BENZENE_PUBSUB_TOPIC")
-            if not topic:
-                raise RuntimeError(
-                    "Set BENZENE_PUBSUB_TOPIC (projects/<project>/topics/<topic>) to run the GCP "
-                    "host with a real Pub/Sub client, or pass sender=... in tests."
-                )
-            services.add_instance(MessageSender, PubSubMessageSender(topic))
-
-    definition, _ = build_application(OrdersStartUp, overrides=[overrides])
-    return GcpFunctionsApp(
-        http_router=definition.router,
-        application=application_from(definition),
-        standard_paths=definition.standard_paths,
-    )
+    definition, _ = build_application(OrdersStartUp, overrides=[use_pubsub])
+    return GcpFunctionsApp.from_definition(definition)

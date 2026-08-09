@@ -26,3 +26,12 @@ class Order:
 class OrderCreated:
     id: str
     sku: str
+
+
+class OrderEventLog(list[str]):
+    """The in-memory log of order ids the ``orders:created`` subscriber has seen.
+
+    A tiny ``list`` subclass so it can be a **typed** container key (resolved by type, like
+    ``OrderService`` / ``MessageSender``) instead of a stringly-typed one — one less special case for a
+    reader. A host or test swaps it for its own instance the same way it swaps any dependency.
+    """

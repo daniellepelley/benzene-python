@@ -66,3 +66,23 @@ def test_missing_service_raises_a_teaching_error() -> None:
     assert scope.try_get_service(Thing) is None            # the soft form: None, no raise
     with pytest.raises(ServiceNotRegisteredError, match="No service registered for"):
         scope.get_service(Thing)                            # the hard form: a clear error naming the key
+
+
+def test_register_by_constructing_the_type_or_a_zero_arg_factory() -> None:
+    # Three ergonomic forms all resolve (core-concepts §8): construct the type key, a zero-arg
+    # callable, and the full (scope) -> T form for services that genuinely need the scope.
+    container = (
+        Container()
+        .add_singleton(Thing)                         # no factory — construct the type key
+        .add_scoped("log", list)                       # a zero-arg callable
+        .add_transient("view", lambda scope: scope.get_service(Thing))  # full (scope) -> T
+    )
+    scope = container.create_scope()
+    assert isinstance(scope.get_service(Thing), Thing)
+    assert scope.get_service("log") == []
+    assert scope.get_service("view") is scope.get_service(Thing)  # resolved via the scope
+
+
+def test_register_without_a_factory_needs_a_type_key() -> None:
+    with pytest.raises(TypeError, match="needs a type to construct"):
+        Container().add_singleton("not-a-type")        # a str key can't be constructed

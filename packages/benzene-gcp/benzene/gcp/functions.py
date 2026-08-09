@@ -18,7 +18,13 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from benzene.core import BenzeneMessageApplication, MessageHandlingError, Registry
+from benzene.core import (
+    AppDefinition,
+    BenzeneMessageApplication,
+    MessageHandlingError,
+    Registry,
+    application_from,
+)
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
 from benzene.results import is_successful
 
@@ -43,6 +49,15 @@ class GcpFunctionsApp:
             BenzeneHttpApp(http_router, application=application, standard_paths=standard_paths)
             if http_router
             else None
+        )
+
+    @classmethod
+    def from_definition(cls, definition: AppDefinition) -> GcpFunctionsApp:
+        """Build the Functions host from a composition root's :class:`AppDefinition` (one-line wiring)."""
+        return cls(
+            http_router=definition.router,
+            application=application_from(definition),
+            standard_paths=definition.standard_paths,
         )
 
     # --- HTTP trigger ----------------------------------------------------------------------

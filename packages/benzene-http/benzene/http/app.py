@@ -27,10 +27,12 @@ from urllib.parse import parse_qsl
 
 from benzene.core import (
     VERSION_HEADER,
+    AppDefinition,
     BenzeneMessageApplication,
     Container,
     MiddlewarePipeline,
     Registry,
+    application_from,
     error_payload,
     resolve_version,
 )
@@ -74,6 +76,15 @@ class BenzeneHttpApp:
         self._application = application
         #: The Cloud Service Profile well-known surfaces (/benzene/invoke|health|spec), if enabled.
         self._standard = standard_paths
+
+    @classmethod
+    def from_definition(cls, definition: AppDefinition) -> BenzeneHttpApp:
+        """Build the ASGI host from a composition root's :class:`AppDefinition` (one-line wiring)."""
+        return cls(
+            definition.router,
+            application=application_from(definition),
+            standard_paths=definition.standard_paths,
+        )
 
     async def handle(
         self,

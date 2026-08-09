@@ -2,54 +2,37 @@
 
 Deployment and tests build the app from the *same* composition root (``OrdersStartUp``); only the
 outbound ``MessageSender`` differs — a real ``HttpMessageSender`` to the next Benzene service in
-production, a fake in tests. Only this file is HTTP-specific.
+production, a fake in tests (via ``create_test_host``). Only this file is HTTP-specific.
 
-This is the Python analog of the .NET ``Asp`` example and the natural sibling of ``aws_orders`` /
-``gcp_orders``: the same order handlers, hosted directly on ``benzene-http``'s ASGI binding
-(:class:`~benzene.http.BenzeneHttpApp`) rather than behind a cloud's Lambda/Functions runtime.
+This is the Python analog of the .NET ``Asp`` example: the same order handlers on ``benzene-http``'s
+ASGI binding (:class:`~benzene.http.BenzeneHttpApp`), no cloud runtime.
 """
 
 from __future__ import annotations
 
-from benzene.core import Container, MessageSender, application_from, build_application
+import os
+
+from benzene.core import Container, MessageSender, build_application
 from benzene.http import BenzeneHttpApp, HttpMessageSender
-from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
+from orders_domain import OrdersStartUp
 
 
-def build_http_orders_app(
-    service: OrderService | None = None,
-    sender: MessageSender | None = None,
-    seen: list[str] | None = None,
-) -> BenzeneHttpApp:
-    """Build the standalone-HTTP app for the order domain, booting from ``OrdersStartUp``.
+def build_http_orders_app() -> BenzeneHttpApp:
+    """Boot ``OrdersStartUp`` onto the standalone ASGI binding, publishing ``orders:created`` over HTTP.
 
-    Pass a store / outbound client / event log to override the defaults (tests do this via the test
-    harness instead); in production the default publishes ``orders:created`` over HTTP to the base
-    URL of a downstream Benzene service named by ``BENZENE_ORDERS_EVENTS_URL`` (the topic is appended
-    as a path segment, matching the inbound HTTP binding's route convention).
+    The default publishes to the base URL of a downstream Benzene service named by
+    ``BENZENE_ORDERS_EVENTS_URL`` (the topic is appended as a path segment, matching the inbound HTTP
+    route convention).
     """
+    events_url = os.environ.get("BENZENE_ORDERS_EVENTS_URL")
+    if not events_url:
+        raise RuntimeError(
+            "Set BENZENE_ORDERS_EVENTS_URL (the downstream Benzene service's base URL) to run the "
+            "HTTP host (tests use create_test_host instead)."
+        )
 
-    def overrides(services: Container) -> None:
-        if service is not None:
-            services.add_instance(OrderService, service)
-        if seen is not None:
-            services.add_instance(ORDER_EVENTS_KEY, seen)
-        if sender is not None:
-            services.add_instance(MessageSender, sender)
-        else:
-            import os
+    def use_http_sender(services: Container) -> None:
+        services.add_instance(MessageSender, HttpMessageSender(events_url))
 
-            events_url = os.environ.get("BENZENE_ORDERS_EVENTS_URL")
-            if not events_url:
-                raise RuntimeError(
-                    "Set BENZENE_ORDERS_EVENTS_URL (the base URL of the downstream Benzene service) "
-                    "to run the HTTP host with a real outbound client, or pass sender=... in tests."
-                )
-            services.add_instance(MessageSender, HttpMessageSender(events_url))
-
-    definition, _ = build_application(OrdersStartUp, overrides=[overrides])
-    return BenzeneHttpApp(
-        definition.router,
-        application=application_from(definition),
-        standard_paths=definition.standard_paths,
-    )
+    definition, _ = build_application(OrdersStartUp, overrides=[use_http_sender])
+    return BenzeneHttpApp.from_definition(definition)

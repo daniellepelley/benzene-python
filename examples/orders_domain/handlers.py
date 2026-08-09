@@ -14,7 +14,7 @@ from typing import Any
 from benzene.core import Handler, MessageSender
 from benzene.results import Result
 
-from .model import ORDER_CREATED_TOPIC, Order, OrderCreated, PlaceOrder
+from .model import ORDER_CREATED_TOPIC, Order, OrderCreated, OrderEventLog, PlaceOrder
 
 
 class OrderService:
@@ -39,9 +39,7 @@ def make_place_order(service: OrderService, sender: MessageSender) -> Handler:
         if not request.sku:
             return Result.bad_request("sku is required")
         order = service.place(request.sku, request.quantity)
-        await sender.send_message(
-            ORDER_CREATED_TOPIC, OrderCreated(id=order.id, sku=order.sku)
-        )
+        await sender.send_message(ORDER_CREATED_TOPIC, OrderCreated(id=order.id, sku=order.sku))
         return Result.created(order)
 
     return place_order
@@ -59,7 +57,7 @@ def make_get_order(service: OrderService) -> Handler:
     return get_order
 
 
-def make_on_order_created(seen: list[str]) -> Handler:
+def make_on_order_created(seen: OrderEventLog) -> Handler:
     """Pub/Sub subscriber for the OrderCreated topic → records the id it saw."""
 
     async def on_order_created(request: OrderCreated) -> Result:

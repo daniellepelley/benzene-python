@@ -18,7 +18,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from benzene.core import BenzeneMessageApplication, read_message_metadata
+from benzene.core import (
+    AppDefinition,
+    BenzeneMessageApplication,
+    application_from,
+    read_message_metadata,
+)
 from benzene.results import Result
 
 
@@ -69,6 +74,11 @@ class KafkaConsumerApp:
 
     def __init__(self, application: BenzeneMessageApplication) -> None:
         self._application = application
+
+    @classmethod
+    def from_definition(cls, definition: AppDefinition) -> KafkaConsumerApp:
+        """Build the consumer app from a composition root's :class:`AppDefinition` (one-line wiring)."""
+        return cls(application_from(definition))
 
     async def handle_message(self, message: KafkaMessage) -> Result:
         envelope = decode_kafka_message(message)

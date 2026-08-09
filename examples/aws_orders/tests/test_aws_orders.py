@@ -12,7 +12,7 @@ import json
 from benzene.aws.testing import SqsEventBuilder
 from benzene.core import MessageSender
 from benzene.testing import FakeMessageSender, create_test_host
-from orders_domain import ORDER_CREATED_TOPIC, ORDER_EVENTS_KEY, OrderService, OrdersStartUp
+from orders_domain import ORDER_CREATED_TOPIC, OrderEventLog, OrderService, OrdersStartUp
 
 
 def make_host():
@@ -28,7 +28,7 @@ def make_host():
     def overrides(services):
         services.add_instance(OrderService, service)
         services.add_instance(MessageSender, sender)
-        services.add_instance(ORDER_EVENTS_KEY, seen)
+        services.add_instance(OrderEventLog, seen)
 
     host = create_test_host(OrdersStartUp).with_services(overrides).build_aws()
     return host, service, sender, seen
@@ -42,7 +42,7 @@ def test_api_gateway_place_order_creates_and_publishes() -> None:
     assert response.status_code == 201
     order = json.loads(response.body)
     assert order["sku"] == "ABC"
-    assert sender.last_topic == ORDER_CREATED_TOPIC        # ingress -> handler -> egress
+    assert sender.last_topic == ORDER_CREATED_TOPIC  # ingress -> handler -> egress
     assert sender.last_message.id == order["id"]
     assert order["id"] in service.orders
 
@@ -73,9 +73,9 @@ def test_sqs_partial_batch_failure_reports_only_failed_record() -> None:
     event = (
         SqsEventBuilder()
         .with_message(ORDER_CREATED_TOPIC, {"id": "ok-1", "sku": "A"}, message_id="m1")
-        .with_message("orders:unknown", {}, message_id="m2")     # no handler -> not-found -> fails
+        .with_message("orders:unknown", {}, message_id="m2")  # no handler -> not-found -> fails
         .build()
     )
     result = host.send_sqs_event(event)
     assert result.batch_item_failures == [{"itemIdentifier": "m2"}]
-    assert seen == ["ok-1"]                                       # the good record still processed
+    assert seen == ["ok-1"]  # the good record still processed

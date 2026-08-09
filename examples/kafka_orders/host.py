@@ -13,46 +13,32 @@ is reached over Kafka records whose ``topic`` header names the Benzene topic (``
 
 from __future__ import annotations
 
-from benzene.core import Container, MessageSender, application_from, build_application
+import os
+
+from benzene.core import Container, MessageSender, build_application
 from benzene.kafka import KafkaConsumerApp, KafkaMessageSender, run_consumer_loop
-from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
+from orders_domain import OrdersStartUp
 
 
-def build_kafka_orders_app(
-    service: OrderService | None = None,
-    sender: MessageSender | None = None,
-    seen: list[str] | None = None,
-) -> KafkaConsumerApp:
-    """Build the Kafka consumer app for the order domain, booting from ``OrdersStartUp``.
+def build_kafka_orders_app() -> KafkaConsumerApp:
+    """Boot ``OrdersStartUp`` as a Kafka consumer, publishing ``orders:created`` to the env's topic.
 
-    Pass a store / outbound client / event log to override the defaults (tests do this via the test
-    harness instead); in production the default publishes ``orders:created`` to the Kafka topic named
-    by ``BENZENE_KAFKA_TOPIC`` on the broker at ``BENZENE_KAFKA_BOOTSTRAP``.
+    The default publishes to ``BENZENE_KAFKA_TOPIC`` on the broker at ``BENZENE_KAFKA_BOOTSTRAP``;
+    tests supply a fake sender via ``create_test_host`` instead.
     """
+    topic = os.environ.get("BENZENE_KAFKA_TOPIC")
+    if not topic:
+        raise RuntimeError(
+            "Set BENZENE_KAFKA_TOPIC (and BENZENE_KAFKA_BOOTSTRAP) to run the Kafka host "
+            "(tests use create_test_host instead)."
+        )
+    bootstrap = os.environ.get("BENZENE_KAFKA_BOOTSTRAP", "localhost:9092")
 
-    def overrides(services: Container) -> None:
-        if service is not None:
-            services.add_instance(OrderService, service)
-        if seen is not None:
-            services.add_instance(ORDER_EVENTS_KEY, seen)
-        if sender is not None:
-            services.add_instance(MessageSender, sender)
-        else:
-            import os
+    def use_kafka(services: Container) -> None:
+        services.add_instance(MessageSender, KafkaMessageSender(topic, bootstrap_servers=bootstrap))
 
-            topic = os.environ.get("BENZENE_KAFKA_TOPIC")
-            if not topic:
-                raise RuntimeError(
-                    "Set BENZENE_KAFKA_TOPIC (and BENZENE_KAFKA_BOOTSTRAP) to run the Kafka host with "
-                    "a real producer, or pass sender=... in tests."
-                )
-            bootstrap = os.environ.get("BENZENE_KAFKA_BOOTSTRAP", "localhost:9092")
-            services.add_instance(
-                MessageSender, KafkaMessageSender(topic, bootstrap_servers=bootstrap)
-            )
-
-    definition, _ = build_application(OrdersStartUp, overrides=[overrides])
-    return KafkaConsumerApp(application_from(definition))
+    definition, _ = build_application(OrdersStartUp, overrides=[use_kafka])
+    return KafkaConsumerApp.from_definition(definition)
 
 
 async def main() -> None:  # pragma: no cover - the real broker entry point

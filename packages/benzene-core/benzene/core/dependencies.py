@@ -13,9 +13,43 @@ bring-your-own-container adapter would still be its own package).
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from enum import Enum
 from typing import Any
+
+#: A service factory: the full ``(scope) -> T`` form, a zero-arg ``() -> T``, or omitted entirely
+#: (construct the type key). :func:`_as_factory` normalizes all three to the internal ``(scope) -> T``.
+Factory = Callable[["Scope"], Any] | Callable[[], Any]
+
+
+def _as_factory(key: Any, factory: Factory | None) -> Callable[[Scope], Any]:
+    """Normalize a registration to the internal ``(scope) -> T`` factory.
+
+    Three ergonomic forms collapse to one (core-concepts §8): ``add_singleton(OrderService)`` (no
+    factory — construct the type), ``add_singleton(Log, Log)`` (a zero-arg callable), and
+    ``add_singleton(Store, lambda scope: ...)`` (the full form, for services that need the scope).
+    """
+    if factory is None:
+        if not isinstance(key, type):
+            raise TypeError(
+                f"add_*/try_add_* without a factory needs a type to construct; got {key!r}. "
+                "Pass a factory: add_singleton(key, lambda scope: ...) or add_singleton(key, make)."
+            )
+        return lambda _scope: key()
+    try:
+        required = [
+            p
+            for p in inspect.signature(factory).parameters.values()
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
+        ]
+        takes_scope = len(required) >= 1
+    except (ValueError, TypeError):
+        takes_scope = True  # un-introspectable (e.g. a builtin) → assume the full (scope) -> T form
+    if takes_scope:
+        return factory  # type: ignore[return-value]  # the (scope) -> T form, used as-is
+    zero_arg = factory
+    return lambda _scope: zero_arg()  # type: ignore[call-arg]  # () -> T
 
 
 class ServiceNotRegisteredError(KeyError):
@@ -61,27 +95,27 @@ class Container:
         self._registrations[key] = _Registration(factory, lifetime)
         return self
 
-    def add_singleton(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
-        return self._add(key, factory, Lifetime.SINGLETON)
+    def add_singleton(self, key: Any, factory: Factory | None = None) -> Container:
+        return self._add(key, _as_factory(key, factory), Lifetime.SINGLETON)
 
-    def add_scoped(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
-        return self._add(key, factory, Lifetime.SCOPED)
+    def add_scoped(self, key: Any, factory: Factory | None = None) -> Container:
+        return self._add(key, _as_factory(key, factory), Lifetime.SCOPED)
 
-    def add_transient(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
-        return self._add(key, factory, Lifetime.TRANSIENT)
+    def add_transient(self, key: Any, factory: Factory | None = None) -> Container:
+        return self._add(key, _as_factory(key, factory), Lifetime.TRANSIENT)
 
     def add_instance(self, key: Any, instance: Any) -> Container:
         self._singletons[key] = instance
         return self._add(key, lambda _scope: instance, Lifetime.SINGLETON)
 
     # try_add* register only if absent — the mechanism that makes framework defaults overridable.
-    def try_add_singleton(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
+    def try_add_singleton(self, key: Any, factory: Factory | None = None) -> Container:
         return self if key in self._registrations else self.add_singleton(key, factory)
 
-    def try_add_scoped(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
+    def try_add_scoped(self, key: Any, factory: Factory | None = None) -> Container:
         return self if key in self._registrations else self.add_scoped(key, factory)
 
-    def try_add_transient(self, key: Any, factory: Callable[[Scope], Any]) -> Container:
+    def try_add_transient(self, key: Any, factory: Factory | None = None) -> Container:
         return self if key in self._registrations else self.add_transient(key, factory)
 
     def create_scope(self) -> Scope:

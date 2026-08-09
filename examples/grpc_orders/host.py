@@ -13,43 +13,30 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from benzene.core import (
-    Container,
-    MessageSender,
-    application_from,
-    build_application,
-)
+from benzene.core import Container, MessageSender, application_from, build_application
 from benzene.grpc import add_benzene_handler
-from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
+from orders_domain import OrdersStartUp
 
 
 def build_grpc_orders_server(
     bind: str = "[::]:0",
     *,
-    service: OrderService | None = None,
-    sender: MessageSender | None = None,
-    seen: list[str] | None = None,
+    sender: MessageSender,
     max_workers: int = 4,
 ) -> tuple[Any, int]:
     """Build a ``grpc.Server`` serving the order domain, booting from ``OrdersStartUp``.
 
     Returns ``(server, port)`` — the caller starts it (``server.start()``) and stops it. ``bind``
     defaults to an ephemeral port (``[::]:0``); the resolved port is returned so a test can dial it.
-    Pass ``service`` / ``sender`` / ``seen`` to override the store, outbound client, and event log
-    (tests fake the outbound edge); production would register a real ``GrpcMessageSender`` to the
-    next service.
+    ``sender`` is the outbound client (a fake in tests, a real ``GrpcMessageSender`` to the next
+    service in production).
     """
     import grpc
 
-    def overrides(services: Container) -> None:
-        if service is not None:
-            services.add_instance(OrderService, service)
-        if seen is not None:
-            services.add_instance(ORDER_EVENTS_KEY, seen)
-        if sender is not None:
-            services.add_instance(MessageSender, sender)
+    def use_sender(services: Container) -> None:
+        services.add_instance(MessageSender, sender)
 
-    definition, _ = build_application(OrdersStartUp, overrides=[overrides])
+    definition, _ = build_application(OrdersStartUp, overrides=[use_sender])
     server = grpc.server(ThreadPoolExecutor(max_workers=max_workers))
     add_benzene_handler(server, application_from(definition))
     port = server.add_insecure_port(bind)

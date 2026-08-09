@@ -17,7 +17,7 @@ import asyncio
 import json
 from typing import Any
 
-from benzene.core import BenzeneMessageApplication
+from benzene.core import AppDefinition, BenzeneMessageApplication, application_from
 from benzene.results import is_successful
 
 import grpc
@@ -37,7 +37,7 @@ def method_for(topic: str) -> str:
 def topic_for(method: str) -> str:
     """The Benzene topic a gRPC method path resolves to (the segment after the service prefix)."""
     if method.startswith(METHOD_PREFIX):
-        return method[len(METHOD_PREFIX):]
+        return method[len(METHOD_PREFIX) :]
     return method.rsplit("/", 1)[-1]
 
 
@@ -50,6 +50,11 @@ class BenzeneGrpcHandler(grpc.GenericRpcHandler):
 
     def __init__(self, application: BenzeneMessageApplication) -> None:
         self._application = application
+
+    @classmethod
+    def from_definition(cls, definition: AppDefinition) -> BenzeneGrpcHandler:
+        """Build the handler from a composition root's :class:`AppDefinition` (one-line wiring)."""
+        return cls(application_from(definition))
 
     def service(self, handler_call_details: Any) -> Any:
         topic = topic_for(handler_call_details.method)

@@ -40,7 +40,9 @@ from orders_domain.startup import OrdersStartUp
 _SERVICE_INFO = ServiceInfo(service="orders", service_version="1.4.2", placement={"cloud": "aws"})
 
 
-async def _intercepted(_request: dict) -> Result:  # the reserved-topic routes are answered by middleware
+async def _intercepted(
+    _request: dict,
+) -> Result:  # the reserved-topic routes are answered by middleware
     return Result.not_found("a reserved-topic interceptor should have handled this")
 
 
@@ -106,7 +108,7 @@ def test_mesh_enabled_service_answers_benzene_spec_through_the_harness() -> None
 def test_operational_service_answers_benzene_health_through_the_harness() -> None:
     host, _ = _host()
     response = host.send_http("GET", "/benzene/health")
-    assert response.status_code == 200                         # healthy -> ok -> 200
+    assert response.status_code == 200  # healthy -> ok -> 200
     body = json.loads(response.body)
     assert body["isHealthy"] is True
     assert body["healthChecks"]["order-store"]["isHealthy"] is True
@@ -117,8 +119,8 @@ def test_mesh_enabled_service_traces_a_real_order_through_the_harness() -> None:
     result = host.send_sqs(
         "orders:place", {"sku": "ABC", "quantity": 2}, headers={"x-correlation-id": "corr-42"}
     )
-    assert result.batch_item_failures == []       # transport response
-    assert fake.last_topic == "orders:created"     # egress proven
+    assert result.batch_item_failures == []  # transport response
+    assert fake.last_topic == "orders:created"  # egress proven
 
     exporter = host.scope.get_service(TraceExporter)  # reachable via the exposed root scope
     order_traces = [e for e in exporter if e.topic == "orders:place"]
@@ -132,4 +134,5 @@ def _scope_for(startup: OrdersStartUp):
 
     container = Container()
     startup.configure_services(container, {})
+    container.add_instance(MessageSender, FakeMessageSender())  # the one dependency a host supplies
     return container.create_scope()
