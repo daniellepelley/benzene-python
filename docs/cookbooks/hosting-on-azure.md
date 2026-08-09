@@ -12,14 +12,30 @@ transports.
 
 ## Build the host
 
-The domain wiring is shared with every other cloud; only the host is Azure-specific:
+The domain is the shared `OrdersStartUp`; only the host is Azure-specific. It reads the Service Bus
+connection from the environment, registers the real `ServiceBusMessageSender` for the one outbound
+edge, and specializes the composition root to Azure Functions with `AzureFunctionsApp.from_definition`:
 
 ```python
-from benzene.azure import AzureFunctionsApp, ServiceBusMessageSender
-from orders_domain import OrderService, build_orders
+import os
 
-wiring = build_orders(OrderService(), ServiceBusMessageSender(connection_string=..., entity_name="orders"))
-app = AzureFunctionsApp(http_router=wiring.router, registry=wiring.registry)
+from benzene.azure import AzureFunctionsApp, ServiceBusMessageSender
+from benzene.core import Container, MessageSender, build_application
+from orders_domain import OrdersStartUp
+
+
+def build_azure_orders_app() -> AzureFunctionsApp:
+    connection = os.environ["BENZENE_SERVICEBUS_CONNECTION"]
+    entity = os.environ["BENZENE_SERVICEBUS_ENTITY"]
+
+    def use_service_bus(services: Container) -> None:
+        services.add_instance(
+            MessageSender,
+            ServiceBusMessageSender(connection_string=connection, entity_name=entity),
+        )
+
+    definition, _ = build_application(OrdersStartUp, overrides=[use_service_bus])
+    return AzureFunctionsApp.from_definition(definition)
 ```
 
 ## Wire the Azure triggers (v2 programming model)
@@ -54,11 +70,17 @@ raises so the platform retries / dead-letters.
 ## Test every trigger in memory (dogfooded)
 
 ```python
-from benzene.azure.testing import AzureFunctionsTestHost, event_hub_event
-from benzene.testing import FakeMessageSender
+from benzene.azure.testing import event_hub_event
+from benzene.core import MessageSender
+from benzene.testing import FakeMessageSender, create_test_host
 
 sender = FakeMessageSender()
-host = AzureFunctionsTestHost(build_app(sender=sender))
+# Boot the real composition root, fake only the outbound edge, specialize to Azure Functions.
+host = (
+    create_test_host(OrdersStartUp)
+    .with_services(lambda services: services.add_instance(MessageSender, sender))
+    .build_azure()
+)
 
 resp = host.send_http("POST", "/orders", body={"sku": "ABC"})
 assert resp.status_code == 201 and sender.last_topic == "orders:created"   # ingress->handler->egress

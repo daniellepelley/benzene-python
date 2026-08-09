@@ -102,34 +102,36 @@ Routes, topics, and service registrations live in one composition root — a `Be
 every host and every test boots from. From `orders_domain`:
 
 ```python
-from benzene.core import AppDefinition, BenzeneStartUp, Container, MessageSender, Registry, Scope
+from benzene.core import (
+    AppDefinition, BenzeneStartUp, Container, MessageSender, Registry, Scope,
+)
 from benzene.http import HttpRouter
+
+from .handlers import OrderService, make_get_order, make_on_order_created, make_place_order
+from .model import ORDER_CREATED_TOPIC, OrderCreated, OrderEventLog, PlaceOrder
 
 PLACE_ORDER_TOPIC = "orders:place"
 GET_ORDER_TOPIC = "orders:get"
-ORDER_CREATED_TOPIC = "orders:created"
 
 
 class OrdersStartUp(BenzeneStartUp):
     def configure_services(self, services: Container, config) -> None:
-        services.try_add_singleton(OrderService, lambda _scope: OrderService())
-        # A host or test overrides this one registration with a real / fake outbound client.
-        services.try_add_singleton(MessageSender, lambda _scope: _UnconfiguredMessageSender())
-        services.try_add_singleton(ORDER_EVENTS_KEY, lambda _scope: [])
+        services.try_add_singleton(OrderService)          # no factory: construct the type
+        services.try_add_singleton(OrderEventLog)
 
     def configure(self, services: Scope, config) -> AppDefinition:
+        service = services.get_service(OrderService)
+        sender = services.get_service(MessageSender)       # a host or test must register this
+        events = services.get_service(OrderEventLog)
+
         router = HttpRouter()
         router.register("POST", "/orders", PLACE_ORDER_TOPIC,
-                        make_place_order(services.get_service(OrderService),
-                                         services.get_service(MessageSender)),
-                        request_type=PlaceOrder)
-        router.register("GET", "/orders/{id}", GET_ORDER_TOPIC,
-                        make_get_order(services.get_service(OrderService)))
+                        make_place_order(service, sender), request_type=PlaceOrder)
+        router.register("GET", "/orders/{id}", GET_ORDER_TOPIC, make_get_order(service))
 
         registry = Registry.from_definitions(router)                        # the HTTP topics...
         registry.register(ORDER_CREATED_TOPIC,                              # ...plus the subscriber
-                          make_on_order_created(services.get_service(ORDER_EVENTS_KEY)),
-                          request_type=OrderCreated)
+                          make_on_order_created(events), request_type=OrderCreated)
         return AppDefinition(registry=registry, router=router)
 ```
 
@@ -140,8 +142,9 @@ Two things matter for the Google host:
   trigger. `Registry.from_definitions(router)` seeds it from the routes; `registry.register(...)`
   adds the subscriber that has no HTTP route.
 
-The `MessageSender` registration is a deliberate seam: the StartUp installs a loud placeholder, and
-each host swaps in the client it wants.
+`MessageSender` is a deliberate seam: the StartUp doesn't register one — `configure` resolves it
+from the container, so each host (or test) must register the client it wants. Forget to, and
+`configure` fails fast with `ServiceNotRegisteredError` naming the missing dependency.
 
 ## 4. Build the Google host and expose entry points
 
@@ -150,39 +153,34 @@ with a real `PubSubMessageSender`, and specializes the app to Cloud Functions. F
 `examples/gcp_orders/host.py`:
 
 ```python
-from benzene.core import Container, MessageSender, application_from, build_application
+import os
+
+from benzene.core import Container, MessageSender, build_application
 from benzene.gcp import GcpFunctionsApp, PubSubMessageSender
 from orders_domain import OrdersStartUp
 
 
-def build_gcp_orders_app(sender: MessageSender | None = None) -> GcpFunctionsApp:
-    def overrides(services: Container) -> None:
-        if sender is not None:
-            services.add_instance(MessageSender, sender)          # tests inject a fake here
-        else:
-            import os
+def build_gcp_orders_app() -> GcpFunctionsApp:
+    topic = os.environ.get("BENZENE_PUBSUB_TOPIC")
+    if not topic:
+        raise RuntimeError(
+            "Set BENZENE_PUBSUB_TOPIC (projects/<project>/topics/<topic>) to run the GCP host "
+            "(tests use create_test_host instead)."
+        )
 
-            topic = os.environ.get("BENZENE_PUBSUB_TOPIC")
-            if not topic:
-                raise RuntimeError(
-                    "Set BENZENE_PUBSUB_TOPIC (projects/<project>/topics/<topic>) to run the GCP "
-                    "host with a real Pub/Sub client, or pass sender=... in tests."
-                )
-            services.add_instance(MessageSender, PubSubMessageSender(topic))
+    def use_pubsub(services: Container) -> None:
+        services.add_instance(MessageSender, PubSubMessageSender(topic))
 
-    definition, _ = build_application(OrdersStartUp, overrides=[overrides])
-    return GcpFunctionsApp(
-        http_router=definition.router,
-        application=application_from(definition),
-        standard_paths=definition.standard_paths,
-    )
+    definition, _ = build_application(OrdersStartUp, overrides=[use_pubsub])
+    return GcpFunctionsApp.from_definition(definition)
 ```
 
-`GcpFunctionsApp` is the host. It takes the `HttpRouter` for the HTTP trigger and the shared
-`BenzeneMessageApplication` (built here from the StartUp via `application_from`), so **both triggers
-run one pipeline over one registry**. You can also construct it the short way —
-`GcpFunctionsApp(http_router=router, registry=registry)` — and let it build the application for you;
-the reference covers all three constructor shapes ([`benzene.gcp` — `GcpFunctionsApp`](reference/gcp.md#gcpfunctionsapp)).
+`GcpFunctionsApp.from_definition(definition)` builds the host from the composition root's
+`AppDefinition` in one line — it wires the `HttpRouter` for the HTTP trigger and the shared
+`BenzeneMessageApplication` for both triggers, so **both run one pipeline over one registry**. You
+can still construct it directly — `GcpFunctionsApp(http_router=router, registry=registry)` — if you're
+wiring a registry by hand; the reference covers every constructor shape
+([`benzene.gcp` — `GcpFunctionsApp`](reference/gcp.md#gcpfunctionsapp)).
 
 The Functions Framework doesn't load classes — it loads plain module-level callables. `http_function`
 and `pubsub_function` wrap the host into exactly those. From `examples/gcp_orders/main.py`:
@@ -215,7 +213,7 @@ import json
 import pytest
 from benzene.core import MessageSender
 from benzene.testing import FakeMessageSender, create_test_host
-from orders_domain import ORDER_CREATED_TOPIC, ORDER_EVENTS_KEY, OrderService, OrdersStartUp
+from orders_domain import ORDER_CREATED_TOPIC, OrderEventLog, OrderService, OrdersStartUp
 
 
 def make_host():
@@ -226,7 +224,7 @@ def make_host():
     def overrides(services):
         services.add_instance(OrderService, service)
         services.add_instance(MessageSender, sender)       # only the external edge is faked
-        services.add_instance(ORDER_EVENTS_KEY, seen)
+        services.add_instance(OrderEventLog, seen)
 
     host = create_test_host(OrdersStartUp).with_services(overrides).build_gcp()
     return host, service, sender, seen
@@ -341,10 +339,10 @@ if you ever need the raw envelope. See [`benzene.gcp` reference](reference/gcp.m
 - **`ModuleNotFoundError: No module named 'google.cloud'`** (or an import error only when publishing)
   — the Pub/Sub SDK is an optional extra: `pip install "benzene-gcp[pubsub]"`. The inbound bindings
   and the test host don't need it, so this only surfaces at publish time.
-- **`RuntimeError: Set BENZENE_PUBSUB_TOPIC ...`** at startup — the host defaults to a real
-  `PubSubMessageSender` and needs the topic. Export
-  `BENZENE_PUBSUB_TOPIC=projects/<project>/topics/<topic>`, or pass `sender=...` (tests do this via
-  `.with_services(...)`).
+- **`RuntimeError: Set BENZENE_PUBSUB_TOPIC ...`** at startup — the host needs the topic to build a
+  real `PubSubMessageSender`. Export `BENZENE_PUBSUB_TOPIC=projects/<project>/topics/<topic>`; tests
+  don't run the host — they register a fake via `create_test_host(OrdersStartUp).with_services(...)`
+  instead.
 - **HTTP function returns `501 not-implemented`** — you built a `GcpFunctionsApp` with no
   `http_router`. Pass the router (or the full `AppDefinition.router`) if you want the HTTP trigger.
 - **Pub/Sub messages keep redelivering** — a handler is returning a failure result (or none is

@@ -11,17 +11,38 @@ and SNS — and publish events back out over SNS. One function, one pipeline, th
 
 ## Build the host and entry point
 
-The domain wiring (`router` + `registry`) is shared with every other cloud; only the host is
-AWS-specific:
+The domain is the shared `OrdersStartUp`; only the host is AWS-specific. It reads the SNS topic from
+the environment, registers the real `SnsMessageSender` for the one outbound edge, and specializes the
+composition root to Lambda with `AwsLambdaApp.from_definition`:
+
+```python
+# host.py
+import os
+
+from benzene.aws import AwsLambdaApp, SnsMessageSender
+from benzene.core import Container, MessageSender, build_application
+from orders_domain import OrdersStartUp
+
+
+def build_aws_orders_app() -> AwsLambdaApp:
+    topic_arn = os.environ["BENZENE_SNS_TOPIC_ARN"]
+
+    def use_sns(services: Container) -> None:
+        services.add_instance(MessageSender, SnsMessageSender(topic_arn))
+
+    definition, _ = build_application(OrdersStartUp, overrides=[use_sns])
+    return AwsLambdaApp.from_definition(definition)
+```
+
+`to_lambda_handler` wraps it in the `handler(event, context)` callable Lambda invokes:
 
 ```python
 # main.py
-from benzene.aws import AwsLambdaApp, SnsMessageSender, to_lambda_handler
-from orders_domain import OrderService, build_orders
+from benzene.aws import to_lambda_handler
 
-wiring = build_orders(OrderService(), SnsMessageSender("arn:aws:sns:...:orders"))
-app = AwsLambdaApp(http_router=wiring.router, registry=wiring.registry)
-handler = to_lambda_handler(app)     # point your Lambda at main.handler
+from .host import build_aws_orders_app
+
+handler = to_lambda_handler(build_aws_orders_app())   # point your Lambda at main.handler
 ```
 
 The single `handler` dispatches by event shape:
@@ -34,11 +55,17 @@ The single `handler` dispatches by event shape:
 ## Test every source in memory (dogfooded)
 
 ```python
-from benzene.aws.testing import AwsLambdaTestHost, SqsEventBuilder
-from benzene.testing import FakeMessageSender
+from benzene.aws.testing import SqsEventBuilder
+from benzene.core import MessageSender
+from benzene.testing import FakeMessageSender, create_test_host
 
 sender = FakeMessageSender()
-host = AwsLambdaTestHost(build_app(sender=sender))
+# Boot the real composition root, fake only the outbound edge, specialize to Lambda — one call.
+host = (
+    create_test_host(OrdersStartUp)
+    .with_services(lambda services: services.add_instance(MessageSender, sender))
+    .build_aws()
+)
 
 # API Gateway ingress -> handler -> SNS egress
 resp = host.send_http("POST", "/orders", body={"sku": "ABC"})

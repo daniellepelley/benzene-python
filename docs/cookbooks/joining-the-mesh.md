@@ -10,7 +10,7 @@ mesh is additive middleware plus an outbound feed.
 - Python 3.10+
 - `pip install benzene-mesh` (installs `benzene-core`; add `benzene-testing` for the fakes below)
 - An existing service with a `benzene.core` `Registry` — this walkthrough reuses the order domain from
-  the [examples](https://github.com/daniellepelley/benzene-python/tree/main/examples) (`build_orders`).
+  the [examples](https://github.com/daniellepelley/benzene-python/tree/main/examples) (`OrdersStartUp`).
 
 ## 1. Derive the descriptor from the real registry
 
@@ -20,8 +20,6 @@ the truth of what the service serves. Give it the identity and placement the reg
 ```python
 # mesh_wiring.py
 from benzene.mesh import ServiceDescriptor, ServiceInfo
-from orders_domain.wiring import build_orders
-from orders_domain.handlers import OrderService
 
 def build_descriptor(registry) -> ServiceDescriptor:
     return ServiceDescriptor.derive(
@@ -40,9 +38,15 @@ The derived descriptor carries one topic entry per registered topic — for the 
 from the handler's declared types, and a `descriptorHash` over the contract:
 
 ```python
+from benzene.core import MessageSender, build_application
 from benzene.testing import FakeMessageSender
+from orders_domain import OrdersStartUp
 
-registry = build_orders(OrderService(), FakeMessageSender()).registry
+definition, _ = build_application(
+    OrdersStartUp,
+    overrides=[lambda s: s.add_instance(MessageSender, FakeMessageSender())],
+)
+registry = definition.registry
 descriptor = build_descriptor(registry)
 
 payload = descriptor.to_payload()
@@ -58,16 +62,21 @@ else route normally.
 
 ```python
 # app.py
-from benzene.core import BenzeneMessageApplication, MiddlewarePipeline
+from benzene.core import (
+    BenzeneMessageApplication, MessageSender, MiddlewarePipeline, build_application,
+)
 from benzene.mesh import InMemoryTraceExporter, mesh_interception, trace_middleware
 from benzene.testing import FakeMessageSender
 
 from mesh_wiring import build_descriptor
-from orders_domain.wiring import build_orders
-from orders_domain.handlers import OrderService
+from orders_domain import OrdersStartUp
 
 sender = FakeMessageSender()                          # a real outbound client in production
-registry = build_orders(OrderService(), sender).registry
+definition, _ = build_application(
+    OrdersStartUp,
+    overrides=[lambda s: s.add_instance(MessageSender, sender)],
+)
+registry = definition.registry
 descriptor = build_descriptor(registry)
 
 exporter = InMemoryTraceExporter()                    # your TraceExporter in production
@@ -125,7 +134,7 @@ async def _spec(_request):                # /benzene/spec is answered by mesh_in
 class MeshOrdersStartUp(OrdersStartUp):
     def configure_services(self, services, config):
         super().configure_services(services, config)
-        services.try_add_singleton(TraceExporter, lambda _scope: InMemoryTraceExporter())
+        services.try_add_singleton(TraceExporter, InMemoryTraceExporter)
 
     def configure(self, services, config):
         base = super().configure(services, config)          # the real registry + HTTP router
@@ -224,7 +233,8 @@ unreachable collector, or a failing exporter must never affect service traffic.
 ## Troubleshooting
 
 - **The descriptor has no topics.** `derive()` reads the `Registry` you pass — build it after wiring
-  your handlers/routes (`build_orders(...).registry`), not from an empty one.
+  your handlers/routes (the `definition.registry` from `build_application(OrdersStartUp, ...)`), not
+  from an empty one.
 - **`benzene:mesh` routes to a handler / 404s instead of returning the descriptor.** Register
   `mesh_interception` in the pipeline *before* the router runs (pass it to the `MiddlewarePipeline`, as
   above) — the router is the terminal middleware.

@@ -60,11 +60,16 @@ Pub/Sub redelivers.
 ## 4. Test it in memory (dogfooded, no cloud)
 
 ```python
-from benzene.gcp.testing import GcpFunctionsTestHost
-from benzene.testing import FakeMessageSender
+from benzene.core import MessageSender
+from benzene.testing import FakeMessageSender, create_test_host
 
 sender = FakeMessageSender()
-host = GcpFunctionsTestHost(build_app(sender=sender))
+# Boot the real composition root (OrdersStartUp), fake only the outbound edge, specialize to GCP.
+host = (
+    create_test_host(OrdersStartUp)
+    .with_services(lambda services: services.add_instance(MessageSender, sender))
+    .build_gcp()
+)
 
 response = host.send_http("POST", "/orders", body={"sku": "ABC", "quantity": 2})
 assert response.status_code == 201

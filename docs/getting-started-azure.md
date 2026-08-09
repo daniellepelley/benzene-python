@@ -73,42 +73,38 @@ the built registry + router to `AzureFunctionsApp`
 ([`examples/azure_orders/host.py`](https://github.com/daniellepelley/benzene-python/tree/main/examples/azure_orders/host.py)):
 
 ```python
+import os
+
 from benzene.azure import AzureFunctionsApp, ServiceBusMessageSender
-from benzene.core import Container, MessageSender, application_from, build_application
-from orders_domain import OrderService, OrdersStartUp
+from benzene.core import Container, MessageSender, build_application
+from orders_domain import OrdersStartUp
 
 
 def build_azure_orders_app() -> AzureFunctionsApp:
-    def overrides(services: Container) -> None:
-        import os
+    connection = os.environ["BENZENE_SERVICEBUS_CONNECTION"]
+    entity = os.environ["BENZENE_SERVICEBUS_ENTITY"]
 
-        connection = os.environ["BENZENE_SERVICEBUS_CONNECTION"]
-        entity = os.environ["BENZENE_SERVICEBUS_ENTITY"]
+    def use_service_bus(services: Container) -> None:
         services.add_instance(
             MessageSender,
             ServiceBusMessageSender(connection_string=connection, entity_name=entity),
         )
 
-    definition, _ = build_application(OrdersStartUp, overrides=[overrides])
-    return AzureFunctionsApp(
-        http_router=definition.router,
-        application=application_from(definition),
-        standard_paths=definition.standard_paths,
-    )
+    definition, _ = build_application(OrdersStartUp, overrides=[use_service_bus])
+    return AzureFunctionsApp.from_definition(definition)
 ```
 
 `build_application(OrdersStartUp, overrides=[...])` runs the startup's `configure_services` /
 `configure` and returns an `AppDefinition` (its `router`, `registry`, and `standard_paths`) plus the
-resolved root scope; `application_from(definition)` turns it into the single
-`BenzeneMessageApplication` pipeline that **all three** triggers share. The `overrides` hook is the
+resolved root scope; `AzureFunctionsApp.from_definition(definition)` turns it into the host whose
+single `BenzeneMessageApplication` pipeline **all three** triggers share. The `overrides` hook is the
 only seam that differs between deployment and tests — here it registers the real
 `ServiceBusMessageSender` for egress; a test registers a `FakeMessageSender` instead (see
 [section 6](#6-test-every-trigger-in-memory)).
 
-`AzureFunctionsApp` also accepts the simpler `AzureFunctionsApp(http_router=..., registry=...)` form
-if you're wiring a registry by hand; passing a pre-built `application=` (as above) is what lets the
-HTTP, Service Bus, and Event Hub triggers run through one pipeline. See the
-[`benzene.azure` reference](reference/azure.md) for the full constructor.
+`AzureFunctionsApp.from_definition(...)` is the one-liner; you can still construct
+`AzureFunctionsApp(http_router=..., registry=...)` directly if you're wiring a registry by hand. See
+the [`benzene.azure` reference](reference/azure.md) for the full constructor.
 
 ## 4. Wire the Azure triggers (v2 programming model)
 
@@ -206,7 +202,7 @@ import json
 import pytest
 from benzene.core import MessageSender
 from benzene.testing import FakeMessageSender, create_test_host
-from orders_domain import ORDER_CREATED_TOPIC, ORDER_EVENTS_KEY, OrderService, OrdersStartUp
+from orders_domain import ORDER_CREATED_TOPIC, OrderEventLog, OrderService, OrdersStartUp
 from benzene.azure.testing import event_hub_event
 
 
@@ -218,7 +214,7 @@ def make_host():
     def overrides(services):
         services.add_instance(OrderService, service)
         services.add_instance(MessageSender, sender)   # only the external edge is faked
-        services.add_instance(ORDER_EVENTS_KEY, seen)
+        services.add_instance(OrderEventLog, seen)
 
     host = create_test_host(OrdersStartUp).with_services(overrides).build_azure()
     return host, service, sender, seen
@@ -373,7 +369,8 @@ Service Bus is the only outbound client `benzene.azure` ships.
   with `"AzureWebJobsStorage": "UseDevelopmentStorage=true"`).
 - **`RuntimeError: Set BENZENE_SERVICEBUS_CONNECTION and BENZENE_SERVICEBUS_ENTITY ...`** — the host
   couldn't build the real outbound client because those settings are missing. Set them (deploy /
-  local), or pass a `sender=` override in tests.
+  local); tests don't run the host — they register a `FakeMessageSender` via
+  `create_test_host(OrdersStartUp).with_services(...)` instead.
 
 ## See also
 

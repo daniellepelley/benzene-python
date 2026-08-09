@@ -93,12 +93,17 @@ registers its defaults with `try_add*`, and an application's own `add*` wins (co
 from benzene.core import Container, Lifetime
 
 container = Container()
-container.add_singleton(Clock, lambda scope: SystemClock())
-container.try_add_scoped(UnitOfWork, lambda scope: UnitOfWork())   # only if absent
+container.add_singleton(OrderService)                             # no factory: construct the type key
+container.add_singleton(Clock, SystemClock)                       # a zero-arg () -> T callable
+container.try_add_scoped(UnitOfWork, lambda scope: UnitOfWork())  # the full (scope) -> T form (only if absent)
 
 scope = container.create_scope()          # one per invocation
 scope.get_service(Clock)
 ```
+
+A registration factory takes three forms (core-concepts §8): **omit it** to construct the `type` key
+directly, pass a **zero-arg `() -> T`** callable, or pass the full **`(scope) -> T`** form when the
+service needs the scope. The `try_add_*` variants accept all three the same way.
 
 Lifetimes: `Lifetime.SINGLETON`, `SCOPED`, `TRANSIENT`. Keys are arbitrary tokens (typically a
 `type` or a `str`).
@@ -141,14 +146,17 @@ auth) are part of the composition root, booted identically in deployment and in 
 per-host.
 
 ```python
-from benzene.core import AppDefinition, BenzeneStartUp, application_from, build_application
+from benzene.core import (
+    AppDefinition, BenzeneStartUp, Registry, application_from, build_application,
+)
 
 class OrdersStartUp(BenzeneStartUp):
     def configure_services(self, services, config):
-        services.try_add_singleton(OrderService, lambda scope: OrderService())
+        services.try_add_singleton(OrderService)          # no factory: construct the type
 
     def configure(self, services, config) -> AppDefinition:
-        registry = build_orders(services.get_service(OrderService)).registry
+        registry = Registry()
+        registry.register("orders:place", make_place_order(services.get_service(OrderService)))
         return AppDefinition(registry=registry, middleware=[my_middleware])
 
 definition, scope = build_application(OrdersStartUp)          # overrides=, config= optional

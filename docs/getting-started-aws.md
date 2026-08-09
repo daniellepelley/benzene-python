@@ -93,50 +93,36 @@ edge with a real `SnsMessageSender`, and specializes the app to Lambda with `Aws
 
 ```python
 # aws_orders/host.py
+import os
+
 from benzene.aws import AwsLambdaApp, SnsMessageSender
-from benzene.core import Container, MessageSender, application_from, build_application
-from orders_domain import ORDER_EVENTS_KEY, OrderService, OrdersStartUp
+from benzene.core import Container, MessageSender, build_application
+from orders_domain import OrdersStartUp
 
 
-def build_aws_orders_app(
-    service: OrderService | None = None,
-    sender: MessageSender | None = None,
-    seen: list[str] | None = None,
-) -> AwsLambdaApp:
-    def overrides(services: Container) -> None:
-        if service is not None:
-            services.add_instance(OrderService, service)
-        if seen is not None:
-            services.add_instance(ORDER_EVENTS_KEY, seen)
-        if sender is not None:
-            services.add_instance(MessageSender, sender)
-        else:
-            import os
+def build_aws_orders_app() -> AwsLambdaApp:
+    topic_arn = os.environ.get("BENZENE_SNS_TOPIC_ARN")
+    if not topic_arn:
+        raise RuntimeError(
+            "Set BENZENE_SNS_TOPIC_ARN to run the AWS host (tests use create_test_host instead)."
+        )
 
-            topic_arn = os.environ.get("BENZENE_SNS_TOPIC_ARN")
-            if not topic_arn:
-                raise RuntimeError(
-                    "Set BENZENE_SNS_TOPIC_ARN to run the AWS host with a real SNS client, "
-                    "or pass sender=... in tests."
-                )
-            services.add_instance(MessageSender, SnsMessageSender(topic_arn))
+    def use_sns(services: Container) -> None:
+        services.add_instance(MessageSender, SnsMessageSender(topic_arn))
 
-    definition, _ = build_application(OrdersStartUp, overrides=[overrides])
-    return AwsLambdaApp(
-        http_router=definition.router,
-        application=application_from(definition),
-        standard_paths=definition.standard_paths,
-    )
+    definition, _ = build_application(OrdersStartUp, overrides=[use_sns])
+    return AwsLambdaApp.from_definition(definition)
 ```
 
 Two things to notice:
 
-- **`AwsLambdaApp`** is the host. Give it the `http_router` (so API Gateway events route by
-  path → topic) and the built `application` (so SQS/SNS records route by topic). `standard_paths`
-  carries the [Cloud Service Profile](cloud-service-profile.md) well-known surfaces
-  (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`) through onto the API Gateway route. You can
-  also construct it with just `http_router=`/`registry=` and let it build the application for you —
-  see the [`benzene.aws` reference](reference/aws.md#awslambdaapp).
+- **`AwsLambdaApp.from_definition(definition)`** builds the host from the composition root's
+  `AppDefinition` in one line: it wires the `http_router` (so API Gateway events route by
+  path → topic), the built application (so SQS/SNS records route by topic), and the `standard_paths`
+  [Cloud Service Profile](cloud-service-profile.md) well-known surfaces (`/benzene/invoke`,
+  `/benzene/health`, `/benzene/spec`). You can still construct `AwsLambdaApp` directly with
+  `http_router=`/`registry=` if you're wiring a registry by hand — see the
+  [`benzene.aws` reference](reference/aws.md#awslambdaapp).
 - **`SnsMessageSender(topic_arn)`** is the egress. It implements `benzene.core.MessageSender`,
   publishes to the SNS topic ARN, and carries the Benzene topic in the `topic` message attribute
   (headers become attributes too, so correlation propagates). It creates its `boto3` SNS client
@@ -191,7 +177,7 @@ import json
 from benzene.aws.testing import SqsEventBuilder
 from benzene.core import MessageSender
 from benzene.testing import FakeMessageSender, create_test_host
-from orders_domain import ORDER_CREATED_TOPIC, ORDER_EVENTS_KEY, OrderService, OrdersStartUp
+from orders_domain import ORDER_CREATED_TOPIC, OrderEventLog, OrderService, OrdersStartUp
 
 
 def make_host():
@@ -202,7 +188,7 @@ def make_host():
     def overrides(services):
         services.add_instance(OrderService, service)
         services.add_instance(MessageSender, sender)     # only the external edge is faked
-        services.add_instance(ORDER_EVENTS_KEY, seen)
+        services.add_instance(OrderEventLog, seen)
 
     host = create_test_host(OrdersStartUp).with_services(overrides).build_aws()
     return host, service, sender, seen
@@ -351,9 +337,9 @@ execution-role IAM to receive requests.
 
 - **`ImportError: build_aws() requires the 'benzene-aws' package to be installed`** — the test
   harness imports the AWS host lazily. `pip install benzene-aws`.
-- **`RuntimeError: Set BENZENE_SNS_TOPIC_ARN ...` on startup** — the host tried to build a real
-  `SnsMessageSender` but the env var is unset. Set it for deployment, or pass `sender=` (a
-  `FakeMessageSender`) in tests.
+- **`RuntimeError: Set BENZENE_SNS_TOPIC_ARN ...` on startup** — the host needs the topic ARN to
+  build a real `SnsMessageSender`. Set it for deployment; tests don't run the host — they register a
+  `FakeMessageSender` via `create_test_host(OrdersStartUp).with_services(...)` instead.
 - **`ModuleNotFoundError: No module named 'boto3'` at first publish** — `boto3` is an optional extra.
   Install `benzene-aws[boto3]` and include it in your deployment bundle.
 - **`ValueError: Unrecognised Lambda event` at runtime** — the payload wasn't API Gateway, SQS, or
