@@ -290,6 +290,13 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     knows it is missing. R1–R5/R7 are read off the definition (registry + `StandardPaths`); R6 (mesh
     feeds) and R8 (outbound `traceparent`) — the pair the spec calls structurally unobservable — are
     declared explicitly. Dogfooded by [`examples/mesh_dashboard/profile.py`](examples/mesh_dashboard/profile.py).
+17. **(done)** The Cloud Service Profile **live-probe checker** — `benzene.mesh.probe_cloud_service`
+    (and the `python -m benzene.mesh.probe <url>` CLI) audits a *deployed* service against R1–R8 over
+    plain HTTP, speaking only the language-neutral `/benzene/*` surfaces so it grades any port's service
+    the same way. Each requirement gets a tri-state verdict (satisfied / not-satisfied / inconclusive)
+    with a reason; the three the spec calls structurally unobservable from outside (R6's collector-
+    delivery half, R8, and R7 under a non-default prefix) stay inconclusive by design rather than being
+    guessed. The outside-in counterpart to item 16's self-check.
 
 ## Documentation
 

@@ -61,6 +61,12 @@ from .poller import (
     PollResult,
     ServiceSource,
 )
+from .probe import (
+    CloudServiceProbeReport,
+    RequirementProbe,
+    Verdict,
+    probe_cloud_service,
+)
 from .profile import (
     PROFILE_NAME,
     REQUIREMENT_IDS,
@@ -100,12 +106,16 @@ __all__ = [
     "CollectorError",
     "CollectorNotFound",
     "CollectorStore",
+    "CloudServiceProbeReport",
     "CloudServiceProfileReport",
     "DescriptorSource",
     "PROFILE_NAME",
     "REQUIREMENT_IDS",
     "RequirementCheck",
+    "RequirementProbe",
+    "Verdict",
     "evaluate_cloud_service_profile",
+    "probe_cloud_service",
     "HEARTBEAT_TOPIC",
     "Heartbeat",
     "ISSUES_TOPIC",

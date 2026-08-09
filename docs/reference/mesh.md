@@ -143,6 +143,31 @@ descriptor = ServiceDescriptor.derive(
 (`REQUIREMENT_IDS` lists them, R1–R8); `PROFILE_NAME` is `"cloud-service"`. See the runnable
 [`mesh_dashboard` profile example](https://github.com/daniellepelley/benzene-python/tree/main/examples/mesh_dashboard/profile.py).
 
+### The live-probe checker — `probe_cloud_service`
+
+The outside-in counterpart: point it at a *deployed* service's base URL and it audits the profile over
+plain HTTP, speaking only the language-neutral surfaces (`/benzene/spec`, `/benzene/health`,
+`/benzene/invoke`) so it grades a Go, Node, or .NET service exactly as a Python one. Each requirement
+gets a **tri-state** `Verdict` — `satisfied` / `not-satisfied` / `inconclusive` — always with a reason.
+
+```python
+from benzene.mesh import probe_cloud_service
+
+report = await probe_cloud_service("https://orders.example.com")   # inject http= in tests
+report.not_satisfied      # ids positively found unmet — the actionable failures
+report.inconclusive       # ids a black-box probe can't verify (never a failure by itself)
+report.is_clean           # True when nothing was positively found unmet
+report.to_payload()       # {"baseUrl", "requirements": [{"id", "verdict", "reason"}, ...]}
+```
+
+A black-box probe cannot verify everything a self-check can, so three verdicts are `inconclusive`
+**by design**, never silently upgraded (cloud-service-profile.md §5): **R8** (propagation needs a second
+service or a collector to observe forwarded `traceparent`), **R6**'s register/heartbeat half (only the
+`benzene:mesh` descriptor response is observable; delivery to a collector is not), and **R7** whenever
+the caller probes a non-default prefix (the service's own defaults become unknowable). The CLI form is
+`python -m benzene.mesh.probe <url> [--prefix /benzene] [--json]`, exiting non-zero when a requirement
+is positively unmet.
+
 ## Schema derivation
 
 `json_schema(py_type)` derives the **JSON Schema 2020-12 subset** the mesh uses to describe what a topic
@@ -523,7 +548,8 @@ collector.query_fleet({})
 `CollectorBadRequest`, `CollectorNotFound`, `REGISTER_TOPIC`, `HEARTBEAT_TOPIC`, `TRACES_TOPIC`,
 `ISSUES_TOPIC`, `QUERY_FLEET_TOPIC`, `QUERY_SERVICE_TOPIC`, `QUERY_TOPIC_TOPIC`, `QUERY_TRACE_TOPIC`,
 `evaluate_cloud_service_profile`, `CloudServiceProfileReport`, `RequirementCheck`, `REQUIREMENT_IDS`,
-`PROFILE_NAME`, `build_artifacts`, `write_artifacts`.
+`PROFILE_NAME`, `probe_cloud_service`, `CloudServiceProbeReport`, `RequirementProbe`, `Verdict`,
+`build_artifacts`, `write_artifacts`.
 
 ## See also
 
