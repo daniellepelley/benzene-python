@@ -11,6 +11,7 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
 from benzene.mesh import (
     CallableServiceSource,
     HttpServiceSource,
@@ -348,3 +349,57 @@ def test_anonymous_service_known_only_via_traces_degrades_cleanly() -> None:
     assert ghost["health"]["healthChecks"] == {}
     status = {s["name"]: s["status"] for s in arts["manifest"]["services"]}
     assert status["ghost"] == "unreachable"
+
+
+def test_a_failed_write_leaves_no_partial_or_orphan_temp_file(tmp_path: Path) -> None:
+    # Atomic write: the artifact only appears via os.replace once fully written. If the write fails
+    # mid-flight, the temp file is cleaned up and the target never appears half-written — so the UI
+    # (or a reader) never fetches a truncated artifact. A set is not JSON-serialisable, so json.dump
+    # raises inside the write and exercises the cleanup path.
+    from benzene.mesh.artifacts import _write_json
+
+    target = tmp_path / "manifest.json"
+    with pytest.raises(TypeError):
+        _write_json(target, {"bad": {1, 2, 3}})
+
+    assert not target.exists()  # no half-written artifact
+    assert list(tmp_path.iterdir()) == []  # and no orphaned .tmp file left behind
+
+
+def test_topology_never_draws_a_service_calling_itself() -> None:
+    # Two services provide the same topic (alpha, beta both serve shared:work); alpha also *calls* it,
+    # load-balanced to beta. alpha is then both a provider and a consumer of the topic — the edge
+    # builder must skip the alpha->alpha self-loop and keep only alpha->beta.
+    c = MeshCollector()
+    c.ingest_register(
+        {"service": "alpha", "topics": [{"id": "shared:work"}], "descriptorHash": "a"}
+    )
+    c.ingest_register({"service": "beta", "topics": [{"id": "shared:work"}], "descriptorHash": "b"})
+    c.ingest_traces(
+        {
+            "events": [
+                # alpha's calling span, then beta handling shared:work as its child.
+                {
+                    "traceId": "t",
+                    "spanId": "sa",
+                    "service": "alpha",
+                    "topic": "a:enter",
+                    "status": "ok",
+                },
+                {
+                    "traceId": "t",
+                    "spanId": "sb",
+                    "parentSpanId": "sa",
+                    "service": "beta",
+                    "topic": "shared:work",
+                    "status": "ok",
+                },
+            ]
+        }
+    )
+    edges = {
+        (e["client"], e["server"])
+        for e in build_artifacts(c, generated_at=_AT)["topology"]["edges"]
+    }
+    assert ("alpha", "alpha") not in edges  # the self-loop is skipped
+    assert ("alpha", "beta") in edges
