@@ -103,6 +103,46 @@ TopicDescriptor(
 `to_payload()` emits `id`, `requestSchema`, `responseSchema`, and `version` only when it is non-empty
 (an empty version is omitted, not nulled).
 
+## The Cloud Service Profile self-check
+
+The [Cloud Service Profile](../cloud-service-profile.md) names eight requirements (R1–R8) a service
+must satisfy to be a first-class fleet citizen. `evaluate_cloud_service_profile` grades a composition
+root's [`AppDefinition`](core.md) against them at **wiring time** — a self-assessment of what the setup
+provisioned, not a runtime probe — and its verdict rides on the descriptor's optional `profile` field
+(§2), so any tool that reaches the reserved `benzene:mesh` topic can ask a running service whether it
+claims the profile and, if not, which requirements it is missing.
+
+```python
+from benzene.mesh import evaluate_cloud_service_profile
+
+report = evaluate_cloud_service_profile(definition, mesh_feeds=True, trace_propagation=True)
+report.is_conformant          # True when every requirement is satisfied
+report.missing                # e.g. ["R6", "R8"] — the ids the wiring does not satisfy, in order
+report.reason("R6")           # the explanation recorded for one requirement
+report.to_profile()           # {"name": "cloud-service"} (or {..., "missing": [...]})
+
+descriptor = ServiceDescriptor.derive(
+    definition.registry, ServiceInfo(service="orders", profile=report.to_profile())
+)
+```
+
+- Most requirements are read straight off the definition: **R1** (a registry/router to host), **R2**
+  (≥1 non-reserved application topic), and — from the [`StandardPaths`](http.md) declaration — **R3**
+  (health aggregate), **R4** (`/benzene/invoke` enabled), **R5** (derived spec), and **R7** (the
+  surfaces under the default `/benzene/` prefix).
+- Two requirements are structurally invisible to definition inspection and are passed explicitly —
+  exactly the pair the profile spec singles out as unobservable from a single service:
+  **`mesh_feeds`** (R6 — the `benzene:mesh` descriptor plus register/heartbeat/trace *sending*, wired
+  into the host loop) and **`trace_propagation`** (R8 — outbound clients forwarding `traceparent`). The
+  default for each is the honest "not provisioned".
+- Like `degraded`, the `profile` field is self-description, **excluded from the `descriptorHash`**, and
+  never changes because of runtime degradation — an unreachable collector does not make a conformant
+  service stop claiming the profile.
+
+`CloudServiceProfileReport` carries one `RequirementCheck(id, satisfied, reason)` per requirement
+(`REQUIREMENT_IDS` lists them, R1–R8); `PROFILE_NAME` is `"cloud-service"`. See the runnable
+[`mesh_dashboard` profile example](https://github.com/daniellepelley/benzene-python/tree/main/examples/mesh_dashboard/profile.py).
+
 ## Schema derivation
 
 `json_schema(py_type)` derives the **JSON Schema 2020-12 subset** the mesh uses to describe what a topic
@@ -481,7 +521,9 @@ collector.query_fleet({})
 `MeshFeedSender`, `Heartbeat`, `Issue`, `IssueBatch`, `IssueAggregator`, `classify`,
 `issue_fingerprint`, `CLASSIFICATIONS`, `MeshCollector`, `collector_registry`, `CollectorError`,
 `CollectorBadRequest`, `CollectorNotFound`, `REGISTER_TOPIC`, `HEARTBEAT_TOPIC`, `TRACES_TOPIC`,
-`ISSUES_TOPIC`, `QUERY_FLEET_TOPIC`, `QUERY_SERVICE_TOPIC`, `QUERY_TOPIC_TOPIC`, `QUERY_TRACE_TOPIC`.
+`ISSUES_TOPIC`, `QUERY_FLEET_TOPIC`, `QUERY_SERVICE_TOPIC`, `QUERY_TOPIC_TOPIC`, `QUERY_TRACE_TOPIC`,
+`evaluate_cloud_service_profile`, `CloudServiceProfileReport`, `RequirementCheck`, `REQUIREMENT_IDS`,
+`PROFILE_NAME`, `build_artifacts`, `write_artifacts`.
 
 ## See also
 

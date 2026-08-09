@@ -12,6 +12,7 @@ Two scenarios, each driving the projection from real collector state (no hand-wr
 |---|---|---|
 | [`demo.py`](demo.py) | a healthy fleet under load | typed descriptors → real request/response **schemas** + a versioned topic; **heartbeats** → per-check health; real traced invocations → **topology** + **usage** |
 | [`evolution.py`](evolution.py) | a fleet mid-rollout | the governance signals: **schema-changed**, **removedTopics**, **contractDrift**, **schemaMismatch** |
+| [`profile.py`](profile.py) | a service self-checking | grade the wiring against the **Cloud Service Profile** (R1–R8) and carry the verdict on the descriptor's `profile` field |
 
 ## Run it
 

@@ -61,6 +61,13 @@ from .poller import (
     PollResult,
     ServiceSource,
 )
+from .profile import (
+    PROFILE_NAME,
+    REQUIREMENT_IDS,
+    CloudServiceProfileReport,
+    RequirementCheck,
+    evaluate_cloud_service_profile,
+)
 from .schema import Schema, json_schema
 from .store import (
     CollectorStore,
@@ -93,7 +100,12 @@ __all__ = [
     "CollectorError",
     "CollectorNotFound",
     "CollectorStore",
+    "CloudServiceProfileReport",
     "DescriptorSource",
+    "PROFILE_NAME",
+    "REQUIREMENT_IDS",
+    "RequirementCheck",
+    "evaluate_cloud_service_profile",
     "HEARTBEAT_TOPIC",
     "Heartbeat",
     "ISSUES_TOPIC",

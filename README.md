@@ -282,6 +282,14 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     annotations, and per-service spec + per-check health) and serves the canonical `mesh-ui.html` at
     `/mesh-ui/`. Verified live end to end (estate, functional map, topology, usage) then torn down; the
     artifact field set is pinned against the contract by `tests/test_mesh_artifact_contract.py`.
+16. **(done)** The Cloud Service Profile **self-check** — `benzene.mesh.evaluate_cloud_service_profile`
+    grades a composition root's `AppDefinition` against the profile's R1–R8 at wiring time and returns a
+    `CloudServiceProfileReport` whose `to_profile()` rides on the descriptor's optional `profile` field
+    (`{name, missing}`, `missing` omitted when conformant, excluded from the `descriptorHash`), so any
+    tool that can reach `benzene:mesh` can ask a running service which requirements its own wiring
+    knows it is missing. R1–R5/R7 are read off the definition (registry + `StandardPaths`); R6 (mesh
+    feeds) and R8 (outbound `traceparent`) — the pair the spec calls structurally unobservable — are
+    declared explicitly. Dogfooded by [`examples/mesh_dashboard/profile.py`](examples/mesh_dashboard/profile.py).
 
 ## Documentation
 
