@@ -12,6 +12,7 @@ import asyncio
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+import pytest
 from benzene.core import (
     BenzeneMessageApplication,
     HealthChecks,
@@ -163,3 +164,50 @@ def test_a_malformed_service_response_is_a_failed_result_not_a_broken_sweep() ->
     assert {r.service: r.ok for r in results} == {"garbage": False, "wrongshape": False}
     assert all(r.error for r in results)  # each carries a reason
     assert collector.query_fleet({})["services"] == []  # nothing malformed leaked into the catalog
+
+
+def test_stdlib_get_returns_status_and_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The default (zero-dependency) GET reads status + body off a normal urllib response.
+    from benzene.mesh import poller as poller_module
+
+    class _FakeResponse:
+        status = 200
+
+        def read(self) -> bytes:
+            return b'{"service": "orders"}'
+
+        def __enter__(self) -> _FakeResponse:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(poller_module.urllib.request, "urlopen", lambda *a, **k: _FakeResponse())
+    get = poller_module._stdlib_get()
+    status, body = asyncio.run(get("http://orders/benzene/spec"))
+    assert status == 200
+    assert body == '{"service": "orders"}'
+
+
+def test_stdlib_get_reads_the_body_off_an_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A 503 from the health surface still carries the aggregate body — the default GET returns it as
+    # data (code, body) rather than letting the HTTPError propagate and fail the sweep.
+    import io
+    import urllib.error
+
+    from benzene.mesh import poller as poller_module
+
+    def _raise(*_a: object, **_k: object) -> None:
+        raise urllib.error.HTTPError(
+            url="http://orders/benzene/health",
+            code=503,
+            msg="Service Unavailable",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=io.BytesIO(b'{"isHealthy": false}'),
+        )
+
+    monkeypatch.setattr(poller_module.urllib.request, "urlopen", _raise)
+    get = poller_module._stdlib_get()
+    status, body = asyncio.run(get("http://orders/benzene/health"))
+    assert status == 503
+    assert body == '{"isHealthy": false}'
