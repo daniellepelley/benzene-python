@@ -51,6 +51,7 @@ Beyond the host examples, these demonstrate a cross-cutting Benzene *pattern* ra
 |---|---|---|
 | [`versioning/`](versioning) | handler-version dispatch by the `benzene-version` metadata header (versioning.md §3, "Mechanism A") | `benzene-core` |
 | [`mesh_fleet/`](mesh_fleet) | a multi-service mesh: descriptors, tracing, and a collector fleet view | `benzene-mesh` |
+| [`mesh_dashboard/`](mesh_dashboard) | the observer side: project a mesh into the full mesh-ui artifact set (schemas, health, topology, usage) | `benzene-mesh` |
 
 ## Not yet — awaiting adapter packages
 
