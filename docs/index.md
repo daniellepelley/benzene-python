@@ -9,6 +9,9 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 
 - **[Getting started](getting-started.md)** — from an empty folder to a running HTTP service in a
   few minutes.
+  - [AWS Lambda](getting-started-aws.md) — one function over API Gateway, SQS, and SNS
+  - [Azure Functions](getting-started-azure.md) — HTTP, Service Bus, and Event Hub triggers
+  - [Google Cloud Functions](getting-started-google.md) — HTTP + Pub/Sub
 - **[Packages & adoption levels](packages.md)** — how Benzene is split into layered PyPI packages,
   why, and which ones to install.
 - **[Publishing](publishing.md)** — how the ten packages are released to PyPI (trusted publishing).
