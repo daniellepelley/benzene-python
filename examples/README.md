@@ -64,7 +64,6 @@ from scratch — and the adapter packages they depend on have not been ported to
 
 | Deferred example | Needs | Why it can't be faithful yet |
 |---|---|---|
-| Kafka | a `benzene-kafka` transport | no Kafka binding exists in this port |
 | Saga | a `benzene-saga` orchestration package | no saga primitives exist in this port |
 | OpenTelemetry | a `benzene-opentelemetry` adapter | no OTel exporter/adapter exists in this port |
 
