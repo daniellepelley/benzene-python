@@ -347,6 +347,40 @@ client = with_retry(with_correlation_id(sender), attempts=5)   # wraps any Messa
 
 (`RetryingMessageSender` / `CorrelationIdMessageSender` are the classes the sugar returns.)
 
+## In-process transport
+
+`benzene.core.inprocess` is a `MessageSender` that dispatches straight to a handler pipeline built
+in the same runtime — no wire hop (not even loopback). It's for the modular-monolith shape: a
+module that used to be a separate service, reached over SQS/SNS/HTTP, has moved into the caller's
+own process, and the topic that used to leave the process now has no reason to.
+
+```python
+from benzene.core import BenzeneMessageApplication, InProcessMessageSender, Pipelines, Registry
+
+billing = BenzeneMessageApplication(Registry().add(charge_card))
+pipelines = Pipelines().add("billing", billing)
+
+sender = InProcessMessageSender(pipelines, "billing")   # a MessageSender, usable anywhere one is
+result = await sender.send_message("billing:charge", {"orderId": "o1"})
+```
+
+`Pipelines` accumulates one named pipeline per module — `.add(name, application)` raises
+`DuplicatePipelineError` for a repeated name. `InProcessMessageSender(pipelines, name)` resolves
+`name` **eagerly, at construction** (not deferred to first send), raising `PipelineNotFoundError`
+for a typo'd or forgotten name — the natural place to catch it in this port's explicit-wiring
+style, with no separate boot-time-check mechanism needed on top.
+
+`InProcessFanOutSender(pipelines, *names)` dispatches one send to several named pipelines
+concurrently — the in-monolith equivalent of one SNS topic fanning out to several subscribers.
+Each target's failure (a raised exception or an unsuccessful result) is isolated: logged via
+`logging.getLogger("benzene.core.inprocess")`, but it doesn't affect the other targets or the
+fan-out's own always-successful return, matching what a real SNS publish returns (accepted once
+published, no visibility into subscriber outcomes). Unlike the .NET and TypeScript ports, no
+per-target topic is required — each named pipeline owns its own independent `Registry` (not a
+process-wide singleton), so two targets can legitimately both handle the literal same topic with
+zero collision. See `benzene.core.inprocess`'s module docstring for the full port-divergence
+rationale.
+
 ## Exports
 
 `BenzeneMessageApplication`, `Container`, `Context`, `DuplicateHandlerError`, `Handler`,
@@ -361,7 +395,8 @@ client = with_retry(with_correlation_id(sender), attempts=5)   # wraps any Messa
 `DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `MessageSender`, `with_retry`, `with_correlation_id`,
 `RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `SchemaCasters`,
 `casting_handler`, `Cast`, `NoCastPathError`, `ServiceSpec`, `TopicSpec`, `spec_interception`,
-`SPEC_TOPIC`, `json_schema`, `Schema`, `to_jsonable`, `to_request`.
+`SPEC_TOPIC`, `json_schema`, `Schema`, `to_jsonable`, `to_request`, `Pipelines`,
+`InProcessMessageSender`, `InProcessFanOutSender`, `DuplicatePipelineError`, `PipelineNotFoundError`.
 
 ## See also
 

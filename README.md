@@ -35,7 +35,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | Install | Import | You get | Depends on | .NET analog |
 |---|---|---|---|---|
 | `benzene-results` | `benzene.results` | `Result` + status vocabulary — the return type of a handler | — (zero deps) | `Benzene.Results` |
-| `benzene-core` | `benzene.core` | pipeline, registry, `@message`, DI, versioning, health checks, the `BenzeneMessage` envelope | `benzene-results` | `Benzene.Core*` + `Benzene.Dependencies` |
+| `benzene-core` | `benzene.core` | pipeline, registry, `@message`, DI, versioning, health checks, the `BenzeneMessage` envelope, in-process transport | `benzene-results` | `Benzene.Core*` + `Benzene.Dependencies` |
 | `benzene-http` | `benzene.http` | inbound HTTP (ASGI) binding + status mapping | `benzene-core` | `Benzene.Http` |
 | `benzene-grpc` | `benzene.grpc` | Benzene↔gRPC status mapping + trailer rule + server/client transport (`[transport]`) | `benzene-core` (+ `grpcio`) | `Benzene.Grpc` |
 | `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
