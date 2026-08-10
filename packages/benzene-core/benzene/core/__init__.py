@@ -40,6 +40,13 @@ from .health import (
     HealthReport,
     health_interception,
 )
+from .inprocess import (
+    DuplicatePipelineError,
+    InProcessFanOutSender,
+    InProcessMessageSender,
+    PipelineNotFoundError,
+    Pipelines,
+)
 from .mapping import encode_body, to_camel, to_jsonable, to_request
 from .metadata import (
     DEFAULT_METADATA_KEYS,
@@ -81,6 +88,11 @@ __all__ = [
     "DEFAULT_RETRYABLE",
     "DuplicateHandlerError",
     "DuplicateHealthCheckError",
+    "DuplicatePipelineError",
+    "InProcessFanOutSender",
+    "InProcessMessageSender",
+    "PipelineNotFoundError",
+    "Pipelines",
     "RetryingMessageSender",
     "with_correlation_id",
     "with_retry",
