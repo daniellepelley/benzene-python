@@ -221,8 +221,13 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 
 > **Every language-neutral conformance fixture is green** — status vocabulary, HTTP + gRPC status
 > mappings, the envelope, transport metadata, and all four mesh fixtures (descriptor, trace, collector,
-> issues) — and every transport binding in the spec now has an implementation (HTTP, the three clouds,
-> gRPC, and Kafka), inbound and outbound.
+> issues) — and a first transport binding has shipped for HTTP, all three clouds, gRPC, and Kafka,
+> inbound and outbound. Conformance-green is the whole story for items 1–18 below; it is **not** the
+> same claim as transport-surface or feature parity with the other three ports. `benzene-dotnet` binds
+> roughly three times as many transports and ships circuit breaker, bulkhead, auth, and caching that
+> this port doesn't yet — see "Closing the .NET parity gap" below, which exists specifically to track
+> that difference and is scoped directly off a cross-language capability audit, not off this port's own
+> (already-complete) original plan.
 
 1. **(done)** Wire contracts + core model + `BenzeneMessage` envelope, conformance-green.
 2. **(done)** An HTTP inbound binding end-to-end (ASGI), including the status-code mapping.
@@ -306,6 +311,52 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     and send run in memory with no broker; tested through the shared harness (`build_kafka()` +
     `send_kafka`) and dogfooded by [`examples/kafka_orders/`](examples/kafka_orders). Mirrors
     `Benzene.Kafka.Core`.
+
+### Closing the .NET parity gap
+
+`benzene-dotnet` is the reference port and, transport-for-transport and feature-for-feature, the
+widest of the four. The items above took this port from nothing to fully conformant; the items below
+take it from "conformant" to "as capable as .NET" — each is scoped directly against a concrete
+`benzene-dotnet` package, so "done" has an unambiguous target rather than a vague aspiration.
+
+19. **(planned)** AWS transport parity — inbound bindings + outbound clients for **S3** (object-created
+    event notifications), **EventBridge**, **DynamoDB Streams**, and **Kinesis Data Streams**, plus a
+    Kafka/MSK-via-Lambda binding alongside the self-hosted consumer item 18 already ships. Mirrors
+    `Benzene.Aws.Lambda.{S3,EventBridge,DynamoDb,Kinesis,Kafka}` and the matching `Benzene.Clients.Aws.*`
+    outbound clients. Today `benzene-aws` covers API Gateway + SQS + SNS only.
+20. **(planned)** Azure transport parity — inbound bindings + outbound clients for **Queue Storage**,
+    **Blob Storage**, **Cosmos DB Change Feed**, a **Timer** trigger, and **Event Grid** (native schema
+    + CloudEvents 1.0). Mirrors `Benzene.Azure.Function.{QueueStorage,BlobStorage,CosmosDb,Timer,
+    EventGrid}` and `Benzene.Clients.Azure.*`. Today `benzene-azure` covers HTTP + Service Bus +
+    Event Hub only.
+21. **(planned)** RabbitMQ — a self-hosted consumer plus an outbound `RabbitMqMessageSender`, mirroring
+    `Benzene.RabbitMq` and shaped like this port's existing Kafka binding (item 18): duck-typed against
+    an optional `[rabbitmq]` extra, one record per invocation/scope, at-least-once ack on success.
+22. **(planned)** Resilience beyond retry — a circuit breaker, a bulkhead, rate limiting actually wired
+    to the `too-many-requests` status, idempotency (dedupe redelivered messages), and an in-process saga
+    (compensation/rollback, not durable). Mirrors `Benzene.Resilience.Polly`, `Benzene.RateLimiting`,
+    `Benzene.Idempotency`, and `Benzene.Saga`. This port currently has retry and nothing else in this
+    category.
+23. **(planned)** Auth — Basic auth and JWT/OAuth2 bearer-token middleware, plus an API Gateway custom
+    authorizer adapter. Mirrors `Benzene.Auth.{Basic,OAuth2}` and
+    `Benzene.Aws.Lambda.ApiGateway.ApiGatewayCustomAuthorizer`. Currently absent outright.
+24. **(planned)** Caching — a cache-aside abstraction plus a Redis backend. Mirrors `Benzene.Cache.Core`
+    / `Benzene.Cache.Redis`. Currently absent outright.
+25. **(planned)** OpenTelemetry — wire this port's existing spans/traces through a real OTel SDK
+    exporter (today's tracing is Benzene-internal only, with no OTel integration), plus a
+    response-as-event pattern mirroring `Benzene.ResponseEvents`.
+26. **(planned)** OpenAPI generation from the registry, alongside the JSON Schema this port already
+    derives. Mirrors `Benzene.Schema.OpenApi`.
+27. **(planned, lower priority)** Mesh discovery adapters (AWS/Azure/Kubernetes service discovery) and
+    fleet trace-mapper packages (Jaeger/Tempo/X-Ray), mirroring `Benzene.Mesh.Discovery.*` and
+    `Benzene.Mesh.Fleet.*`. Lower priority than 19–26: this port's mesh module (items 5, 8, 15–17) is
+    already ahead of Go's on this specific front, and .NET/TypeScript are themselves the only ports with
+    full discovery + fleet-mapper coverage today.
+
+Sequencing: 19–21 (transports) first, since they're the largest and most visible gap and the pattern
+each follows is already proven by this port's own Kafka binding; 22–24 (resilience/auth/caching) next,
+since every sibling port has at least most of these and their absence is the sharpest cross-language
+outlier; 25–27 last.
 
 ## Documentation
 
