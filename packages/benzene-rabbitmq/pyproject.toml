@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene-rabbitmq"
+version = "0.0.1"
+description = "Benzene RabbitMQ transport binding — a self-hosted consumer and a RabbitMQ-publish outbound client."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Benzene" }]
+keywords = ["benzene", "rabbitmq", "amqp", "pika", "consumer", "hexagonal"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+dependencies = ["benzene-core>=0.0.1"]
+
+[project.optional-dependencies]
+# Only the default publish/consume clients need the SDK; the binding (decode, consumer loop,
+# outbound send over an injected channel) and its tests need no broker and no SDK.
+rabbitmq = ["pika>=1.3"]
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
+
+# PEP 420 namespace package — see benzene-results/pyproject.toml.
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]
