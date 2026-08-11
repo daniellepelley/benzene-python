@@ -13,6 +13,7 @@ The ``pika`` client is an optional dependency imported lazily; inject any object
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -84,7 +85,10 @@ class RabbitMqMessageSender:
 
         try:
             channel = self._client()
-            channel.basic_publish(
+            # ``basic_publish`` is a blocking pika network call; run it on a worker thread so an
+            # ``await send_message(...)`` never blocks the event loop (matching the consumer loop).
+            await asyncio.to_thread(
+                channel.basic_publish,
                 exchange=self._exchange,
                 routing_key=self._routing_key,
                 body=data,

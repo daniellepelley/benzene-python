@@ -10,10 +10,15 @@ Two carrying conventions, matching what each service exposes on the wire:
 
 Mirrors .NET's ``Benzene.Clients.Aws.*``. ``boto3`` is an optional dependency, imported lazily, so
 the module (and its tests, which inject a fake client) load with no AWS SDK present.
+
+Each ``send_message`` runs its blocking ``boto3`` call via :func:`asyncio.to_thread`, so an
+``await sender.send_message(...)`` never blocks the event loop — the same rule the consumer loops
+follow, and what keeps an outbound publish from stalling an ASGI server co-hosted in the same process.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -54,7 +59,8 @@ class SnsMessageSender:
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
         try:
-            self._sns().publish(
+            await asyncio.to_thread(
+                self._sns().publish,
                 TopicArn=self._topic_arn,
                 Message=self._serialize(message),
                 MessageAttributes=_string_attributes(topic, headers),
@@ -88,7 +94,8 @@ class SqsMessageSender:
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
         try:
-            self._sqs().send_message(
+            await asyncio.to_thread(
+                self._sqs().send_message,
                 QueueUrl=self._queue_url,
                 MessageBody=self._serialize(message),
                 MessageAttributes=_string_attributes(topic, headers),
@@ -143,7 +150,8 @@ class EventBridgeMessageSender:
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
         try:
-            self._events().put_events(
+            await asyncio.to_thread(
+                self._events().put_events,
                 Entries=[
                     {
                         "EventBusName": self._event_bus_name,
@@ -151,7 +159,7 @@ class EventBridgeMessageSender:
                         "DetailType": self._detail_type or topic,
                         "Detail": _embedded_envelope(topic, message, headers, self._serialize),
                     }
-                ]
+                ],
             )
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
@@ -197,7 +205,8 @@ class KinesisMessageSender:
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
         try:
-            self._kinesis().put_record(
+            await asyncio.to_thread(
+                self._kinesis().put_record,
                 StreamName=self._stream_name,
                 Data=_embedded_envelope(topic, message, headers, self._serialize),
                 PartitionKey=self._partition_key(topic, headers),

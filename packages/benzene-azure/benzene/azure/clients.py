@@ -9,10 +9,15 @@ dependencies, imported lazily inside the methods, so the module (and its tests) 
   are embedded in the payload as a Benzene envelope (mirrors ``Benzene.Clients.Azure`` QueueStorage).
 * :class:`EventGridMessageSender` — publishes an Event Grid event (native schema by default, or
   CloudEvents 1.0), the Benzene topic in ``eventType``/``type`` (mirrors ``Benzene.Clients.Azure``).
+
+Each ``send_message`` runs its blocking Azure SDK call via :func:`asyncio.to_thread`, so an
+``await sender.send_message(...)`` never blocks the event loop (matching the consumer loops and the
+other transports' clients).
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import uuid
@@ -64,7 +69,9 @@ class ServiceBusMessageSender:
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
         try:
-            self._get_sender().send_messages(self._make_message(topic, message, headers))
+            await asyncio.to_thread(
+                self._get_sender().send_messages, self._make_message(topic, message, headers)
+            )
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
@@ -128,7 +135,9 @@ class QueueStorageMessageSender:
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
         try:
-            self._get_client().send_message(self._make_message(topic, message, headers))
+            await asyncio.to_thread(
+                self._get_client().send_message, self._make_message(topic, message, headers)
+            )
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
@@ -208,7 +217,9 @@ class EventGridMessageSender:
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
         try:
-            self._get_client().send(self._make_event(topic, message, headers))
+            await asyncio.to_thread(
+                self._get_client().send, self._make_event(topic, message, headers)
+            )
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()

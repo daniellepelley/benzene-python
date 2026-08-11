@@ -12,6 +12,7 @@ onto the native message attributes so correlation/trace propagation works end to
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from collections.abc import Callable
 from typing import Any
@@ -74,10 +75,16 @@ class PubSubMessageSender:
         attributes = {str(k): str(v) for k, v in (headers or {}).items()}
         attributes[TOPIC_ATTRIBUTE] = topic
         data = self._serialize(message).encode("utf-8")
-        try:
+
+        def _publish() -> None:
             future = self._client().publish(self._topic_path, data, **attributes)
             # The publish future is synchronous under the SDK; result() surfaces publish errors.
             future.result()
+
+        try:
+            # Run the blocking publish (and its result() wait) on a worker thread so an
+            # ``await send_message(...)`` never blocks the event loop.
+            await asyncio.to_thread(_publish)
         except Exception as ex:  # a failed publish is a service-unavailable, not a crash
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()

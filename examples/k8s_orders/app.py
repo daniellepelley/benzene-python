@@ -8,10 +8,13 @@ loop - called directly, SQS's ~20s long-poll (worse, Kafka's unbounded idle poll
 ``await`` point at all) would starve uvicorn's HTTP handling for as long as either consumer is
 mid-poll. See ``docs/getting-started-kubernetes.md`` for the full story.
 
-Shutdown: uvicorn owns SIGINT/SIGTERM natively when ``server.serve()`` runs on the main thread (which
-it does here - nothing in this file starts a new thread). Once it returns, `_stop` is set, which the
-SQS/Kafka loops' ``should_continue`` checks on their next iteration - no separate signal handling of
-our own needed, and no fighting uvicorn's.
+Shutdown is coordinated: whichever leg finishes first winds the others down. uvicorn owns
+SIGINT/SIGTERM natively (``server.serve()`` runs on the main thread - nothing here starts another),
+and on a signal it returns and sets ``stop``, which the SQS/Kafka loops' ``should_continue`` check on
+their next iteration. Each leg is wrapped so that if it exits for *any* reason - a clean signal, or a
+consumer loop crashing - it sets ``stop`` **and** tells uvicorn to exit, so one leg going down never
+strands the others. A crash still propagates out of ``asyncio.gather`` for a loud, non-zero exit that
+Kubernetes restarts.
 
 Run with:
 
@@ -25,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Awaitable
 
 import uvicorn
 from benzene.aws import run_sqs_consumer_loop
@@ -61,17 +65,35 @@ async def main() -> None:
     server = uvicorn.Server(config)
     stop = asyncio.Event()
 
-    async def run_http() -> None:
-        await server.serve()  # returns once uvicorn decides to shut down (its own signal handling)
+    def shutdown() -> None:
+        # Whichever leg finishes first — a clean uvicorn signal, a consumer-loop crash, or a sibling
+        # being cancelled — winds the others down: uvicorn leaves its serve loop and the consumer
+        # loops stop on their next ``should_continue`` check. Idempotent.
         stop.set()
+        server.should_exit = True
+
+    async def supervised(leg: Awaitable[None]) -> None:
+        try:
+            await leg
+        finally:
+            shutdown()
 
     try:
         await asyncio.gather(
-            run_http(),
-            run_sqs_consumer_loop(
-                sqs_app, sqs_client, consume_queue_url, should_continue=lambda: not stop.is_set()
+            supervised(server.serve()),
+            supervised(
+                run_sqs_consumer_loop(
+                    sqs_app,
+                    sqs_client,
+                    consume_queue_url,
+                    should_continue=lambda: not stop.is_set(),
+                )
             ),
-            run_consumer_loop(kafka_app, kafka_consumer, should_continue=lambda: not stop.is_set()),
+            supervised(
+                run_consumer_loop(
+                    kafka_app, kafka_consumer, should_continue=lambda: not stop.is_set()
+                )
+            ),
         )
     finally:
         kafka_consumer.close()

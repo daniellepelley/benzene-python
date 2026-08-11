@@ -13,6 +13,7 @@ The ``confluent-kafka`` producer is an optional dependency imported lazily; inje
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -69,12 +70,17 @@ class KafkaMessageSender:
             if error is not None:
                 delivery_errors.append(error)
 
-        try:
+        def _publish() -> None:
             producer = self._client()
             producer.produce(
                 self._kafka_topic, value=data, headers=header_list, on_delivery=_on_delivery
             )
+            # ``flush`` blocks up to ``flush_timeout`` for the broker ack; run the whole publish on a
+            # worker thread so it never stalls the event loop (e.g. a co-hosted ASGI server).
             producer.flush(self._flush_timeout)
+
+        try:
+            await asyncio.to_thread(_publish)
         except Exception as ex:  # a produce/flush failure is service-unavailable, never a crash
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         if delivery_errors:
