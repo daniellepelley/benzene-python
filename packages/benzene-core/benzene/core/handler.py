@@ -30,9 +30,12 @@ def infer_request_type(handler: Handler) -> type | None:
     ``request_type`` always wins; this only fills the gap when you leave it off.
 
     Only a **concrete class** is inferred (a ``@dataclass`` or a plain type such as ``dict``), since
-    that is what :func:`~benzene.core.to_request` maps against. A missing annotation, a subscripted
-    generic (``dict[str, Any]``), a union, or an annotation that can't be resolved yields ``None`` — the
-    request then passes through unmapped, exactly as it does today when no ``request_type`` is given.
+    that is what :func:`~benzene.core.to_request` maps against. A missing annotation, ``typing.Any``, a
+    subscripted generic (``dict[str, Any]``), a union, or an annotation that can't be resolved yields
+    ``None`` — the request then passes through unmapped, exactly as it does today when no
+    ``request_type`` is given. ``Any`` is excluded deliberately: on Python 3.11+ it is a class (so it
+    passes ``isinstance(..., type)``), but ``to_request`` can't ``isinstance``-check against it — and
+    ``request: Any`` means "give me whatever arrived", i.e. no mapping.
     """
     try:
         parameters = list(inspect.signature(handler).parameters.values())
@@ -45,7 +48,9 @@ def infer_request_type(handler: Handler) -> type | None:
     except Exception:  # unresolved forward ref, exotic annotation — fall back to no inference
         return None
     annotation = hints.get(parameters[0].name)
-    return annotation if isinstance(annotation, type) else None
+    if annotation is Any or not isinstance(annotation, type):
+        return None
+    return annotation
 
 
 @dataclass(frozen=True)

@@ -60,6 +60,28 @@ def test_does_not_infer_without_an_annotation() -> None:
     assert infer_request_type(handle) is None
 
 
+def test_does_not_infer_typing_any() -> None:
+    # On Python 3.11+ ``typing.Any`` is a class, so it slips past ``isinstance(_, type)`` — but
+    # ``request: Any`` means "give me whatever arrived", and to_request can't isinstance-check Any.
+    async def handle(request: Any) -> Result:
+        return Result.ok()
+
+    assert infer_request_type(handle) is None
+
+
+def test_any_annotated_handler_still_receives_the_raw_request() -> None:
+    # The end-to-end guard: an Any-annotated handler registered without request_type gets the raw
+    # decoded body (a dict), not a bad-request from a failed mapping.
+    async def handle(request: Any) -> Result:
+        return Result.ok(request)
+
+    registry = Registry().register("t", handle)
+    pipeline = MiddlewarePipeline().use(message_router(registry))
+    ctx = Context("t", {"sku": "raw"})
+    run(pipeline.handle(ctx))
+    assert ctx.result is not None and ctx.result.payload == {"sku": "raw"}
+
+
 def test_infers_a_bare_dict_annotation() -> None:
     async def handle(request: dict) -> Result:
         return Result.ok()
