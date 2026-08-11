@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene-auth"
+version = "0.0.1"
+description = "Benzene authentication middleware — Basic auth, JWT/OAuth2 bearer tokens, and an API Gateway custom authorizer adapter."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Benzene" }]
+keywords = [
+    "benzene",
+    "auth",
+    "authentication",
+    "basic-auth",
+    "jwt",
+    "oauth2",
+    "bearer-token",
+    "api-gateway",
+    "hexagonal",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+dependencies = ["benzene-core>=0.0.1"]
+
+[project.optional-dependencies]
+# Only needed for JwtValidator's real JWT decode; the middleware and tests need no PyJWT.
+jwt = ["PyJWT>=2.0"]
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
+
+# PEP 420 namespace package — see benzene-results/pyproject.toml.
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]
