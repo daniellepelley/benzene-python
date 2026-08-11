@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene-otel"
+version = "0.0.1"
+description = "Benzene OpenTelemetry bridge — export the port's mesh traces to an OTel SDK, plus a response-as-event pattern."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Benzene" }]
+keywords = [
+    "benzene",
+    "opentelemetry",
+    "otel",
+    "tracing",
+    "observability",
+    "response-events",
+    "hexagonal",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+dependencies = ["benzene-core>=0.0.1", "benzene-mesh>=0.0.1"]
+
+[project.optional-dependencies]
+otel = ["opentelemetry-api>=1.20", "opentelemetry-sdk>=1.20"]
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
+
+# PEP 420 namespace package — see benzene-results/pyproject.toml.
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]
