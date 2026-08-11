@@ -39,11 +39,17 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-http` | `benzene.http` | inbound HTTP (ASGI) binding + status mapping | `benzene-core` | `Benzene.Http` |
 | `benzene-grpc` | `benzene.grpc` | Benzene↔gRPC status mapping + trailer rule + server/client transport (`[transport]`) | `benzene-core` (+ `grpcio`) | `Benzene.Grpc` |
 | `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
-| `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + egress) | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` |
-| `benzene-azure` | `benzene.azure` | Azure Functions host (HTTP + Service Bus + Event Hub + egress) | `benzene-core`, `benzene-http` | `Benzene.Azure.Function.*` |
+| `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + S3 + EventBridge + DynamoDB Streams + Kinesis + MSK/Kafka + egress) | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` + `Benzene.Clients.Aws.*` |
+| `benzene-azure` | `benzene.azure` | Azure Functions host (HTTP + Service Bus + Event Hub + Queue/Blob Storage + Cosmos Change Feed + Timer + Event Grid + egress) | `benzene-core`, `benzene-http` | `Benzene.Azure.Function.*` + `Benzene.Clients.Azure.*` |
 | `benzene-kafka` | `benzene.kafka` | Apache Kafka host — self-hosted consumer + Kafka-produce egress (`[kafka]`) | `benzene-core` (+ `confluent-kafka`) | `Benzene.Kafka.Core` |
+| `benzene-rabbitmq` | `benzene.rabbitmq` | RabbitMQ host — self-hosted consumer + AMQP-publish egress (`[rabbitmq]`) | `benzene-core` (+ `pika`) | `Benzene.RabbitMq` |
 | `benzene-resilience` | `benzene.resilience` | circuit breaker, bulkhead, rate limiting, idempotency, in-process saga | `benzene-core` | `Benzene.Resilience.Polly` + `Benzene.RateLimiting` + `Benzene.Idempotency` + `Benzene.Saga` |
+| `benzene-auth` | `benzene.auth` | Basic + JWT/OAuth2 bearer middleware + API Gateway custom authorizer (`[jwt]`) | `benzene-core` (+ `PyJWT`) | `Benzene.Auth.{Basic,OAuth2}` |
+| `benzene-cache` | `benzene.cache` | cache-aside abstraction + in-memory and Redis backends (`[redis]`) | `benzene-core` (+ `redis`) | `Benzene.Cache.Core` / `Benzene.Cache.Redis` |
+| `benzene-openapi` | `benzene.openapi` | OpenAPI 3.1 document generated from the registry | `benzene-core`, `benzene-http` | `Benzene.Schema.OpenApi` |
+| `benzene-otel` | `benzene.otel` | export the port's spans to a real OpenTelemetry SDK + response-as-event (`[otel]`) | `benzene-core`, `benzene-mesh` (+ `opentelemetry-sdk`) | `Benzene.ResponseEvents` |
 | `benzene-mesh` | `benzene.mesh` | ServiceDescriptor + `benzene:mesh` endpoint + tracing + collector feeds + a `MeshCollector` | `benzene-core` | `Benzene.Mesh.Wire` + `Benzene.Mesh.Collector` |
+| `benzene-mesh-fleet` | `benzene.mesh_fleet` | service-discovery adapters (AWS/Azure/K8s) + Jaeger/Tempo/X-Ray trace mappers | `benzene-core`, `benzene-mesh` | `Benzene.Mesh.Discovery.*` + `Benzene.Mesh.Fleet.*` |
 | `benzene-pydantic` | `benzene.pydantic` | validate handler requests with pydantic models | `benzene-core`, `pydantic` | `Benzene.FluentValidation` |
 | `benzene-testing` | `benzene.testing` | in-memory test host + fakes (dev/test) | `benzene-core` | `Benzene.Testing` |
 
@@ -320,19 +326,22 @@ widest of the four. The items above took this port from nothing to fully conform
 take it from "conformant" to "as capable as .NET" — each is scoped directly against a concrete
 `benzene-dotnet` package, so "done" has an unambiguous target rather than a vague aspiration.
 
-19. **(planned)** AWS transport parity — inbound bindings + outbound clients for **S3** (object-created
-    event notifications), **EventBridge**, **DynamoDB Streams**, and **Kinesis Data Streams**, plus a
-    Kafka/MSK-via-Lambda binding alongside the self-hosted consumer item 18 already ships. Mirrors
-    `Benzene.Aws.Lambda.{S3,EventBridge,DynamoDb,Kinesis,Kafka}` and the matching `Benzene.Clients.Aws.*`
-    outbound clients. Today `benzene-aws` covers API Gateway + SQS + SNS only.
-20. **(planned)** Azure transport parity — inbound bindings + outbound clients for **Queue Storage**,
-    **Blob Storage**, **Cosmos DB Change Feed**, a **Timer** trigger, and **Event Grid** (native schema
-    + CloudEvents 1.0). Mirrors `Benzene.Azure.Function.{QueueStorage,BlobStorage,CosmosDb,Timer,
-    EventGrid}` and `Benzene.Clients.Azure.*`. Today `benzene-azure` covers HTTP + Service Bus +
-    Event Hub only.
-21. **(planned)** RabbitMQ — a self-hosted consumer plus an outbound `RabbitMqMessageSender`, mirroring
-    `Benzene.RabbitMq` and shaped like this port's existing Kafka binding (item 18): duck-typed against
-    an optional `[rabbitmq]` extra, one record per invocation/scope, at-least-once ack on success.
+19. **(done)** AWS transport parity — `benzene-aws` now binds **S3** (object-created notifications),
+    **EventBridge**, **DynamoDB Streams**, **Kinesis Data Streams**, and **MSK/Kafka-via-Lambda**
+    inbound, plus **EventBridge** and **Kinesis** outbound clients, alongside the existing API Gateway +
+    SQS + SNS. Channel-less sources take their topic from an injectable convention on the host;
+    DynamoDB/Kinesis report failures via partial-batch `batchItemFailures`. Mirrors
+    `Benzene.Aws.Lambda.{S3,EventBridge,DynamoDb,Kinesis,Kafka}` and `Benzene.Clients.Aws.*`.
+20. **(done)** Azure transport parity — `benzene-azure` now binds **Queue Storage**, **Blob Storage**,
+    **Cosmos DB Change Feed**, a **Timer** trigger, and **Event Grid** (native schema **and**
+    CloudEvents 1.0, distinguished by `specversion`) inbound, plus **Queue Storage** and **Event Grid**
+    outbound clients, alongside the existing HTTP + Service Bus + Event Hub. Mirrors
+    `Benzene.Azure.Function.{QueueStorage,BlobStorage,CosmosDb,Timer,EventGrid}` and
+    `Benzene.Clients.Azure.*`.
+21. **(done)** RabbitMQ — [`benzene-rabbitmq`](packages/benzene-rabbitmq): a self-hosted consumer plus
+    an outbound `RabbitMqMessageSender`, shaped like the Kafka binding — duck-typed against an optional
+    `[rabbitmq]` extra (`pika`), one delivery per invocation/scope, at-least-once `basic_ack` on success
+    and `basic_nack` on failure. Mirrors `Benzene.RabbitMq`.
 22. **(done)** Resilience beyond retry — a circuit breaker, a bulkhead, rate limiting wired to the
     `too-many-requests` status, idempotency (dedupe redelivered messages), and an in-process saga
     (compensation/rollback, not durable), shipped as
@@ -340,27 +349,31 @@ take it from "conformant" to "as capable as .NET" — each is scoped directly ag
     seam and ships in two shapes off it — an inbound `*_interception` middleware and an outbound
     `MessageSender` decorator — so resilience composes with the core's existing `with_retry`. Mirrors
     `Benzene.Resilience.Polly`, `Benzene.RateLimiting`, `Benzene.Idempotency`, and `Benzene.Saga`.
-23. **(planned)** Auth — Basic auth and JWT/OAuth2 bearer-token middleware, plus an API Gateway custom
-    authorizer adapter. Mirrors `Benzene.Auth.{Basic,OAuth2}` and
-    `Benzene.Aws.Lambda.ApiGateway.ApiGatewayCustomAuthorizer`. Currently absent outright.
-24. **(planned)** Caching — a cache-aside abstraction plus a Redis backend. Mirrors `Benzene.Cache.Core`
-    / `Benzene.Cache.Redis`. Currently absent outright.
-25. **(planned)** OpenTelemetry — wire this port's existing spans/traces through a real OTel SDK
-    exporter (today's tracing is Benzene-internal only, with no OTel integration), plus a
-    response-as-event pattern mirroring `Benzene.ResponseEvents`.
-26. **(planned)** OpenAPI generation from the registry, alongside the JSON Schema this port already
-    derives. Mirrors `Benzene.Schema.OpenApi`.
-27. **(planned, lower priority)** Mesh discovery adapters (AWS/Azure/Kubernetes service discovery) and
-    fleet trace-mapper packages (Jaeger/Tempo/X-Ray), mirroring `Benzene.Mesh.Discovery.*` and
-    `Benzene.Mesh.Fleet.*`. Lower priority than 19–26: this port's mesh module (items 5, 8, 15–17) is
-    already ahead of Go's on this specific front, and .NET/TypeScript are themselves the only ports with
-    full discovery + fleet-mapper coverage today.
+23. **(done)** Auth — [`benzene-auth`](packages/benzene-auth): Basic auth and JWT/OAuth2 bearer-token
+    interception middleware (JWT via an optional `[jwt]` extra, `PyJWT`), plus an API Gateway custom
+    authorizer adapter that emits the IAM policy document. Verify/validate callables may be sync or
+    async, and attach a `Principal` to the context. Mirrors `Benzene.Auth.{Basic,OAuth2}` and
+    `Benzene.Aws.Lambda.ApiGateway.ApiGatewayCustomAuthorizer`.
+24. **(done)** Caching — [`benzene-cache`](packages/benzene-cache): a cache-aside abstraction (`Cache`
+    protocol + `get_or_load`) with an in-memory backend (TTL, injectable clock) and a Redis backend
+    (optional `[redis]` extra). Mirrors `Benzene.Cache.Core` / `Benzene.Cache.Redis`.
+25. **(done)** OpenTelemetry — [`benzene-otel`](packages/benzene-otel): `OtelTraceExporter` implements
+    the port's existing `benzene.mesh` `TraceExporter` seam, mapping each `TraceEvent` onto a real OTel
+    span (optional `[otel]` extra), so tracing exports through the OTel SDK rather than staying
+    Benzene-internal; plus a response-as-event middleware mirroring `Benzene.ResponseEvents`.
+26. **(done)** OpenAPI generation — [`benzene-openapi`](packages/benzene-openapi): an OpenAPI 3.1
+    document projected from the registry, reusing the JSON Schema this port already derives
+    (`components.schemas` `$ref`-d from one POST operation per topic). Mirrors `Benzene.Schema.OpenApi`.
+27. **(done)** Mesh discovery + fleet — [`benzene-mesh-fleet`](packages/benzene-mesh-fleet): service
+    discovery adapters (AWS Cloud Map / Azure / Kubernetes, each behind an optional extra) and fleet
+    trace-mappers (Jaeger / Tempo-OTLP / X-Ray) that project the `benzene.mesh` `TraceEvent` model into
+    each backend's shape. Mirrors `Benzene.Mesh.Discovery.*` and `Benzene.Mesh.Fleet.*`.
 
-Sequencing: 19–21 (transports) first, since they're the largest and most visible gap and the pattern
-each follows is already proven by this port's own Kafka binding; 22–24 (resilience/auth/caching) next,
-since every sibling port has at least most of these and their absence is the sharpest cross-language
-outlier — resilience (22) has now landed as `benzene-resilience`, leaving auth and caching as the next
-up; 25–27 last.
+Every roadmap item (1–27) is now implemented. Sequencing followed the plan: transports (19–21) first,
+since they were the largest, most visible gap and the pattern was already proven by the Kafka binding;
+resilience/auth/caching (22–24) next, closing the sharpest cross-language outlier; then OpenTelemetry,
+OpenAPI, and mesh discovery/fleet (25–27). Each landed as its own independently-installable
+distribution, so a service still pulls in only the layers it uses.
 
 ## Documentation
 

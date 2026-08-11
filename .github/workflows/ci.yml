@@ -56,7 +56,13 @@ jobs:
             -e packages/benzene-aws \
             -e packages/benzene-azure \
             -e packages/benzene-kafka \
-            -e packages/benzene-resilience
+            -e packages/benzene-resilience \
+            -e packages/benzene-rabbitmq \
+            -e packages/benzene-auth \
+            -e packages/benzene-cache \
+            -e packages/benzene-openapi \
+            -e packages/benzene-otel \
+            -e packages/benzene-mesh-fleet
           pip install pytest
       - name: Conformance (dependency-free runner)
         run: python -m tests.conformance_runner
@@ -88,7 +94,9 @@ jobs:
         run: |
           pip install --find-links dist \
             benzene-testing benzene-http 'benzene-grpc[transport]' benzene-mesh benzene-pydantic \
-            benzene-gcp benzene-aws benzene-azure benzene-kafka benzene-resilience pytest
+            benzene-gcp benzene-aws benzene-azure benzene-kafka benzene-resilience \
+            benzene-rabbitmq benzene-auth benzene-cache benzene-openapi benzene-otel \
+            benzene-mesh-fleet pytest
       - name: Conformance + suite against the INSTALLED wheels
         # Override pythonpath to examples only, so `benzene.*` resolves from the installed wheels
         # (site-packages) rather than the packages/ source tree.
