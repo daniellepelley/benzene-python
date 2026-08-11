@@ -17,6 +17,7 @@ optional dependency. Mirrors .NET's ``Benzene.RabbitMq``.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -104,9 +105,16 @@ async def run_consumer_loop(
     silently dropped); a caller wanting manual acknowledgement passes ``ack=False`` and acts from
     ``on_result``. ``should_continue`` bounds the loop (a real worker loops forever; a test stops after
     N pulls).
+
+    ``basic_get``/``basic_ack``/``basic_nack`` are plain synchronous ``pika`` calls (each a blocking
+    network round-trip), run via :func:`asyncio.to_thread` rather than called directly on the event
+    loop. Called directly, an idle queue means ``basic_get`` returning ``(None, None, None)`` in a tight
+    loop with **no** ``await`` point at all — starving every other coroutine sharing the loop (e.g. an
+    HTTP server hosted alongside this consumer); the ``to_thread`` hop is that missing await point and
+    keeps the network calls off the loop (matching the Kafka/SQS consumer loops).
     """
     while should_continue():
-        method, properties, body = channel.basic_get(queue)
+        method, properties, body = await asyncio.to_thread(channel.basic_get, queue)
         if method is None:
             continue
         result = await app.handle_message(method, properties, body)
@@ -116,6 +124,8 @@ async def run_consumer_loop(
             continue
         # At-least-once: ack only a successful outcome; a failed delivery is nacked for redelivery.
         if result.is_successful:
-            channel.basic_ack(delivery_tag=method.delivery_tag)
+            await asyncio.to_thread(channel.basic_ack, delivery_tag=method.delivery_tag)
         else:
-            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=requeue)
+            await asyncio.to_thread(
+                channel.basic_nack, delivery_tag=method.delivery_tag, requeue=requeue
+            )
