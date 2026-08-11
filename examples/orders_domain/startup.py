@@ -22,7 +22,7 @@ from benzene.core import (
 from benzene.http import HttpRouter
 
 from .handlers import OrderService, make_get_order, make_on_order_created, make_place_order
-from .model import ORDER_CREATED_TOPIC, OrderCreated, OrderEventLog, PlaceOrder
+from .model import ORDER_CREATED_TOPIC, OrderEventLog
 
 PLACE_ORDER_TOPIC = "orders:place"
 GET_ORDER_TOPIC = "orders:get"
@@ -40,18 +40,13 @@ class OrdersStartUp(BenzeneStartUp):
         sender = services.get_service(MessageSender)  # a host/test must register this
         events = services.get_service(OrderEventLog)
 
-        router = HttpRouter()
-        router.register(
-            "POST",
-            "/orders",
-            PLACE_ORDER_TOPIC,
-            make_place_order(service, sender),
-            request_type=PlaceOrder,
+        # request_type is inferred from each handler's first-parameter annotation at registration.
+        router = (
+            HttpRouter()
+            .register("POST", "/orders", PLACE_ORDER_TOPIC, make_place_order(service, sender))
+            .register("GET", "/orders/{id}", GET_ORDER_TOPIC, make_get_order(service))
         )
-        router.register("GET", "/orders/{id}", GET_ORDER_TOPIC, make_get_order(service))
-
-        registry = Registry.from_definitions(router)  # the HTTP topics...
-        registry.register(  # ...plus the orders:created subscriber
-            ORDER_CREATED_TOPIC, make_on_order_created(events), request_type=OrderCreated
+        registry = Registry.from_definitions(router).register(  # HTTP topics + the subscriber
+            ORDER_CREATED_TOPIC, make_on_order_created(events)
         )
         return AppDefinition(registry=registry, router=router)

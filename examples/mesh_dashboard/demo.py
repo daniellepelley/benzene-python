@@ -169,9 +169,7 @@ def build_demo_mesh(collector: MeshCollector | None = None) -> DashboardMesh:
     async def notify(request: SendNotification) -> Result:
         return Result.ok({"sent": request.sku})
 
-    notif_registry = Registry().register(
-        SEND_NOTIFICATION, notify, request_type=SendNotification, response_type=NotificationSent
-    )
+    notif_registry = Registry().register(SEND_NOTIFICATION, notify, response_type=NotificationSent)
     notifications, notif_traces = _service("notifications", notif_registry)
 
     # inventory — reserves stock, then notifies (propagating the trace to notifications).
@@ -181,9 +179,7 @@ def build_demo_mesh(collector: MeshCollector | None = None) -> DashboardMesh:
         await notify_sender.send_message(SEND_NOTIFICATION, {"sku": request.sku})
         return Result.ok({"reserved": request.quantity})
 
-    inv_registry = Registry().register(
-        RESERVE_STOCK, reserve, request_type=ReserveStock, response_type=StockReserved
-    )
+    inv_registry = Registry().register(RESERVE_STOCK, reserve, response_type=StockReserved)
     inventory, inv_traces = _service("inventory", inv_registry)
 
     # orders — the entry point; reserves stock (propagating the trace to inventory).
@@ -195,9 +191,7 @@ def build_demo_mesh(collector: MeshCollector | None = None) -> DashboardMesh:
         )
         return Result.created({"sku": request.sku})
 
-    order_registry = Registry().register(
-        PLACE_ORDER, place, version="2", request_type=PlaceOrder, response_type=OrderPlaced
-    )
+    order_registry = Registry().register(PLACE_ORDER, place, version="2", response_type=OrderPlaced)
     orders, order_traces = _service("orders", order_registry)
 
     registries = {

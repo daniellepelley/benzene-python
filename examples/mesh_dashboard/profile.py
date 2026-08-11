@@ -39,7 +39,7 @@ async def _place(_request: PlaceOrder) -> Result:
 
 def build_profiled_definition() -> AppDefinition:
     """A composition root that provisions every profile surface a single service can wire itself."""
-    registry = Registry().register("orders:place", _place, request_type=PlaceOrder)
+    registry = Registry().register("orders:place", _place)  # request_type inferred from _place
     return AppDefinition(
         registry=registry,
         standard_paths=StandardPaths(

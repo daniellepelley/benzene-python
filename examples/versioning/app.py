@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from benzene.core import BenzeneMessageApplication, Registry, highest_version
 
-from .contracts import ORDER_CREATE_TOPIC, V1, V2, CreateOrderV1, CreateOrderV2
+from .contracts import ORDER_CREATE_TOPIC, V1, V2
 from .handlers import ProcessedLog, make_create_order_v1, make_create_order_v2
 
 
@@ -25,12 +25,11 @@ def build_versioning_app(log: ProcessedLog | None = None) -> BenzeneMessageAppli
     """
     log = log if log is not None else ProcessedLog()
 
-    registry = Registry()
-    registry.register(
-        ORDER_CREATE_TOPIC, make_create_order_v1(log), version=V1, request_type=CreateOrderV1
-    )
-    registry.register(
-        ORDER_CREATE_TOPIC, make_create_order_v2(log), version=V2, request_type=CreateOrderV2
+    # Same topic, two versions; request_type is inferred from each handler's annotation.
+    registry = (
+        Registry()
+        .register(ORDER_CREATE_TOPIC, make_create_order_v1(log), version=V1)
+        .register(ORDER_CREATE_TOPIC, make_create_order_v2(log), version=V2)
     )
 
     # highest_version: exact (topic, version) match wins; a versionless message falls back to v2.
