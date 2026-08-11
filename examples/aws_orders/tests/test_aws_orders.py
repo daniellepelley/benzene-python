@@ -1,8 +1,8 @@
 """Dogfooded, in-memory tests for the AWS orders example.
 
 Drives the real Lambda bindings via ``benzene.aws.testing`` and fakes only the outbound edge.
-Covers all three event sources (API Gateway, SQS, SNS), ingress → handler → egress, and the SQS
-partial-batch-failure protocol.
+Covers every event source (API Gateway, SQS, SNS, EventBridge), ingress → handler → egress, and
+the SQS partial-batch-failure protocol.
 """
 
 from __future__ import annotations
@@ -66,6 +66,14 @@ def test_sns_order_created_is_handled() -> None:
     host, _, _, seen = make_host()
     host.send_sns(ORDER_CREATED_TOPIC, {"id": "ord-sns", "sku": "ABC"})
     assert seen == ["ord-sns"]
+
+
+def test_eventbridge_order_created_is_handled() -> None:
+    host, _, _, seen = make_host()
+    # EventBridge carries no metadata channel: the detail-type *is* the Benzene topic, so a rule
+    # whose detail-type is ``orders:created`` lands on the same subscriber as SQS and SNS.
+    host.send_eventbridge(ORDER_CREATED_TOPIC, {"id": "ord-eb", "sku": "ABC"})
+    assert seen == ["ord-eb"]
 
 
 def test_sqs_partial_batch_failure_reports_only_failed_record() -> None:

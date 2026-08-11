@@ -1,15 +1,18 @@
 """Dogfooded, in-memory tests for the Azure orders example.
 
 Drives the real Azure Functions bindings via ``benzene.azure.testing`` and fakes only the outbound
-edge. Covers HTTP, Service Bus, and Event Hub ingress, ingress → handler → egress, and the
-failure/retry rule.
+edge. Covers HTTP, Service Bus, Event Hub, and Event Grid (native + CloudEvents 1.0) ingress,
+ingress → handler → egress, and the failure/retry rule.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from typing import Any
 
 import pytest
+from benzene.azure.testing import event_grid_cloud_event, event_grid_event
 from benzene.core import MessageSender
 from benzene.testing import FakeMessageSender, create_test_host
 from orders_domain import ORDER_CREATED_TOPIC, OrderEventLog, OrderService, OrdersStartUp
@@ -72,6 +75,25 @@ def test_event_hub_batch_is_handled_per_event() -> None:
         ]
     )
     assert seen == ["e1", "e2"]
+
+
+@pytest.mark.parametrize(
+    "make_event",
+    [event_grid_event, event_grid_cloud_event],
+    ids=["native", "cloudevents"],
+)
+def test_event_grid_order_created_is_handled(
+    make_event: Callable[[str, Any], dict[str, Any]],
+) -> None:
+    """Event Grid delivers to the same subscriber under *both* schemas it supports.
+
+    The event type (native ``eventType`` / CloudEvents ``type``) is the Benzene topic, so an event
+    typed ``orders:created`` lands on the shared subscriber whether it arrives in the native Event
+    Grid schema or the CloudEvents 1.0 schema — the marquee feature of the binding.
+    """
+    host, _, _, seen = make_host()
+    host.send_event_grid(make_event(ORDER_CREATED_TOPIC, {"id": "ord-eg", "sku": "ABC"}))
+    assert seen == ["ord-eg"]
 
 
 def test_service_bus_unroutable_topic_raises_for_retry() -> None:
