@@ -15,10 +15,17 @@ Python equivalent.
 | [`benzene-http`](https://pypi.org/project/benzene-http/) | `benzene.http` | the inbound HTTP (ASGI) binding and the Benzene↔HTTP status mapping | `benzene-core` |
 | [`benzene-grpc`](https://pypi.org/project/benzene-grpc/) | `benzene.grpc` | the Benzene↔gRPC status mapping + `benzene-status` trailer rule (transport pending) | `benzene-core` |
 | [`benzene-gcp`](https://pypi.org/project/benzene-gcp/) | `benzene.gcp` | the Google Cloud Functions host (HTTP + Pub/Sub bindings, Pub/Sub outbound client) | `benzene-core`, `benzene-http` |
-| [`benzene-aws`](https://pypi.org/project/benzene-aws/) | `benzene.aws` | the AWS Lambda host (API Gateway + SQS + SNS bindings, SNS/SQS outbound clients) | `benzene-core`, `benzene-http` |
-| [`benzene-azure`](https://pypi.org/project/benzene-azure/) | `benzene.azure` | the Azure Functions host (HTTP + Service Bus + Event Hub bindings, Service Bus outbound client) | `benzene-core`, `benzene-http` |
+| [`benzene-aws`](https://pypi.org/project/benzene-aws/) | `benzene.aws` | the AWS Lambda host (API Gateway + SQS + SNS + S3 + EventBridge + DynamoDB Streams + Kinesis + Kafka/MSK inbound, SNS/SQS/EventBridge/Kinesis outbound clients), plus a self-hosted SQS consumer | `benzene-core`, `benzene-http` |
+| [`benzene-azure`](https://pypi.org/project/benzene-azure/) | `benzene.azure` | the Azure Functions host (HTTP + Service Bus + Event Hub + Queue Storage + Blob Storage + Cosmos DB change feed + Timer + Event Grid inbound, Service Bus/Queue Storage/Event Grid outbound clients) | `benzene-core`, `benzene-http` |
 | [`benzene-kafka`](https://pypi.org/project/benzene-kafka/) | `benzene.kafka` | the Apache Kafka host (self-hosted consumer + Kafka-produce outbound client; SDK optional) | `benzene-core` |
+| [`benzene-rabbitmq`](https://pypi.org/project/benzene-rabbitmq/) | `benzene.rabbitmq` | the RabbitMQ transport (self-hosted consumer + RabbitMQ-publish outbound client; SDK optional) | `benzene-core` |
+| [`benzene-resilience`](https://pypi.org/project/benzene-resilience/) | `benzene.resilience` | resilience policies as middleware — circuit breaker, bulkhead, rate limiting, idempotency, and in-process sagas | `benzene-core` |
+| [`benzene-auth`](https://pypi.org/project/benzene-auth/) | `benzene.auth` | authentication middleware — Basic auth, JWT/OAuth2 bearer tokens, and an API Gateway custom-authorizer adapter | `benzene-core` |
+| [`benzene-cache`](https://pypi.org/project/benzene-cache/) | `benzene.cache` | cache-aside over a narrow async `Cache` port, with in-memory and Redis backends | `benzene-core` |
+| [`benzene-openapi`](https://pypi.org/project/benzene-openapi/) | `benzene.openapi` | derive an OpenAPI 3.1 document from the handler registry | `benzene-core`, `benzene-http` |
+| [`benzene-otel`](https://pypi.org/project/benzene-otel/) | `benzene.otel` | export the port's existing mesh traces through the OpenTelemetry SDK, plus a response-as-event pattern (SDK optional) | `benzene-core`, `benzene-mesh` |
 | [`benzene-mesh`](https://pypi.org/project/benzene-mesh/) | `benzene.mesh` | mesh self-description (`ServiceDescriptor`), the reserved `benzene:mesh` endpoint, tracing, and collector feeds | `benzene-core` |
+| [`benzene-mesh-fleet`](https://pypi.org/project/benzene-mesh-fleet/) | `benzene.mesh_fleet` | cloud service-discovery adapters (AWS/Azure/Kubernetes) and trace-mappers (Jaeger/Tempo/X-Ray) for a fleet | `benzene-core`, `benzene-mesh` |
 | [`benzene-pydantic`](https://pypi.org/project/benzene-pydantic/) | `benzene.pydantic` | validate handler requests with pydantic models (an optional adapter) | `benzene-core`, `pydantic` |
 | [`benzene-testing`](https://pypi.org/project/benzene-testing/) | `benzene.testing` | in-memory test host + test doubles (a dev/test dependency) | `benzene-core` |
 

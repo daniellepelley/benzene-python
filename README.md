@@ -12,13 +12,21 @@ This port is **spec-first**: it implements the language-neutral Benzene specific
 a Python Benzene service and a .NET/Go/TypeScript one speak the same wire contract and show up in the
 same mesh.
 
-> **Status: feature-complete against the spec.** Shipped as ten layered packages (`benzene-results`,
-> `benzene-core`, `benzene-http`, `benzene-grpc`, `benzene-mesh`, `benzene-pydantic`, the `benzene-gcp`
-> / `benzene-aws` / `benzene-azure` hosts, and `benzene-testing`) that pass **every language-neutral
-> conformance fixture**. Core, the inbound + outbound HTTP and gRPC bindings, the three cloud hosts, the
-> mesh module (descriptor, tracing, collector), payload versioning (headers, route segment, selectors,
-> casting-handler, transparent casting), health checks, and the Cloud Service Profile's well-known HTTP
-> surfaces (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`) are all implemented. Each package
+> **Status: feature-complete against the spec, with the .NET parity roadmap now closed.** Shipped as
+> eighteen layered packages — the foundations (`benzene-results`, `benzene-core`, `benzene-http`,
+> `benzene-grpc`), the transport hosts (`benzene-gcp` / `benzene-aws` / `benzene-azure`, plus
+> `benzene-kafka` and `benzene-rabbitmq`), the cross-cutting middleware (`benzene-resilience`,
+> `benzene-auth`, `benzene-cache`, `benzene-otel`, `benzene-openapi`), the mesh (`benzene-mesh` /
+> `benzene-mesh-fleet`), and the adapters (`benzene-pydantic`, `benzene-testing`) — that pass **every
+> language-neutral conformance fixture**. Core, the inbound + outbound HTTP and gRPC bindings, the three
+> cloud hosts (each multi-transport with egress, AWS now spanning eight Lambda event sources plus a
+> self-hosted SQS consumer), the Kafka and RabbitMQ transports, the mesh module (descriptor, tracing,
+> collector) and its fleet discovery/trace-mappers, resilience policies (circuit breaker, bulkhead, rate
+> limiting, idempotency, sagas), authentication (Basic / JWT / OAuth2 bearer), cache-aside caching,
+> OpenTelemetry trace export, OpenAPI 3.1 generation, payload versioning (headers, route segment,
+> selectors, casting-handler, transparent casting), health checks, and the Cloud Service Profile's
+> well-known HTTP surfaces (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`) are all implemented.
+> Each package
 > builds a `twine`-clean sdist + wheel and a trusted-publishing [`release`](.github/workflows/release.yml)
 > workflow is in place; the first PyPI publish awaits the one-time trusted-publisher setup and a version
 > tag ([`docs/publishing.md`](docs/publishing.md)). See the [roadmap](#roadmap).

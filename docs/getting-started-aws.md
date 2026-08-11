@@ -297,10 +297,16 @@ The topic attribute for SQS/SNS is written automatically by any Benzene outbound
 For SQS and SNS the message *body* is the serialized payload and message *attributes* become Benzene
 headers (`benzene.core.read_message_metadata`).
 
-> **Compared with the .NET port:** the Python `benzene.aws` package currently binds **API Gateway,
-> SQS, and SNS only**. The .NET host additionally offers EventBridge, DynamoDB Streams, Kafka/MSK,
-> S3, and Kinesis event sources, plus a `UsePresetTopic` option for raw (non-Benzene) SQS producers.
-> Those are not yet available in Python — don't reach for them here.
+> **Compared with the .NET port:** the Python `benzene.aws` package now hosts the full set of Lambda
+> event sources — **API Gateway, SQS, SNS, S3 (object-created), EventBridge, DynamoDB Streams, Kinesis
+> Data Streams, and Kafka/MSK** — alongside **EventBridge and Kinesis outbound clients** (on top of the
+> SNS/SQS senders) and a **self-hosted SQS consumer** (`SqsConsumerApp` / `run_sqs_consumer_loop`) for a
+> long-running worker or a Kubernetes Deployment that polls a queue itself rather than being invoked by a
+> Lambda event-source mapping. The channel-less sources (S3, EventBridge, DynamoDB, Kinesis) take their
+> topic from an injectable convention on the host; SQS, SNS, and Kafka read it from the `topic` message
+> attribute. The one .NET affordance still missing is a `UsePresetTopic` option for the attribute-carrying
+> transports — accepting messages from a **raw, non-Benzene SQS producer** that never writes a `topic`
+> attribute; here SQS/SNS still require that attribute.
 
 ## 8. IAM / permissions
 
@@ -328,10 +334,14 @@ execution-role IAM to receive requests.
   is available to the host but is not injected into handlers today — keep handlers transport-neutral
   and read request metadata from headers instead.
 
-> **Compared with the .NET port:** Python's `benzene.aws` does not yet ship the .NET host's
-> invocation feature (`UseBenzeneInvocation`), automatic `Activity`/OpenTelemetry tracing,
-> W3C-trace-context middleware, or log-enrichment middleware. Correlation is available at the header
-> level as described above; deeper instrumentation is on the .NET port only for now.
+> **Compared with the .NET port:** Python's `benzene.aws` host still does not ship the .NET host's
+> invocation feature (`UseBenzeneInvocation`), a W3C-trace-context middleware, or log-enrichment
+> middleware; correlation is available at the header level as described above. Tracing, however, is no
+> longer .NET-only: the port already traces every invocation through the mesh (`benzene.mesh`'s
+> `trace_middleware`), and [`benzene-otel`](reference/otel.md) exports those existing mesh spans through
+> the OpenTelemetry SDK (topic → span name, semantic status → OTel span status). That is span *export*,
+> not automatic `Activity`-style instrumentation of the AWS SDK — you opt in by wiring
+> `OtelTraceExporter` into the mesh trace middleware.
 
 ## 10. Troubleshooting
 

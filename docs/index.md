@@ -32,10 +32,17 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 - **[`benzene.http`](reference/http.md)** — the inbound HTTP (ASGI) transport binding.
 - **[`benzene.grpc`](reference/grpc.md)** — the Benzene↔gRPC status mapping and trailer rule.
 - **[`benzene.gcp`](reference/gcp.md)** — the Google Cloud Functions host (HTTP + Pub/Sub).
-- **[`benzene.aws`](reference/aws.md)** — the AWS Lambda host (API Gateway + SQS + SNS).
-- **[`benzene.azure`](reference/azure.md)** — the Azure Functions host (HTTP + Service Bus + Event Hub).
+- **[`benzene.aws`](reference/aws.md)** — the AWS Lambda host (API Gateway + SQS + SNS + S3 + EventBridge + DynamoDB Streams + Kinesis + Kafka/MSK inbound, SNS/SQS/EventBridge/Kinesis egress) plus a self-hosted SQS consumer.
+- **[`benzene.azure`](reference/azure.md)** — the Azure Functions host (HTTP + Service Bus + Event Hub + Queue Storage + Blob Storage + Cosmos DB change feed + Timer + Event Grid inbound, Service Bus/Queue Storage/Event Grid egress).
 - **[`benzene.kafka`](reference/kafka.md)** — the Apache Kafka host (self-hosted consumer + produce client).
+- **[`benzene.rabbitmq`](reference/rabbitmq.md)** — the RabbitMQ transport (self-hosted consumer + publish client).
+- **[`benzene.resilience`](reference/resilience.md)** — circuit breaker, bulkhead, rate limiting, idempotency, and in-process sagas.
+- **[`benzene.auth`](reference/auth.md)** — authentication middleware: Basic auth, JWT/OAuth2 bearer, and an API Gateway custom-authorizer adapter.
+- **[`benzene.cache`](reference/cache.md)** — cache-aside over a narrow async `Cache` port, with in-memory and Redis backends.
+- **[`benzene.openapi`](reference/openapi.md)** — derive an OpenAPI 3.1 document from the handler registry.
+- **[`benzene.otel`](reference/otel.md)** — export the port's mesh traces through the OpenTelemetry SDK, plus a response-as-event pattern.
 - **[`benzene.mesh`](reference/mesh.md)** — self-description, tracing, and collector feeds for the mesh.
+- **[`benzene.mesh_fleet`](reference/mesh-fleet.md)** — cloud service-discovery adapters and trace-mappers (Jaeger/Tempo/X-Ray) for a fleet.
 - **[`benzene.pydantic`](reference/pydantic.md)** — validate handler requests with pydantic models.
 - **[`benzene.testing`](reference/testing.md)** — the in-memory test host and test doubles.
 
