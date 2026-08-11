@@ -5,13 +5,27 @@ build-backend = "hatchling.build"
 [project]
 name = "benzene-aws"
 version = "0.0.1"
-description = "Benzene AWS Lambda host — API Gateway + SQS + SNS bindings and SNS/SQS outbound clients."
+description = "Benzene AWS Lambda host — API Gateway, SQS, SNS, S3, EventBridge, DynamoDB Streams, Kinesis and Kafka/MSK bindings plus matching outbound clients."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Benzene" }]
-keywords = ["benzene", "aws", "lambda", "sqs", "sns", "api-gateway", "hexagonal"]
+keywords = [
+    "benzene",
+    "aws",
+    "lambda",
+    "sqs",
+    "sns",
+    "s3",
+    "eventbridge",
+    "dynamodb",
+    "kinesis",
+    "kafka",
+    "msk",
+    "api-gateway",
+    "hexagonal",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

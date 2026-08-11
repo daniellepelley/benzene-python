@@ -8,9 +8,18 @@
   reported via the SQS partial-batch-response (``batchItemFailures``) so only the failed records are
   redelivered.
 - **SNS**: a batch of records; one invocation per record; a failure raises so Lambda retries.
+- **S3** (object-created): one invocation per record; no partial-batch channel, so a failure raises.
+- **EventBridge**: a *single* event → one invocation; a failure raises so the rule retries.
+- **DynamoDB Streams** / **Kinesis Data Streams**: a batch of records; one invocation per record;
+  both support partial batches, so failures are reported via ``batchItemFailures`` keyed by the
+  record's sequence number (only the failed records are reprocessed).
+- **Kafka / MSK**: records grouped by topic-partition; one invocation per record; the MSK event
+  source has no partial-batch channel, so a failure raises for redelivery.
 
-Topic for the messaging transports comes from the ``topic`` message attribute. The free function
-:func:`to_lambda_handler` produces the ``handler(event, context)`` callable Lambda invokes.
+Topic for the attribute-carrying transports (SQS, SNS, Kafka) comes from the reserved ``topic``
+metadata key; the channel-less sources (S3, EventBridge, DynamoDB, Kinesis) take their topic from an
+injectable convention configured on the host. The free function :func:`to_lambda_handler` produces
+the ``handler(event, context)`` callable Lambda invokes.
 """
 
 from __future__ import annotations
@@ -30,8 +39,17 @@ from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
 from benzene.results import is_successful
 
 from .events import (
+    DEFAULT_EVENTBRIDGE_TOPIC,
+    DEFAULT_KINESIS_TOPIC,
+    DEFAULT_S3_TOPIC,
     api_gateway_request,
+    dynamodb_record_envelope,
     event_source,
+    eventbridge_envelope,
+    kafka_record_envelope,
+    kafka_records,
+    kinesis_record_envelope,
+    s3_record_envelope,
     sns_record_envelope,
     sqs_record_envelope,
 )
@@ -45,12 +63,22 @@ class AwsLambdaApp:
         application: BenzeneMessageApplication | None = None,
         *,
         standard_paths: StandardPaths | None = None,
+        s3_topic: str = DEFAULT_S3_TOPIC,
+        eventbridge_topic: str = DEFAULT_EVENTBRIDGE_TOPIC,
+        kinesis_topic: str = DEFAULT_KINESIS_TOPIC,
+        dynamodb_topic: str | None = None,
     ) -> None:
         if application is None:
             if registry is None:
                 registry = Registry.from_definitions(http_router) if http_router else Registry()
             application = BenzeneMessageApplication(registry)
         self._application = application
+        # Topic conventions for the sources with no native metadata channel. ``dynamodb_topic`` stays
+        # ``None`` to mean "derive per record from its eventName" (e.g. ``dynamodb:insert``).
+        self._s3_topic = s3_topic
+        self._eventbridge_topic = eventbridge_topic
+        self._kinesis_topic = kinesis_topic
+        self._dynamodb_topic = dynamodb_topic
         self._http_app = (
             BenzeneHttpApp(http_router, application=application, standard_paths=standard_paths)
             if http_router
@@ -72,10 +100,26 @@ class AwsLambdaApp:
             return self._handle_api_gateway(event)
         if source == "sqs":
             return self._handle_sqs(event)
+        if source == "dynamodb":
+            return self._handle_dynamodb(event)
+        if source == "kinesis":
+            return self._handle_kinesis(event)
         if source == "sns":
             self._handle_sns(event)  # SNS is fire-and-forget: no response envelope to return
             return None
-        raise ValueError("Unrecognised Lambda event: not API Gateway, SQS, or SNS")
+        if source == "s3":
+            self._handle_s3(event)  # no partial-batch channel: a failure raises for retry
+            return None
+        if source == "eventbridge":
+            self._handle_eventbridge(event)  # a single event, no response envelope
+            return None
+        if source == "kafka":
+            self._handle_kafka(event)  # MSK has no partial-batch channel: a failure raises
+            return None
+        raise ValueError(
+            "Unrecognised Lambda event: not API Gateway, SQS, SNS, S3, EventBridge, "
+            "DynamoDB, Kinesis, or Kafka"
+        )
 
     # --- API Gateway -----------------------------------------------------------------------
     def _handle_api_gateway(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -111,13 +155,72 @@ class AwsLambdaApp:
         async def run() -> None:
             for record in event.get("Records", []):
                 envelope = sns_record_envelope(record)
-                response = await self._application.handle(envelope)
-                if not is_successful(response["statusCode"]):
-                    raise MessageHandlingError(
-                        envelope["topic"], response["statusCode"], response["body"]
-                    )
+                await self._dispatch_or_raise(envelope)
 
         asyncio.run(run())
+
+    # --- S3 (object-created; no partial-batch channel) -------------------------------------
+    def _handle_s3(self, event: dict[str, Any]) -> None:
+        async def run() -> None:
+            for record in event.get("Records", []):
+                envelope = s3_record_envelope(record, self._s3_topic)
+                await self._dispatch_or_raise(envelope)
+
+        asyncio.run(run())
+
+    # --- EventBridge (a single event) ------------------------------------------------------
+    def _handle_eventbridge(self, event: dict[str, Any]) -> None:
+        async def run() -> None:
+            await self._dispatch_or_raise(eventbridge_envelope(event, self._eventbridge_topic))
+
+        asyncio.run(run())
+
+    # --- Kafka / MSK (no partial-batch channel) --------------------------------------------
+    def _handle_kafka(self, event: dict[str, Any]) -> None:
+        async def run() -> None:
+            for record in kafka_records(event):
+                envelope = kafka_record_envelope(record)
+                await self._dispatch_or_raise(envelope)
+
+        asyncio.run(run())
+
+    # --- DynamoDB Streams (partial batch response) -----------------------------------------
+    def _handle_dynamodb(self, event: dict[str, Any]) -> dict[str, Any]:
+        async def run() -> list[dict[str, str]]:
+            failures: list[dict[str, str]] = []
+            for record in event.get("Records", []):
+                envelope = dynamodb_record_envelope(record, self._dynamodb_topic)
+                response = await self._application.handle(envelope)
+                if not is_successful(response["statusCode"]):
+                    sequence = (record.get("dynamodb") or {}).get("SequenceNumber", "")
+                    failures.append({"itemIdentifier": sequence})
+            return failures
+
+        return {"batchItemFailures": asyncio.run(run())}
+
+    # --- Kinesis Data Streams (partial batch response) -------------------------------------
+    def _handle_kinesis(self, event: dict[str, Any]) -> dict[str, Any]:
+        async def run() -> list[dict[str, str]]:
+            failures: list[dict[str, str]] = []
+            for record in event.get("Records", []):
+                envelope = kinesis_record_envelope(record, self._kinesis_topic)
+                response = await self._application.handle(envelope)
+                if not is_successful(response["statusCode"]):
+                    sequence = (record.get("kinesis") or {}).get("sequenceNumber", "")
+                    failures.append({"itemIdentifier": sequence})
+            return failures
+
+        return {"batchItemFailures": asyncio.run(run())}
+
+    async def _dispatch_or_raise(self, envelope: dict[str, Any]) -> None:
+        """Run one envelope; on a failure result raise ``MessageHandlingError`` (retry/redeliver).
+
+        The shared path for the sources with no partial-batch channel (SNS, S3, EventBridge, Kafka):
+        the only way to signal failure back to the platform is to fault the invocation.
+        """
+        response = await self._application.handle(envelope)
+        if not is_successful(response["statusCode"]):
+            raise MessageHandlingError(envelope["topic"], response["statusCode"], response["body"])
 
 
 def to_lambda_handler(app: AwsLambdaApp) -> Callable[..., Any]:
