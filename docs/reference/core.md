@@ -16,7 +16,7 @@ A handler is `async def handle(request) -> Result`. The `@message` decorator tag
 from benzene.core import message
 from benzene.results import Result
 
-@message("order:create", request_type=OrderRequest, response_type=OrderCreated)
+@message("order:create", response_type=OrderCreated)
 async def create_order(request: OrderRequest) -> Result:
     ...
 ```
@@ -25,10 +25,14 @@ async def create_order(request: OrderRequest) -> Result:
 |---|---|
 | `topic` | the topic id the handler serves |
 | `version` | payload/handler version (default `""`, the unversioned handler) |
-| `request_type` | dataclass/type to build from the decoded body before calling (optional) |
+| `request_type` | dataclass/type to build from the decoded body before calling — **inferred** from the handler's first-parameter annotation (`request: OrderRequest`), so you rarely pass it; give it explicitly to override, or when the parameter is unannotated or a subscripted generic (`dict[str, Any]`) |
 | `response_type` | declared response type, for descriptors/tooling (optional) |
 
-The decorator leaves the function an ordinary callable; registration is a separate, explicit step.
+`request_type` inference is `infer_request_type`, shared by `@message`, `Registry.register`, and
+`HttpRouter.register`: it reads a **concrete** first-parameter annotation and yields `None` for a
+missing one, a subscripted generic, or a union (the body then passes through as the raw decoded
+value). The decorator leaves the function an ordinary callable; registration is a separate, explicit
+step.
 
 ## `Registry`
 
@@ -201,18 +205,21 @@ To serve several payload versions of one topic, use the **casting-handler patter
 implementation and register a thin forwarding handler for each old version that upcasts the request:
 
 ```python
-registry.register("orders:place", place_v2, version="v2", request_type=PlaceOrderV2)
+registry.register("orders:place", place_v2, version="v2")       # request_type inferred: PlaceOrderV2
 
 def make_place_v1(latest):
     async def place_v1(request: PlaceOrderV1) -> Result:      # v1's payload shape
         return await latest(PlaceOrderV2(sku=request.sku, quantity=request.count))  # upcast v1 -> v2
     return place_v1
 
-registry.register("orders:place", make_place_v1(place_v2), version="v1", request_type=PlaceOrderV1)
+registry.register("orders:place", make_place_v1(place_v2), version="v1")   # inferred: PlaceOrderV1
 ```
 
-A v1 client (`version: v1`, the old `count` field) and a v2 client (`benzene-version: v2`, `quantity`)
-now both reach the one shared `place_v2` implementation.
+Each registration's `request_type` is inferred from the handler's first-parameter annotation
+(`place_v2(request: PlaceOrderV2)`, `place_v1(request: PlaceOrderV1)`), so the router builds the body
+into the right per-version type without repeating it. A v1 client (`version: v1`, the old `count`
+field) and a v2 client (`benzene-version: v2`, `quantity`) now both reach the one shared `place_v2`
+implementation.
 
 **Transparent casting** (versioning.md §4) removes the per-version forwarder. Register the one-step
 casts *between types* on a `SchemaCasters` — shared across topics — and `casting_handler` builds the
@@ -229,16 +236,18 @@ casters = (
     .cast_between(OrderPlacedV2, OrderPlacedV1, lambda v2: OrderPlacedV1(v2.id))           # response down
 )
 
-registry.register("orders:place", place_v2, version="v2",
-                  request_type=PlaceOrderV2, response_type=OrderPlacedV2)
+registry.register("orders:place", place_v2, version="v2",           # request_type inferred
+                  response_type=OrderPlacedV2)
 registry.register("orders:place",                                    # v1 served transparently
                   casting_handler(place_v2, casters, to=PlaceOrderV2, response_to=OrderPlacedV1),
                   version="v1", request_type=PlaceOrderV1, response_type=OrderPlacedV1)
 ```
 
-`place_v2` only ever sees the canonical type. A failure result (no payload) passes straight through,
-and an unregistered cast raises `NoCastPathError` at call time — a loud configuration error, not a
-silent mis-route.
+`place_v2` only ever sees the canonical type. The transparent (`casting_handler`) registration **must**
+still pass `request_type=` explicitly — the wrapper's parameter isn't annotated with the older type, so
+there is nothing to infer, and the router needs to build the body into `PlaceOrderV1` *before* the
+wrapper upcasts it. A failure result (no payload) passes straight through, and an unregistered cast
+raises `NoCastPathError` at call time — a loud configuration error, not a silent mis-route.
 
 > **Spec note (documented bend).** The .NET reference's Mechanism B (§4) serves *any* incoming version
 > off a **single** registration: a request-mapper decorator reads the version and upcasts before the

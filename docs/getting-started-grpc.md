@@ -76,7 +76,7 @@ def make_place_order(service: OrderService, sender: MessageSender) -> Handler:
 
 These handlers are wired onto a `Registry` (all topics) inside a single composition root — a
 [`BenzeneStartUp`](reference/core.md) subclass, `OrdersStartUp`, that both deployment and tests boot
-from. Because the gRPC binding serves every topic as a unary method (**method = topic**), the domain's
+from (the [composition-root path](getting-started.md#two-ways-to-wire-a-service)). Because the gRPC binding serves every topic as a unary method (**method = topic**), the domain's
 HTTP routes `POST /orders` / `GET /orders/{id}` are reached over gRPC as the topics `orders:place` /
 `orders:get` — no per-route registration. Nothing in `orders_domain` mentions gRPC.
 

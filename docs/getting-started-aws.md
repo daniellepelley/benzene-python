@@ -83,7 +83,8 @@ def make_on_order_created(seen: list[str]) -> Handler:
 These handlers are wired onto an `HttpRouter` (for the routes) and a `Registry` (all topics,
 including the pub/sub subscriber) inside a single composition root — a
 [`BenzeneStartUp`](reference/core.md) subclass, `OrdersStartUp`, that both deployment and tests boot
-from. The `orders:created` subscriber is registered as a topic, so **the same handler answers the
+from (the [composition-root path](getting-started.md#two-ways-to-wire-a-service); its full body is in
+[Getting started](getting-started.md#the-composition-root-when-you-want-the-shared-seams)). The `orders:created` subscriber is registered as a topic, so **the same handler answers the
 event whether it arrives over SQS or SNS.** Nothing in `orders_domain` mentions Lambda.
 
 ## 3. Build the AWS host

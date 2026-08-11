@@ -50,8 +50,9 @@ the inbound bindings and the in-memory test host need. The Azure SDK is **not** 
 A Benzene service on Azure has two parts, and only the second is Azure-specific:
 
 1. **The domain** — your handlers, topics, and HTTP routes, wired onto a
-   [`BenzeneStartUp`](reference/core.md) composition root. In the example this is `OrdersStartUp`,
-   shared verbatim with the AWS and GCP hosts.
+   [`BenzeneStartUp`](reference/core.md) composition root (the
+   [composition-root path](getting-started.md#two-ways-to-wire-a-service)). In the example this is
+   `OrdersStartUp`, shared verbatim with the AWS and GCP hosts.
 2. **The host** — an `AzureFunctionsApp` that mounts that domain's registry and HTTP router onto
    Azure Functions' triggers.
 

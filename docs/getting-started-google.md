@@ -99,7 +99,10 @@ handler can't tell the difference, and that's the point.
 ## 3. Compose a StartUp
 
 Routes, topics, and service registrations live in one composition root — a `BenzeneStartUp` — that
-every host and every test boots from. From `orders_domain`:
+every host and every test boots from. This is the **composition-root path** from
+[Getting started](getting-started.md#two-ways-to-wire-a-service), and it earns its keep here: the same
+startup drives the in-memory tests in step 5 and swaps the real Pub/Sub client for a fake through one
+seam. From `orders_domain`:
 
 ```python
 from benzene.core import (
@@ -108,7 +111,7 @@ from benzene.core import (
 from benzene.http import HttpRouter
 
 from .handlers import OrderService, make_get_order, make_on_order_created, make_place_order
-from .model import ORDER_CREATED_TOPIC, OrderCreated, OrderEventLog, PlaceOrder
+from .model import ORDER_CREATED_TOPIC, OrderEventLog
 
 PLACE_ORDER_TOPIC = "orders:place"
 GET_ORDER_TOPIC = "orders:get"
@@ -124,14 +127,14 @@ class OrdersStartUp(BenzeneStartUp):
         sender = services.get_service(MessageSender)       # a host or test must register this
         events = services.get_service(OrderEventLog)
 
-        router = HttpRouter()
-        router.register("POST", "/orders", PLACE_ORDER_TOPIC,
-                        make_place_order(service, sender), request_type=PlaceOrder)
-        router.register("GET", "/orders/{id}", GET_ORDER_TOPIC, make_get_order(service))
-
-        registry = Registry.from_definitions(router)                        # the HTTP topics...
-        registry.register(ORDER_CREATED_TOPIC,                              # ...plus the subscriber
-                          make_on_order_created(events), request_type=OrderCreated)
+        router = (
+            HttpRouter()
+            .register("POST", "/orders", PLACE_ORDER_TOPIC, make_place_order(service, sender))
+            .register("GET", "/orders/{id}", GET_ORDER_TOPIC, make_get_order(service))
+        )
+        registry = Registry.from_definitions(router).register(   # the HTTP topics + the subscriber
+            ORDER_CREATED_TOPIC, make_on_order_created(events)
+        )
         return AppDefinition(registry=registry, router=router)
 ```
 
@@ -139,8 +142,13 @@ Two things matter for the Google host:
 
 - The **`HttpRouter`** carries the `POST /orders` / `GET /orders/{id}` routes for the HTTP trigger.
 - The **`Registry`** carries every topic — the HTTP ones *and* `orders:created` — for the Pub/Sub
-  trigger. `Registry.from_definitions(router)` seeds it from the routes; `registry.register(...)`
+  trigger. `Registry.from_definitions(router)` seeds it from the routes; the chained `.register(...)`
   adds the subscriber that has no HTTP route.
+
+No registration passes `request_type=`: each handler's payload type is read from its first-parameter
+annotation (`place_order(request: PlaceOrder)`, `on_order_created(request: OrderCreated)`). `get_order`
+takes `request: dict[str, Any]`, so it stays the raw decoded body — pass `request_type=` explicitly
+only to override an annotation or when the parameter isn't a concrete type.
 
 `MessageSender` is a deliberate seam: the StartUp doesn't register one — `configure` resolves it
 from the container, so each host (or test) must register the client it wants. Forget to, and

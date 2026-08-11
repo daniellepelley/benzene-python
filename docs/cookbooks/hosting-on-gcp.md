@@ -20,7 +20,7 @@ from benzene.core import Handler, MessageSender
 from benzene.results import Result
 
 def make_place_order(service, sender: MessageSender) -> Handler:
-    async def place_order(request) -> Result:
+    async def place_order(request: PlaceOrder) -> Result:   # annotation → request_type is inferred
         order = service.place(request.sku, request.quantity)
         await sender.send_message("orders:created", {"id": order.id, "sku": order.sku})
         return Result.created(order)
@@ -33,14 +33,17 @@ def make_place_order(service, sender: MessageSender) -> Handler:
 from benzene.core import Registry
 from benzene.http import HttpRouter
 
-router = HttpRouter()
-router.register("POST", "/orders", "orders:place", make_place_order(service, sender))
+router = HttpRouter().register("POST", "/orders", "orders:place", make_place_order(service, sender))
 
-registry = Registry()
-for d in router.definitions():
-    registry.add_definition(d)
-registry.register("orders:created", make_on_order_created(...))   # the Pub/Sub subscriber
+registry = Registry.from_definitions(router).register(   # the HTTP topics + the Pub/Sub subscriber
+    "orders:created", make_on_order_created(...)
+)
 ```
+
+No `request_type=` is passed: `place_order` annotates its request (`request: PlaceOrder`), so Benzene
+infers the payload type from the signature and builds the body into it. This is the
+[direct path](../getting-started.md#two-ways-to-wire-a-service) — routes and topics wired by hand, no
+composition root.
 
 ## 3. Build the host and expose entry points
 
@@ -58,6 +61,10 @@ Pub/Sub trigger reads the topic from the message's `topic` attribute and raises 
 Pub/Sub redelivers.
 
 ## 4. Test it in memory (dogfooded, no cloud)
+
+`create_test_host` specializes a `BenzeneStartUp` per cloud, so the test below boots the
+[composition-root](../getting-started.md#two-ways-to-wire-a-service) form of the wiring above — an
+`OrdersStartUp` that returns the same router + registry from its `configure`:
 
 ```python
 from benzene.core import MessageSender

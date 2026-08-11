@@ -60,8 +60,9 @@ sees.
 
 ## 2. Registering versioned handlers
 
-A `(topic, version)` pair maps to **at most one handler**. Register each version explicitly, and pass
-each handler its payload type so the router can build the request into it:
+A `(topic, version)` pair maps to **at most one handler**. Register each version explicitly; the
+router builds the request into each handler's payload type, which it reads from the handler's
+first-parameter annotation (`place_v1(request: PlaceOrderV1)`) — no `request_type=` to repeat:
 
 ```python
 from dataclasses import dataclass
@@ -86,8 +87,8 @@ async def place_v2(request: PlaceOrderV2) -> Result:
 
 registry = (
     Registry()
-    .register("orders:place", place_v1, version="v1", request_type=PlaceOrderV1)
-    .register("orders:place", place_v2, version="v2", request_type=PlaceOrderV2)
+    .register("orders:place", place_v1, version="v1")   # request_type inferred: PlaceOrderV1
+    .register("orders:place", place_v2, version="v2")   # request_type inferred: PlaceOrderV2
 )
 ```
 
@@ -134,12 +135,14 @@ def make_place_v1(latest: Handler) -> Handler:
 
 registry = (
     Registry()
-    .register("orders:place", place_v2, version="v2", request_type=PlaceOrderV2)
-    .register("orders:place", make_place_v1(place_v2), version="v1", request_type=PlaceOrderV1)
+    .register("orders:place", place_v2, version="v2")                    # inferred: PlaceOrderV2
+    .register("orders:place", make_place_v1(place_v2), version="v1")     # inferred: PlaceOrderV1
 )
 ```
 
-A v1 caller (old `count` field) and a v2 caller (`quantity`) now both reach the single `place_v2`
+Both `place_v2` and the forwarding `place_v1` annotate their request, so the router builds each into
+the right per-version type with no `request_type=`. A v1 caller (old `count` field) and a v2 caller
+(`quantity`) now both reach the single `place_v2`
 implementation. This is enough when you have one or two old versions and no response to reshape.
 
 ### Transparent casting (register the casts, not the forwarders)
@@ -175,8 +178,8 @@ casters = (
 
 registry = (
     Registry()
-    .register("orders:place", place_v2, version="v2",                       # the real implementation
-              request_type=PlaceOrderV2, response_type=OrderPlacedV2)
+    .register("orders:place", place_v2, version="v2",                      # the real implementation
+              response_type=OrderPlacedV2)                                 # request_type inferred
     .register("orders:place",                                              # v1, served transparently
               casting_handler(place_v2, casters, to=PlaceOrderV2, response_to=OrderPlacedV1),
               version="v1", request_type=PlaceOrderV1, response_type=OrderPlacedV1)
@@ -194,8 +197,10 @@ worth pinning down:
   automatically by a breadth-first search over the steps (a direct cast always wins over a chain). A
   new version only needs a cast **from the one before it** — add a `PlaceOrderV0` with a `V0 → V1` cast
   and the v0 registration reaches v2 through `V0 → V1 → V2` with no new code.
-- **The older registration must declare `request_type`.** The router builds the body into that type
-  *before* the wrapper runs, and the wrapper casts *from that built type*. Omit it and the request
+- **The `casting_handler` registration must declare `request_type` explicitly.** Unlike the plain
+  handlers above — whose annotated `request` parameter lets Benzene *infer* the type — the wrapper's
+  parameter isn't the older type, so there is nothing to infer. The router builds the body into that
+  type *before* the wrapper runs, and the wrapper casts *from that built type*. Omit it and the request
   arrives as a `dict`, giving a puzzling `No cast path from dict to PlaceOrderV2` instead of a clean
   upcast.
 - **A failure passes through un-downcast.** Only a successful payload is downcast — a domain failure

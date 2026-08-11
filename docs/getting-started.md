@@ -39,7 +39,7 @@ class Greet:
     name: str = "world"
 
 
-@message("say:hello", request_type=Greet)
+@message("say:hello")
 async def hello(request: Greet) -> Result:
     return Result.ok({"greeting": f"Hello {request.name}"})
 
@@ -47,8 +47,11 @@ async def hello(request: Greet) -> Result:
 application = BenzeneMessageApplication(Registry().add(hello))
 ```
 
-The `@message("say:hello")` decorator registers the handler under a topic. `request_type=Greet`
-tells Benzene to build a `Greet` from the decoded JSON body before calling you.
+The `@message("say:hello")` decorator registers the handler under a topic. Benzene reads the request
+type from the handler's first-parameter annotation — `request: Greet` — and builds a `Greet` from the
+decoded JSON body before calling you, so you don't repeat the type. (Pass `request_type=` to override,
+or when the parameter isn't annotated with a concrete type — an unannotated `request` or a
+`request: dict[str, Any]` stays the raw decoded body.)
 
 ## 3. Drive it with the transport-neutral envelope
 
@@ -100,7 +103,7 @@ class Greet:
 
 
 @http_endpoint("GET", "/greet/{name}")
-@message("say:hello", request_type=Greet)
+@message("say:hello")
 async def hello(request: Greet) -> Result:
     return Result.ok({"greeting": f"Hello {request.name}"})
 
@@ -146,6 +149,88 @@ ports-and-adapters design. See **[Packages & adoption levels](packages.md)** for
 split this way, and the reference docs for each package:
 [`benzene.results`](reference/results.md), [`benzene.core`](reference/core.md),
 [`benzene.http`](reference/http.md).
+
+## Two ways to wire a service
+
+Everything above used the **direct path**: decorate a handler (or register it explicitly), add it to
+a `Registry`/`HttpRouter`, and hand that straight to a host. There is a second path — a **composition
+root** (`BenzeneStartUp`) — that the cloud guides reach for. Both are first-class; the difference is
+only *how much wiring machinery* you opt into, so it's worth knowing which one you're choosing.
+
+### The direct path (simplest)
+
+Decorate handlers and add them, then pass the registry/router to a host — no extra classes:
+
+```python
+app = BenzeneHttpApp(HttpRouter().add(hello))       # the hello handler from step 4
+```
+
+Or register explicitly, without decorators — just as short, and equally the direct path:
+
+```python
+router = (
+    HttpRouter()
+    .register("POST", "/orders", "orders:place", place_order)
+    .register("GET", "/orders/{id}", "orders:get", get_order)
+)
+app = BenzeneHttpApp(router)
+```
+
+The same shape hosts on a cloud: `AwsLambdaApp(http_router=router)`. Reach for the direct path for a
+small service, a handler with no injected dependencies, or when you construct your dependencies
+yourself.
+
+### The composition root (when you want the shared seams)
+
+A [`BenzeneStartUp`](reference/core.md) subclass splits wiring into two methods —
+`configure_services` (register services into a container) and `configure` (resolve them and wire
+routes/topics into an `AppDefinition`). Here `OrderService`/`OrderEventLog` are the app's own
+services, and each `make_*` is a small factory that closes over its dependencies and returns a handler
+(`make_place_order(service, sender)` → `async def place_order(request: PlaceOrder)`), the shape the
+cloud guides build on:
+
+```python
+from benzene.core import (
+    AppDefinition, BenzeneStartUp, Container, MessageSender, Registry, Scope,
+)
+from benzene.http import HttpRouter
+
+
+class OrdersStartUp(BenzeneStartUp):
+    def configure_services(self, services: Container, config) -> None:
+        services.try_add_singleton(OrderService)
+        services.try_add_singleton(OrderEventLog)
+
+    def configure(self, services: Scope, config) -> AppDefinition:
+        service = services.get_service(OrderService)
+        sender = services.get_service(MessageSender)     # a host/test registers this
+        events = services.get_service(OrderEventLog)
+
+        router = (
+            HttpRouter()
+            .register("POST", "/orders", PLACE_ORDER_TOPIC, make_place_order(service, sender))
+            .register("GET", "/orders/{id}", GET_ORDER_TOPIC, make_get_order(service))
+        )
+        registry = Registry.from_definitions(router).register(
+            ORDER_CREATED_TOPIC, make_on_order_created(events)
+        )
+        return AppDefinition(registry=registry, router=router)
+```
+
+That extra structure is not ceremony — it buys two things a direct-path service can't get for free:
+
+- **One test harness for every host.** `create_test_host(OrdersStartUp).with_services(...).build_aws()`
+  boots the *real* app and specializes it to any cloud in one line — swap `.build_aws()` for
+  `.build_gcp()` / `.build_azure()` and the same test runs unchanged.
+- **One dependency-swap seam.** `configure` resolves a `MessageSender` it never constructs, so
+  deployment registers the real client (`SnsMessageSender`, `PubSubMessageSender`, …) and a test
+  registers a `FakeMessageSender` — and *nothing else* about the app changes.
+
+Reach for the composition root when you want that provider-agnostic test harness or a single
+dependency-swap seam; otherwise the direct path above is enough. The cloud guides
+([AWS](getting-started-aws.md), [Azure](getting-started-azure.md),
+[Google](getting-started-google.md), [Kubernetes](getting-started-kubernetes.md)) all build on this
+same `OrdersStartUp`.
 
 ## Why not just a minimal ASGI app?
 

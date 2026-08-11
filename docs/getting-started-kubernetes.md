@@ -31,7 +31,10 @@ loop, and a Kafka consumer loop together — one container image, one Kubernetes
 
 ## 1. The shared domain
 
-Everything downstream depends on this one composition root. A domain package that any host can mount:
+Everything downstream depends on this one composition root — the
+[composition-root path](getting-started.md#two-ways-to-wire-a-service), chosen here precisely because
+three transports (HTTP, SQS, Kafka) boot the *same* `OrdersStartUp` and each swaps in only its own
+`MessageSender`. A domain package that any host can mount:
 
 ```
 orders_domain/
@@ -80,7 +83,6 @@ from benzene.core import AppDefinition, BenzeneStartUp, Container, MessageSender
 from benzene.http import HttpRouter
 
 from .handlers import OrderService, make_place_order
-from .model import PlaceOrder
 
 PLACE_ORDER_TOPIC = "orders:place"
 
@@ -93,10 +95,8 @@ class OrdersStartUp(BenzeneStartUp):
         service = services.get_service(OrderService)
         sender = services.get_service(MessageSender)  # a host must register this
 
-        router = HttpRouter()
-        router.register(
-            "POST", "/orders", PLACE_ORDER_TOPIC, make_place_order(service, sender),
-            request_type=PlaceOrder,
+        router = HttpRouter().register(
+            "POST", "/orders", PLACE_ORDER_TOPIC, make_place_order(service, sender)
         )
         return AppDefinition(registry=Registry.from_definitions(router), router=router)
 ```
