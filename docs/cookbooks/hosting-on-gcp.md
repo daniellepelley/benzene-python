@@ -62,21 +62,20 @@ Pub/Sub redelivers.
 
 ## 4. Test it in memory (dogfooded, no cloud)
 
-`create_test_host` specializes a `BenzeneStartUp` per cloud, so the test below boots the
-[composition-root](../getting-started.md#two-ways-to-wire-a-service) form of the wiring above — an
-`OrdersStartUp` that returns the same router + registry from its `configure`:
+The direct-path host needs no composition root to test: wrap the *same* `GcpFunctionsApp` you built in
+step 3 in a `GcpFunctionsTestHost` and drive both triggers in memory, faking only the outbound edge.
 
 ```python
-from benzene.core import MessageSender
-from benzene.testing import FakeMessageSender, create_test_host
+from benzene.gcp import GcpFunctionsApp
+from benzene.gcp.testing import GcpFunctionsTestHost
+from benzene.testing import FakeMessageSender
 
-sender = FakeMessageSender()
-# Boot the real composition root (OrdersStartUp), fake only the outbound edge, specialize to GCP.
-host = (
-    create_test_host(OrdersStartUp)
-    .with_services(lambda services: services.add_instance(MessageSender, sender))
-    .build_gcp()
+sender = FakeMessageSender()                     # records egress instead of calling Pub/Sub
+router = HttpRouter().register("POST", "/orders", "orders:place", make_place_order(service, sender))
+registry = Registry.from_definitions(router).register(
+    "orders:created", make_on_order_created(seen)
 )
+host = GcpFunctionsTestHost(GcpFunctionsApp(http_router=router, registry=registry))
 
 response = host.send_http("POST", "/orders", body={"sku": "ABC", "quantity": 2})
 assert response.status_code == 201
@@ -84,6 +83,13 @@ assert sender.last_topic == "orders:created"     # ingress -> handler -> egress
 
 host.send_pubsub("orders:created", body={"id": "ord-1", "sku": "ABC"})   # exercise the subscriber
 ```
+
+That is the whole direct path: build the app, wrap it in the test host, push native events. When you
+want the *one-line, provider-agnostic* harness instead — `create_test_host(StartUp).build_gcp()`, swap
+`.build_gcp()` for `.build_aws()` and the same test runs on another cloud — wire the handlers through a
+`BenzeneStartUp` composition root, as the runnable
+[`examples/gcp_orders`](https://github.com/daniellepelley/benzene-python/tree/main/examples/gcp_orders)
+does. Both are covered in [Two ways to wire a service](../getting-started.md#two-ways-to-wire-a-service).
 
 ## 5. Deploy
 
