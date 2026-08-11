@@ -3,6 +3,4 @@ kind: Kustomization
 namespace: k8s-orders
 resources:
   - namespace.yaml
-  - api.yaml
-  - sqs-worker.yaml
-  - kafka-worker.yaml
+  - app.yaml

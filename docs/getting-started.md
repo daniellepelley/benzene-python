@@ -163,8 +163,8 @@ both in sync by hand. With Benzene the handler above doesn't change at all: `ben
 [self-hosted SQS consumer](../examples/sqs_orders) or `benzene-kafka`'s
 [self-hosted consumer](../examples/kafka_orders) point a worker at the *same* `@message("say:hello")`
 function, because it was never written against an ASGI request in the first place — see
-[`examples/k8s_orders`](../examples/k8s_orders) for that running as three independent Kubernetes
-Deployments from one composition root. If HTTP genuinely is and always will be the only way in, reach
+[`examples/k8s_orders`](../examples/k8s_orders) for that running as one process, one Deployment,
+three transports. If HTTP genuinely is and always will be the only way in, reach
 for FastAPI/Flask directly instead — you'll write less code, not more.
 
 ## Troubleshooting

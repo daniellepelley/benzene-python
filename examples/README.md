@@ -59,14 +59,15 @@ test that proves the `GrpcMessageSender` client over a live channel. Because the
 topic as one generic method, the domain's `POST /orders` / `GET /orders/{id}` routes are reached as the
 `orders:place` / `orders:get` topics.
 
-## On Kubernetes: the same domain, three independent Deployments
+## On Kubernetes: the same domain, one process, three transports
 
-[`k8s_orders/`](k8s_orders) doesn't add a fourth transport — it packages three of the hosts above
-(`http_orders`, `sqs_orders`, `kafka_orders`) as three separate container images and Kubernetes
-Deployments, all mounting the *same* `orders_domain`. See
+[`k8s_orders/`](k8s_orders) doesn't add a fourth transport — it runs the three hosts above
+(`http_orders`, `sqs_orders`, `kafka_orders`) together in one process/container image/Kubernetes
+Deployment, all mounting the *same* `orders_domain`. See
 [docs/getting-started-kubernetes.md](../docs/getting-started-kubernetes.md) for why that's worth
 doing (a queue or stream is where Benzene earns its keep even as the *only* transport a service has;
-HTTP alone doesn't need it).
+HTTP alone doesn't need it) and how `asyncio.gather` safely combines uvicorn with the SQS/Kafka
+consumer loops.
 
 ## Pattern examples
 

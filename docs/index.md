@@ -13,8 +13,8 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
   - [Azure Functions](getting-started-azure.md) — HTTP, Service Bus, and Event Hub triggers
   - [Google Cloud Functions](getting-started-google.md) — HTTP + Pub/Sub
   - [gRPC](getting-started-grpc.md) — a unary gRPC server (and the client binding)
-  - [Kubernetes](getting-started-kubernetes.md) — one domain, three independent Deployments (HTTP,
-    a self-hosted SQS worker, a self-hosted Kafka worker)
+  - [Kubernetes](getting-started-kubernetes.md) — one domain hosted over HTTP, SQS, and Kafka from a
+    single process and Deployment
 - **[Packages & adoption levels](packages.md)** — how Benzene is split into layered PyPI packages,
   why, and which ones to install.
 - **[Publishing](publishing.md)** — how the ten packages are released to PyPI (trusted publishing).

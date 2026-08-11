@@ -23,6 +23,7 @@ dependency, exactly like :class:`~benzene.aws.clients.SqsMessageSender`.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -101,9 +102,18 @@ async def run_sqs_consumer_loop(
     and deletes from ``on_result``. ``wait_time_seconds`` defaults to 20 (SQS's maximum long-poll), so
     an empty queue costs one mostly-idle request rather than a tight poll loop. ``should_continue``
     bounds the loop (a real worker loops forever; a test stops after N polls).
+
+    ``client.receive_message``/``client.delete_message`` are plain synchronous ``boto3`` calls, run via
+    :func:`asyncio.to_thread` rather than called directly on the event loop - called directly, a
+    20-second long-poll would block every other coroutine on the loop for its duration (worse for
+    Kafka's poll loop, which has no timeout to bound it at all), starving anything else sharing the
+    process, e.g. an HTTP server hosted alongside this consumer. See
+    ``docs/getting-started-kubernetes.md`` for the multi-transport-in-one-process story this makes
+    possible.
     """
     while should_continue():
-        response = client.receive_message(
+        response = await asyncio.to_thread(
+            client.receive_message,
             QueueUrl=queue_url,
             MaxNumberOfMessages=max_number_of_messages,
             WaitTimeSeconds=wait_time_seconds,
@@ -115,4 +125,6 @@ async def run_sqs_consumer_loop(
                 on_result(message, result)
             # At-least-once: delete only a successful outcome, so a failed message is redelivered.
             if delete and result.is_successful:
-                client.delete_message(QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"])
+                await asyncio.to_thread(
+                    client.delete_message, QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
+                )

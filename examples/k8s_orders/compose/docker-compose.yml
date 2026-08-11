@@ -1,9 +1,9 @@
-# Local, no-Kubernetes-needed way to see all three legs of this example running against real (if
-# emulated) SQS and Kafka. Each service's build.context is relative to this file, so run it from
-# anywhere with `docker compose -f examples/k8s_orders/compose/docker-compose.yml up --build` (see
-# the README for the full walkthrough). localstack/kafka here stand in for a real AWS SQS queue and a
-# real Kafka cluster - swap the env vars in ../k8s/ for the real thing to run the exact same three
-# images anywhere else.
+# Local, no-Kubernetes-needed way to see all three legs of this example running - in one container -
+# against real (if emulated) SQS and Kafka. Each service's build.context is relative to this file, so
+# run it from anywhere with `docker compose -f examples/k8s_orders/compose/docker-compose.yml up
+# --build` (see the README for the full walkthrough). localstack/kafka here stand in for a real AWS
+# SQS queue and a real Kafka cluster - swap the env vars in ../k8s/ for the real thing to run the
+# exact same image anywhere else.
 services:
   localstack:
     image: localstack/localstack:3
@@ -48,36 +48,23 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
-  orders-api:
+  orders-app:
     build:
       context: ../../..
-      dockerfile: examples/k8s_orders/Api.Dockerfile
+      dockerfile: examples/k8s_orders/Dockerfile
+    depends_on:
+      - sqs-init
+      - kafka
     ports:
       - "8080:8080"
     environment:
       - BENZENE_ORDERS_EVENTS_URL=http://localhost:9999   # unreachable on purpose - see the README
-
-  orders-sqs-worker:
-    build:
-      context: ../../..
-      dockerfile: examples/k8s_orders/SqsWorker.Dockerfile
-    depends_on:
-      - sqs-init
-    environment:
       - BENZENE_SQS_CONSUME_QUEUE_URL=http://localstack:4566/000000000000/orders-in
       - BENZENE_SQS_EVENTS_QUEUE_URL=http://localstack:4566/000000000000/orders-events
       - SQS_ENDPOINT_URL=http://localstack:4566
       - AWS_ACCESS_KEY_ID=local
       - AWS_SECRET_ACCESS_KEY=local
       - AWS_DEFAULT_REGION=eu-west-1
-
-  orders-kafka-worker:
-    build:
-      context: ../../..
-      dockerfile: examples/k8s_orders/KafkaWorker.Dockerfile
-    depends_on:
-      - kafka
-    environment:
       - BENZENE_KAFKA_BOOTSTRAP=kafka:29092
       - BENZENE_KAFKA_CONSUME_TOPIC=orders-in
       - BENZENE_KAFKA_TOPIC=orders-events

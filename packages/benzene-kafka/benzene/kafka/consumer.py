@@ -15,6 +15,7 @@ needs neither a broker nor the SDK. Only the real client is an optional dependen
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -109,9 +110,17 @@ async def run_consumer_loop(
     record is redelivered rather than silently dropped; a caller wanting different semantics passes
     ``commit=False`` and commits from ``on_result``. ``should_continue`` bounds the loop (a real
     worker loops forever; a test stops after N polls).
+
+    ``consumer.poll``/``consumer.commit`` are plain synchronous ``confluent-kafka`` calls, run via
+    :func:`asyncio.to_thread` rather than called directly on the event loop - called directly, an idle
+    topic means ``poll`` returning ``None`` in a tight loop with **no** ``await`` point at all, which
+    would starve every other coroutine on the loop *permanently* (worse than the SQS consumer's
+    periodic long-poll block above), e.g. an HTTP server hosted alongside this consumer. See
+    ``docs/getting-started-kubernetes.md`` for the multi-transport-in-one-process story this makes
+    possible.
     """
     while should_continue():
-        message = consumer.poll(poll_timeout)
+        message = await asyncio.to_thread(consumer.poll, poll_timeout)
         if message is None:
             continue
         if _message_error(message) is not None:
@@ -121,4 +130,4 @@ async def run_consumer_loop(
             on_result(message, result)
         # At-least-once: commit only a successful outcome, so a failed record is redelivered, not lost.
         if commit and result.is_successful:
-            consumer.commit(message=message)
+            await asyncio.to_thread(consumer.commit, message=message)

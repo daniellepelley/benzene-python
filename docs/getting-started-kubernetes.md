@@ -1,31 +1,24 @@
 # Getting Started: Benzene on Kubernetes
 
-This guide takes you from an empty folder to **one Benzene composition root running as three
-independent Kubernetes Deployments** — an HTTP API, an SQS worker, and a Kafka worker — all
-dispatching into the exact same handlers. That's deliberately more than "deploy an ASGI app to a
-pod": see [Why not just a minimal ASGI app?](getting-started.md#why-not-just-a-minimal-asgi-app) for
-why a single-transport example wouldn't actually show what Benzene is for here.
+This guide takes you from an empty folder to **one Benzene composition root, reached over HTTP, SQS,
+and Kafka, hosted in a single Python process**. That's deliberately more than "deploy an ASGI app to
+a pod": see [Why not just a minimal ASGI app?](getting-started.md#why-not-just-a-minimal-asgi-app)
+for why a single-transport example wouldn't actually show what Benzene is for here.
 
-> **Runnable version:** this guide follows [`examples/k8s_orders`](../examples/k8s_orders) —
-> Dockerfiles, Kubernetes manifests, and a `docker-compose.yml` that runs all three legs locally
+> **Runnable version:** this guide follows [`examples/k8s_orders`](../examples/k8s_orders) — a
+> Dockerfile, a Kubernetes manifest, and a `docker-compose.yml` that runs all three legs locally
 > against LocalStack + a throwaway Kafka broker, no cloud account needed.
 
 ## What you'll build
 
 ```
-                              ┌──────────────────────────────────────┐
-        HTTP  ──────────────▶│  orders-api           (Deployment)    │──┐
-                              └──────────────────────────────────────┘  │
-                              ┌──────────────────────────────────────┐  │   all three dispatch
-        SQS queue  ─────────▶│  orders-sqs-worker    (Deployment)    │──┼──▶ orders_domain
-                              └──────────────────────────────────────┘  │   (OrdersStartUp)
-                              ┌──────────────────────────────────────┐  │
-        Kafka topic  ───────▶│  orders-kafka-worker  (Deployment)    │──┘
-                              └──────────────────────────────────────┘
+        HTTP        ─────────┐
+        SQS queue   ─────────┼──▶  orders-app (Deployment)  ──▶  orders_domain
+        Kafka topic ─────────┘                                     (OrdersStartUp)
 ```
 
-One composition root (a `BenzeneStartUp`), mounted by three separate host scripts, each its own
-container image, each its own Kubernetes Deployment, each independently replicated and scaled.
+One composition root (a `BenzeneStartUp`), mounted by one process that runs uvicorn, an SQS consumer
+loop, and a Kafka consumer loop together — one container image, one Kubernetes Deployment.
 
 ## Prerequisites
 
@@ -108,13 +101,16 @@ class OrdersStartUp(BenzeneStartUp):
         return AppDefinition(registry=Registry.from_definitions(router), router=router)
 ```
 
-`configure` deliberately resolves a `MessageSender` it never constructs — each host below registers
+`configure` deliberately resolves a `MessageSender` it never constructs — each leg below registers
 its *own* concrete sender (HTTP, SQS, Kafka) as the one thing that changes between them. Nothing here
 mentions Kubernetes, SQS, Kafka, or HTTP status codes — that's the point of a message handler in
 Benzene's hexagonal architecture: the domain logic sits behind a port, and a transport is just an
 adapter in front of it.
 
-## 2. Host it over HTTP
+## 2. Build each leg, then run them together
+
+Each leg builds its own app from `OrdersStartUp`, differing only in which `MessageSender` it
+registers — three small functions, no entry-point code of their own:
 
 ```python
 # http_orders/host.py
@@ -136,28 +132,10 @@ def build_http_orders_app() -> BenzeneHttpApp:
 ```
 
 ```python
-# http_orders/main.py — the ASGI entry point any server hosts
-from .host import build_http_orders_app
-
-app = build_http_orders_app()
-```
-
-```bash
-BENZENE_ORDERS_EVENTS_URL=http://downstream uvicorn http_orders.main:app --host 0.0.0.0 --port 8080
-```
-
-This is exactly [Getting Started](getting-started.md) — nothing here is Kubernetes-specific yet.
-
-## 3. Host it on SQS
-
-A second, completely independent script, sharing nothing with the HTTP host except a reference to
-`orders_domain`:
-
-```python
 # sqs_orders/host.py
 import os
 
-from benzene.aws import SqsConsumerApp, SqsMessageSender, run_sqs_consumer_loop
+from benzene.aws import SqsConsumerApp, SqsMessageSender
 from benzene.core import Container, MessageSender, build_application
 from orders_domain import OrdersStartUp
 
@@ -170,41 +148,14 @@ def build_sqs_orders_app() -> SqsConsumerApp:
 
     definition, _ = build_application(OrdersStartUp, overrides=[use_sqs])
     return SqsConsumerApp.from_definition(definition)
-
-
-async def main() -> None:
-    import boto3
-
-    client = boto3.client("sqs")  # default credential chain - an IRSA role on EKS
-    await run_sqs_consumer_loop(build_sqs_orders_app(), client, os.environ["BENZENE_SQS_CONSUME_QUEUE_URL"])
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(main())
 ```
-
-```bash
-pip install "benzene-aws[boto3]"
-python -m sqs_orders.host
-```
-
-`run_sqs_consumer_loop` (`benzene.aws`) is a long-running poller, not a Lambda trigger — the right
-shape for a pod that stays up. It long-polls the queue, runs each message through the same handlers
-the HTTP host uses, and deletes only the messages that actually succeeded (the default) — a failed or
-unrouted message is left on the queue for redelivery/DLQ redrive rather than silently dropped.
-
-## 4. Host it on Kafka
-
-A third script, independent of the other two:
 
 ```python
 # kafka_orders/host.py
 import os
 
 from benzene.core import Container, MessageSender, build_application
-from benzene.kafka import KafkaConsumerApp, KafkaMessageSender, run_consumer_loop
+from benzene.kafka import KafkaConsumerApp, KafkaMessageSender
 from orders_domain import OrdersStartUp
 
 
@@ -217,156 +168,175 @@ def build_kafka_orders_app() -> KafkaConsumerApp:
 
     definition, _ = build_application(OrdersStartUp, overrides=[use_kafka])
     return KafkaConsumerApp.from_definition(definition)
+```
+
+Now the one entry point that runs all three — and the one thing in this whole guide that's easy to
+get wrong:
+
+```python
+# k8s_orders/app.py
+import asyncio
+import os
+
+import uvicorn
+from benzene.aws import run_sqs_consumer_loop
+from benzene.kafka import run_consumer_loop
+from confluent_kafka import Consumer
+
+from http_orders.host import build_http_orders_app
+from kafka_orders.host import build_kafka_orders_app
+from sqs_orders.host import build_sqs_orders_app
 
 
 async def main() -> None:
-    from confluent_kafka import Consumer
+    http_app = build_http_orders_app()
+    sqs_app = build_sqs_orders_app()
+    kafka_app = build_kafka_orders_app()
 
-    consumer = Consumer({
+    import boto3
+
+    sqs_client = boto3.client("sqs")  # default credential chain - an IRSA role on EKS
+    kafka_consumer = Consumer({
         "bootstrap.servers": os.environ["BENZENE_KAFKA_BOOTSTRAP"],
         "group.id": os.environ.get("BENZENE_KAFKA_GROUP", "orders"),
         "enable.auto.commit": False,
         "auto.offset.reset": "earliest",
     })
-    consumer.subscribe([os.environ["BENZENE_KAFKA_CONSUME_TOPIC"]])
-    await run_consumer_loop(build_kafka_orders_app(), consumer)
+    kafka_consumer.subscribe([os.environ["BENZENE_KAFKA_CONSUME_TOPIC"]])
+
+    server = uvicorn.Server(uvicorn.Config(http_app, host="0.0.0.0", port=8080))
+    stop = asyncio.Event()
+
+    async def run_http() -> None:
+        await server.serve()  # returns once uvicorn decides to shut down (its own signal handling)
+        stop.set()
+
+    try:
+        await asyncio.gather(
+            run_http(),
+            run_sqs_consumer_loop(
+                sqs_app, sqs_client, os.environ["BENZENE_SQS_CONSUME_QUEUE_URL"],
+                should_continue=lambda: not stop.is_set(),
+            ),
+            run_consumer_loop(kafka_app, kafka_consumer, should_continue=lambda: not stop.is_set()),
+        )
+    finally:
+        kafka_consumer.close()
 
 
 if __name__ == "__main__":
-    import asyncio
-
     asyncio.run(main())
 ```
 
-```bash
-pip install "benzene-kafka[kafka]"
-python -m kafka_orders.host
-```
+Python's asyncio has one event loop per process — `uvicorn.Server.serve()`, `run_sqs_consumer_loop`,
+and `run_consumer_loop` all genuinely run concurrently on it via `asyncio.gather`, **but only because
+the two consumer loops' underlying `boto3`/`confluent-kafka` calls run through `asyncio.to_thread`
+internally** (inside `benzene.aws.sqs_consumer`/`benzene.kafka.consumer`). Called directly on the
+loop, SQS's `receive_message` (a long-poll, up to 20 seconds) would freeze uvicorn's HTTP handling for
+its whole duration — and Kafka's `consumer.poll` on an idle topic is *worse*: it's a synchronous call
+in a tight loop with no `await` between empty polls at all, so without `to_thread` it would starve
+uvicorn **permanently**, not periodically, the first time the topic went quiet. If you're calling
+these functions, you don't need to do anything about this — it's handled internally — but it's worth
+knowing why `asyncio.gather(server.serve(), sqs_task, kafka_task)` is actually safe here, since the
+naive version of that line is a real trap in most other asyncio + blocking-SDK combinations.
 
-The Benzene topic travels as a Kafka **header** (not the broker-level topic name) — a producer sends
-to whatever physical topic you've provisioned, with a `topic` header naming the Benzene topic
-(`orders:place`), and `run_consumer_loop` reads it from there. This is a genuine divergence from the
-.NET port, where the Kafka topic *is* the literal broker topic name; both are documented port
-divergences, not a bug in either — see each port's own binding docs for why.
+Shutdown: uvicorn owns SIGINT/SIGTERM natively when `server.serve()` runs on the main thread (which it
+does here — nothing in `app.py` starts a new thread). Once it returns, `stop` is set, which both
+consumer loops' `should_continue` observes on their next iteration.
 
-## 5. Containerise all three
+See [Kafka Setup examples](../examples/kafka_orders) for why the Kafka leg's topic travels as a
+record **header** here (not the broker-level topic name) — a genuine, documented divergence from the
+.NET/Go/TypeScript ports, where the Kafka topic *is* the literal broker topic name.
 
-Each host gets its own `Dockerfile`, built against the local `packages/` checkout (or the published
-PyPI names, once these packages are published):
+## 3. Containerise it
+
+One process, one `Dockerfile`, one image — installing all three transports' extras together:
 
 ```dockerfile
-# Api.Dockerfile
+# Dockerfile
 FROM python:3.12-slim
 WORKDIR /app
 COPY packages/benzene-results packages/benzene-results
 COPY packages/benzene-core packages/benzene-core
 COPY packages/benzene-http packages/benzene-http
-RUN pip install --no-cache-dir ./packages/benzene-results ./packages/benzene-core ./packages/benzene-http "uvicorn>=0.30"
+COPY packages/benzene-aws packages/benzene-aws
+COPY packages/benzene-kafka packages/benzene-kafka
+RUN pip install --no-cache-dir \
+      ./packages/benzene-results ./packages/benzene-core ./packages/benzene-http \
+      "./packages/benzene-aws[boto3]" "./packages/benzene-kafka[kafka]" "uvicorn>=0.30"
 COPY examples/orders_domain orders_domain
 COPY examples/http_orders http_orders
+COPY examples/sqs_orders sqs_orders
+COPY examples/kafka_orders kafka_orders
+COPY examples/k8s_orders k8s_orders
 ENV PORT=8080
 EXPOSE 8080
-CMD ["uvicorn", "http_orders.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "-m", "k8s_orders.app"]
 ```
-
-`SqsWorker.Dockerfile` and `KafkaWorker.Dockerfile` follow the same shape, swapping the installed
-package/extra and the `CMD` for `python -m sqs_orders.host` / `python -m kafka_orders.host` — a
-worker has no inbound listener, so there's no `PORT`/`EXPOSE` to set.
 
 ```bash
-docker build -f Api.Dockerfile         -t orders-api:local         .
-docker build -f SqsWorker.Dockerfile   -t orders-sqs-worker:local  .
-docker build -f KafkaWorker.Dockerfile -t orders-kafka-worker:local .
-kind load docker-image orders-api:local orders-sqs-worker:local orders-kafka-worker:local
+docker build -f Dockerfile -t k8s-orders:local .
+kind load docker-image k8s-orders:local
 ```
 
-## 6. Deploy all three
+## 4. Deploy it
 
-`orders-api` gets a `Deployment` + `Service`, same as any HTTP workload. The two workers get a
-`Deployment` each and **no** `Service` — nothing calls a worker pod, it calls out:
+One `Deployment` + `Service` — the SQS and Kafka legs don't get their own, because nothing calls this
+pod over either of them; it calls out:
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: orders-api
+  name: orders-app
 spec:
   replicas: 2
-  selector: { matchLabels: { app: orders-api } }
+  selector: { matchLabels: { app: orders-app } }
   template:
-    metadata: { labels: { app: orders-api } }
+    metadata: { labels: { app: orders-app } }
     spec:
       containers:
-        - name: orders-api
-          image: orders-api:local
+        - name: orders-app
+          image: k8s-orders:local
           ports: [{ containerPort: 8080 }]
-          env: [{ name: PORT, value: "8080" }, { name: BENZENE_ORDERS_EVENTS_URL, value: "http://downstream" }]
+          env:
+            - { name: PORT, value: "8080" }
+            - { name: BENZENE_ORDERS_EVENTS_URL, value: "http://downstream" }
+            - { name: BENZENE_SQS_CONSUME_QUEUE_URL, value: "https://sqs.eu-west-1.amazonaws.com/<account-id>/orders-in" }
+            - { name: BENZENE_SQS_EVENTS_QUEUE_URL, value: "https://sqs.eu-west-1.amazonaws.com/<account-id>/orders-events" }
+            - { name: BENZENE_KAFKA_BOOTSTRAP, value: "kafka-bootstrap.kafka.svc.cluster.local:9092" }
+            - { name: BENZENE_KAFKA_CONSUME_TOPIC, value: "orders-in" }
+            - { name: BENZENE_KAFKA_TOPIC, value: "orders-events" }
           readinessProbe: { tcpSocket: { port: 8080 }, initialDelaySeconds: 3 }
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: orders-api
+  name: orders-app
 spec:
-  selector: { app: orders-api }
+  selector: { app: orders-app }
   ports: [{ port: 80, targetPort: 8080 }]
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: orders-sqs-worker
-spec:
-  replicas: 1
-  selector: { matchLabels: { app: orders-sqs-worker } }
-  template:
-    metadata: { labels: { app: orders-sqs-worker } }
-    spec:
-      containers:
-        - name: orders-sqs-worker
-          image: orders-sqs-worker:local
-          env:
-            - { name: BENZENE_SQS_CONSUME_QUEUE_URL, value: "https://sqs.eu-west-1.amazonaws.com/<account-id>/orders-in" }
-            - { name: BENZENE_SQS_EVENTS_QUEUE_URL, value: "https://sqs.eu-west-1.amazonaws.com/<account-id>/orders-events" }
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: orders-kafka-worker
-spec:
-  replicas: 1
-  selector: { matchLabels: { app: orders-kafka-worker } }
-  template:
-    metadata: { labels: { app: orders-kafka-worker } }
-    spec:
-      containers:
-        - name: orders-kafka-worker
-          image: orders-kafka-worker:local
-          env:
-            - { name: BENZENE_KAFKA_BOOTSTRAP, value: "kafka-bootstrap.kafka.svc.cluster.local:9092" }
-            - { name: BENZENE_KAFKA_CONSUME_TOPIC, value: "orders-in" }
-            - { name: BENZENE_KAFKA_TOPIC, value: "orders-events" }
 ```
 
 ```bash
 kubectl apply -f k8s.yaml
-kubectl get pods   # 4 pods: 2x orders-api, 1x orders-sqs-worker, 1x orders-kafka-worker
+kubectl get pods   # 2 pods: 2x orders-app
 ```
 
-## 7. Watch the same domain run three ways
+## 5. Watch the same domain run three ways
 
 ```bash
-kubectl port-forward service/orders-api 8080:80 &
+kubectl port-forward service/orders-app 8080:80 &
 curl -XPOST localhost:8080/orders -H 'content-type: application/json' -d '{"sku":"espresso","quantity":2}'
 ```
 
 Send a message to the SQS queue or the Kafka topic directly (see [the runnable
 example](../examples/k8s_orders) for exact commands against a local LocalStack/Kafka pair) and the
-**same handler** runs, for a request that never touched HTTP — `kubectl logs deploy/orders-sqs-worker`
-shows it. That's the proof: one domain, three independently deployed, independently scaled entry
-points.
+**same handler** runs, for a request that never touched HTTP — `kubectl logs deploy/orders-app` shows
+it. That's the proof: one domain, one container, three transports.
 
 ```bash
-kubectl scale deploy/orders-kafka-worker --replicas=3   # only the Kafka leg scales
+kubectl scale deploy/orders-app --replicas=4   # scales all three transports' consuming capacity together
 ```
 
 ## Why not just a minimal ASGI app?
@@ -375,6 +345,22 @@ See [Why not just a minimal ASGI app?](getting-started.md#why-not-just-a-minimal
 reasoning this guide exists to prove — the short version: HTTP alone doesn't need Benzene (FastAPI/
 Flask/Starlette already give HTTP its own routing), but the moment a second entry point shows up — a
 queue, a stream — Benzene is the one thing that lets the handler stay unmodified.
+
+## One process, or one per transport?
+
+This guide combines all three transports into a single process because Python's asyncio makes it
+possible, once the consumer loops' blocking calls are correctly offloaded (see section 2). It is not
+the *only* shape, though, and it is not always the right one. Splitting the transports into
+**separate** processes/Deployments ([`http_orders`](../examples/http_orders),
+[`sqs_orders`](../examples/sqs_orders), [`kafka_orders`](../examples/kafka_orders), each already
+runnable standalone, each its own image) is a legitimate alternative: each transport then scales,
+rolls back, and fails independently — a bad Kafka-consumer deploy, or the Kafka leg falling behind
+under load, no longer risks the HTTP leg's availability the way it does when a crash or a
+misbehaving event loop is shared between all three. The tradeoff is real too: more images to build,
+more Deployments to manage. `orders_domain` doesn't change either way — only how many entry points
+and Dockerfiles wrap it. Reach for separate Deployments when the transports' traffic, failure modes,
+or scaling needs genuinely diverge; reach for one process when they don't and the operational
+simplicity of a single image/Deployment is worth more than that independence.
 
 ## Next steps
 
