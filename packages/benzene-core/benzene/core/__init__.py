@@ -30,7 +30,7 @@ from .envelope import (
     resolve_version,
 )
 from .errors import MessageHandlingError
-from .handler import Handler, HandlerDefinition, definition_of, message
+from .handler import Handler, HandlerDefinition, definition_of, infer_request_type, message
 from .health import (
     HEALTH_TOPIC,
     DuplicateHealthCheckError,
@@ -133,6 +133,7 @@ __all__ = [
     "VERSION_HEADER_NAMES",
     "VersionSelector",
     "definition_of",
+    "infer_request_type",
     "encode_body",
     "encode_response",
     "error_payload",

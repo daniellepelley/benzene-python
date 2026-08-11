@@ -8,9 +8,10 @@ explicit registration remains available via :meth:`Registry.register`.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, get_type_hints
 
 from benzene.results import Result
 
@@ -18,6 +19,33 @@ from benzene.results import Result
 Handler = Callable[[Any], Awaitable[Result]]
 
 _BENZENE_MESSAGE_ATTR = "_benzene_message"
+
+
+def infer_request_type(handler: Handler) -> type | None:
+    """Infer a handler's request type from its first parameter's annotation.
+
+    A handler already declares the shape it wants — ``async def place(request: PlaceOrder)`` — so the
+    registration APIs (``@message``, ``Registry.register``, ``HttpRouter.register``) read it straight
+    off the signature instead of making you repeat ``request_type=PlaceOrder``. An explicit
+    ``request_type`` always wins; this only fills the gap when you leave it off.
+
+    Only a **concrete class** is inferred (a ``@dataclass`` or a plain type such as ``dict``), since
+    that is what :func:`~benzene.core.to_request` maps against. A missing annotation, a subscripted
+    generic (``dict[str, Any]``), a union, or an annotation that can't be resolved yields ``None`` — the
+    request then passes through unmapped, exactly as it does today when no ``request_type`` is given.
+    """
+    try:
+        parameters = list(inspect.signature(handler).parameters.values())
+    except (TypeError, ValueError):
+        return None
+    if not parameters:
+        return None
+    try:
+        hints = get_type_hints(handler)
+    except Exception:  # unresolved forward ref, exotic annotation — fall back to no inference
+        return None
+    annotation = hints.get(parameters[0].name)
+    return annotation if isinstance(annotation, type) else None
 
 
 @dataclass(frozen=True)
@@ -46,7 +74,7 @@ def message(
         setattr(
             fn,
             _BENZENE_MESSAGE_ATTR,
-            (topic, version, request_type, response_type),
+            (topic, version, request_type or infer_request_type(fn), response_type),
         )
         return fn
 

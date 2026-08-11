@@ -16,7 +16,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from benzene.core import Handler, HandlerDefinition, definition_of
+from benzene.core import Handler, HandlerDefinition, definition_of, infer_request_type
 
 _HTTP_ROUTES_ATTR = "_benzene_http_routes"
 
@@ -128,7 +128,13 @@ class HttpRouter:
         request_type: type | None = None,
         response_type: type | None = None,
     ) -> HttpRouter:
-        """Explicitly map a route to a topic/handler (no decorators required)."""
+        """Explicitly map a route to a topic/handler (no decorators required).
+
+        ``request_type`` is inferred from the handler's first-parameter annotation when omitted
+        (:func:`~benzene.core.infer_request_type`); pass it explicitly to override.
+        """
+        if request_type is None:
+            request_type = infer_request_type(handler)
         definition = HandlerDefinition(topic, handler, version, request_type, response_type)
         self._register(method, path, definition)
         return self

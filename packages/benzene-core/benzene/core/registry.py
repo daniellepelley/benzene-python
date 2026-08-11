@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
-from .handler import Handler, HandlerDefinition, definition_of
+from .handler import Handler, HandlerDefinition, definition_of, infer_request_type
 
 #: How the router resolves a ``(topic, requested version)`` to a handler (versioning.md §3). A
 #: selector is a plain callable, so an application can supply its own policy.
@@ -62,7 +62,13 @@ class Registry:
         request_type: type | None = None,
         response_type: type | None = None,
     ) -> Registry:
-        """Explicitly register a handler (the first-class registration path)."""
+        """Explicitly register a handler (the first-class registration path).
+
+        ``request_type`` is inferred from the handler's first-parameter annotation when omitted
+        (:func:`~benzene.core.infer_request_type`); pass it explicitly to override.
+        """
+        if request_type is None:
+            request_type = infer_request_type(handler)
         return self.add_definition(
             HandlerDefinition(topic, handler, version, request_type, response_type)
         )
@@ -81,9 +87,7 @@ class Registry:
         key = (definition.topic, definition.version)
         if key in self._by_key:
             where = f"topic {definition.topic!r}" + (
-                f" version {definition.version!r}"
-                if definition.version
-                else " (unversioned)"
+                f" version {definition.version!r}" if definition.version else " (unversioned)"
             )
             raise DuplicateHandlerError(
                 f"A handler is already registered for {where}. Each (topic, version) pair maps to "
