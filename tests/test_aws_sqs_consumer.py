@@ -15,6 +15,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+import benzene.aws.sqs_consumer as sqs_consumer_module
+import pytest
 from benzene.aws import SqsConsumerApp, decode_sqs_message, run_sqs_consumer_loop
 from benzene.aws.testing import RecordingSqsClient, SqsMessageBuilder
 from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
@@ -84,8 +86,18 @@ def test_loop_deletes_only_successful_messages() -> None:
         )
 
     app = SqsConsumerApp(_app(flaky))
-    good = SqsMessageBuilder("orders:place").with_body({"sku": "ok"}).with_receipt_handle("r-good").build()
-    bad = SqsMessageBuilder("orders:place").with_body({"sku": "bad"}).with_receipt_handle("r-bad").build()
+    good = (
+        SqsMessageBuilder("orders:place")
+        .with_body({"sku": "ok"})
+        .with_receipt_handle("r-good")
+        .build()
+    )
+    bad = (
+        SqsMessageBuilder("orders:place")
+        .with_body({"sku": "bad"})
+        .with_receipt_handle("r-bad")
+        .build()
+    )
     client = RecordingSqsClient(messages=[good, bad])
 
     polls = {"n": 0}
@@ -103,7 +115,9 @@ def test_loop_deletes_only_successful_messages() -> None:
 
 def test_loop_with_delete_disabled_lets_the_caller_control_deletion() -> None:
     app = SqsConsumerApp(_app())
-    message = SqsMessageBuilder("orders:place").with_body({"sku": "A"}).with_receipt_handle("r1").build()
+    message = (
+        SqsMessageBuilder("orders:place").with_body({"sku": "A"}).with_receipt_handle("r1").build()
+    )
     client = RecordingSqsClient(messages=[message])
     seen: list[Any] = []
 
@@ -119,3 +133,32 @@ def test_loop_with_delete_disabled_lets_the_caller_control_deletion() -> None:
     )
     assert [r for _, r in seen][0].is_successful
     assert client.deleted == []  # delete=False: the caller owns deletion, the loop never does it
+
+
+def test_loop_runs_the_blocking_boto3_calls_via_to_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The receive/delete boto3 calls must run via asyncio.to_thread (off the event loop) so a ~20s
+    # long poll can't starve a coroutine sharing the loop, e.g. uvicorn in the k8s_orders example.
+    routed: list[str] = []
+    real_to_thread = asyncio.to_thread
+
+    async def spy(func: Any, *args: Any, **kwargs: Any) -> Any:
+        routed.append(getattr(func, "__name__", repr(func)))
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(sqs_consumer_module.asyncio, "to_thread", spy)
+
+    app = SqsConsumerApp(_app())
+    message = (
+        SqsMessageBuilder("orders:place").with_body({"sku": "A"}).with_receipt_handle("r1").build()
+    )
+    client = RecordingSqsClient(messages=[message])
+
+    asyncio.run(
+        run_sqs_consumer_loop(
+            app, client, "https://sqs.example/q", should_continue=lambda: bool(client.messages)
+        )
+    )
+
+    # Both blocking SDK calls were dispatched off the event loop, in order (receive then delete).
+    assert routed == ["receive_message", "delete_message"]
+    assert client.deleted == ["r1"]
