@@ -24,16 +24,20 @@ from .discovery import ServiceEndpoint, _str_metadata
 class AwsCloudMapDiscovery:
     """Discovers endpoints from an AWS Cloud Map namespace (Benzene.Mesh.Discovery.Aws).
 
-    Uses the ``servicediscovery`` API: it lists the services in ``namespace_name`` and, for each,
+    Uses the ``servicediscovery`` API: it lists the services in ``namespace_id`` and, for each,
     the registered instances, turning every healthy instance into a :class:`ServiceEndpoint`. The
     address is the instance's ``AWS_INSTANCE_CNAME`` / ``AWS_INSTANCE_IPV4`` (plus ``AWS_INSTANCE_PORT``
     when present) — the attributes Cloud Map exposes for routing — and the remaining attributes ride
     along as metadata. ``boto3`` is the optional ``[aws]`` extra, imported lazily; inject ``client``
     to run against a fake with no SDK present.
+
+    ``namespace_id`` is the Cloud Map namespace **id** (``ns-xxxxxxxx``), not its human name — the
+    ``list_services`` ``NAMESPACE_ID`` filter matches on the id. Resolve a name to an id with
+    ``servicediscovery.list_namespaces`` if you only have the name.
     """
 
-    def __init__(self, namespace_name: str, *, client: Any | None = None) -> None:
-        self._namespace_name = namespace_name
+    def __init__(self, namespace_id: str, *, client: Any | None = None) -> None:
+        self._namespace_id = namespace_id
         self._client = client
 
     def _service_discovery(self) -> Any:
@@ -45,7 +49,7 @@ class AwsCloudMapDiscovery:
 
     async def discover(self) -> list[ServiceEndpoint]:
         client = self._service_discovery()
-        filters = [{"Name": "NAMESPACE_ID", "Values": [self._namespace_name]}]
+        filters = [{"Name": "NAMESPACE_ID", "Values": [self._namespace_id]}]
         endpoints: list[ServiceEndpoint] = []
         for service in client.list_services(Filters=filters).get("Services", []):
             name = service.get("Name")

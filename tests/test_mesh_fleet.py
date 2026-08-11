@@ -105,7 +105,7 @@ class _FakeCloudMapClient:
 
 def test_aws_cloud_map_discovery_maps_instances_to_endpoints():
     fake = _FakeCloudMapClient()
-    discovery = AwsCloudMapDiscovery("mesh-namespace", client=fake)
+    discovery = AwsCloudMapDiscovery("ns-mesh12345", client=fake)  # a Cloud Map namespace id
 
     endpoints = run(discovery.discover())
 
@@ -120,7 +120,7 @@ def test_aws_cloud_map_discovery_maps_instances_to_endpoints():
             },
         )
     ]
-    assert fake.filters == [{"Name": "NAMESPACE_ID", "Values": ["mesh-namespace"]}]
+    assert fake.filters == [{"Name": "NAMESPACE_ID", "Values": ["ns-mesh12345"]}]
 
 
 class _FakeCoreV1Api:

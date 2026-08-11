@@ -43,6 +43,12 @@ def api_gateway_authorizer(
     and returns an IAM policy — *Allow* on success with the claims echoed under ``context``, *Deny*
     otherwise — scoped to ``event["methodArn"]``. ``principal_id_claim`` selects the claim used for the
     policy's ``principalId``. Mirrors ``ApiGatewayCustomAuthorizer``.
+
+    The returned ``handler`` is **synchronous** — the shape AWS Lambda invokes — so an async
+    ``validate`` is driven to completion internally. Call it from a synchronous context (as the Lambda
+    runtime does); invoking it from inside a running event loop with an async ``validate`` will raise,
+    since a coroutine cannot be driven synchronously from within one. A sync ``validate`` (e.g.
+    :class:`~benzene.auth.JwtValidator`) has no such constraint.
     """
 
     def handler(event: Mapping[str, Any], context: Any = None) -> dict[str, Any]:

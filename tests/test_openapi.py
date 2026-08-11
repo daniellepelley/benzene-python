@@ -142,6 +142,38 @@ def test_versioned_topics_get_distinct_paths_and_ids() -> None:
     assert versioned["operationId"] == "ordersPlace_v2" == operation_id("orders:place", "v2")
 
 
+def test_separator_only_topic_collision_is_disambiguated() -> None:
+    # ``orders:place`` and ``orders-place`` both PascalCase to ``OrdersPlace`` / ``ordersPlace``.
+    # Distinct paths must keep distinct, non-overwriting schemas and unique operationIds.
+    registry = (
+        Registry()
+        .register("orders:place", place, request_type=PlaceOrder, response_type=OrderPlaced)
+        .register("orders-place", ship, request_type=ShipOrder, response_type=OrderShipped)
+    )
+    document = openapi_document(registry)
+
+    # Both topics keep their own path.
+    assert set(document["paths"]) == {
+        "/benzene/invoke/orders:place",
+        "/benzene/invoke/orders-place",
+    }
+    # operationIds are unique across the whole document (OpenAPI requires it).
+    op_ids = [item["post"]["operationId"] for item in document["paths"].values()]
+    assert len(op_ids) == len(set(op_ids))
+
+    # Neither topic's request schema was overwritten: each $ref resolves to a component whose value
+    # matches that handler's own json_schema (not the other's).
+    schemas = document["components"]["schemas"]
+    for path, expected in (
+        ("/benzene/invoke/orders:place", json_schema(PlaceOrder)),
+        ("/benzene/invoke/orders-place", json_schema(ShipOrder)),
+    ):
+        ref = document["paths"][path]["post"]["requestBody"]["content"]["application/json"][
+            "schema"
+        ]["$ref"]
+        assert schemas[ref.removeprefix("#/components/schemas/")] == expected
+
+
 def test_custom_server_paths_relocate_the_invoke_base() -> None:
     document = openapi_document(_registry(), server_paths=StandardPaths(prefix="/api"))
     assert "/api/invoke/orders:place" in document["paths"]

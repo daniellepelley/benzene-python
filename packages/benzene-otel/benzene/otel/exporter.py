@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
 from benzene.mesh import TraceEvent
@@ -76,11 +76,22 @@ class _StatusCode:
 
 
 def _start_nanos(started_at: str | None) -> int | None:
-    """Parse a :class:`TraceEvent`'s ISO-8601 ``started_at`` (``...Z``) to Unix epoch nanoseconds."""
+    """Parse a :class:`TraceEvent`'s ISO-8601 ``started_at`` (``...Z``) to Unix epoch nanoseconds.
+
+    An absent or unparseable timestamp yields ``None`` so the span is still exported (the SDK defaults
+    its start) rather than being dropped, and a naive value is read as UTC — both matching the fleet
+    trace-mappers' :func:`~benzene.mesh_fleet.mappers._epoch_seconds`, so the same event maps to the
+    same instant whichever exporter sees it.
+    """
     if not started_at:
         return None
     # trace_middleware writes ``...+00:00`` as ``Z``; fromisoformat wants the offset spelled out.
-    parsed = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    try:
+        parsed = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)  # naive == UTC, like the fleet mappers
     return int(parsed.timestamp() * _NANOS_PER_SECOND)
 
 

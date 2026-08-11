@@ -80,17 +80,37 @@ def openapi_document(
 
     paths: dict[str, Any] = {}
     schemas: dict[str, Schema] = {_ERROR_SCHEMA_NAME: dict(_ERROR_SCHEMA)}
+    used_operation_ids: set[str] = set()
 
     for definition in definitions:
-        request_name = _schema_name(definition.topic, definition.version, "Request")
-        response_name = _schema_name(definition.topic, definition.version, "Response")
+        # Two topics that differ only by separator (e.g. ``orders:place`` vs ``orders-place``) camel/
+        # PascalCase to the same base, which would silently overwrite a component schema and emit a
+        # duplicate operationId (OpenAPI requires uniqueness). The raw-topic *path* still distinguishes
+        # them, so disambiguate the derived names against those already emitted — deterministic because
+        # definitions are walked in sorted (topic, version) order, so the first claimant keeps the clean
+        # name and later ones gain a ``_2``/``_3`` suffix.
+        request_base = _schema_name(definition.topic, definition.version, "Request")
+        response_base = _schema_name(definition.topic, definition.version, "Response")
+        operation_base = operation_id(definition.topic, definition.version)
+        n = 0
+        while (
+            _suffixed(request_base, n) in schemas
+            or _suffixed(response_base, n) in schemas
+            or _suffixed(operation_base, n) in used_operation_ids
+        ):
+            n += 1
+        request_name = _suffixed(request_base, n)
+        response_name = _suffixed(response_base, n)
+        operation = _suffixed(operation_base, n)
+        used_operation_ids.add(operation)
+
         schemas[request_name] = json_schema(definition.request_type)
         schemas[response_name] = json_schema(definition.response_type)
 
         path = f"{invoke_base}/{definition.topic}"
         if definition.version:
             path = f"{path}/{definition.version}"
-        paths[path] = {"post": _operation(definition, request_name, response_name)}
+        paths[path] = {"post": _operation(definition, operation, request_name, response_name)}
 
     return {
         "openapi": OPENAPI_VERSION,
@@ -102,23 +122,30 @@ def openapi_document(
 
 
 def operation_id(topic: str, version: str = "") -> str:
-    """The stable ``operationId`` for a ``(topic, version)`` — camelCased topic, version suffixed.
+    """The canonical ``operationId`` for a ``(topic, version)`` — camelCased topic, version suffixed.
 
-    e.g. ``("orders:place", "v2") -> "ordersPlace_v2"``. Deterministic and unique per registered pair.
+    e.g. ``("orders:place", "v2") -> "ordersPlace_v2"``. Deterministic per pair; when two topics would
+    camelCase to the same id, :func:`openapi_document` appends a ``_2``/``_3`` suffix so the emitted
+    document keeps operationIds unique (OpenAPI requires it).
     """
     base = _camel(_tokens(topic)) or "operation"
     return f"{base}_{_slug(version)}" if version else base
 
 
+def _suffixed(name: str, n: int) -> str:
+    """``name`` for the first (``n == 0``) claimant, else a ``_2``/``_3``… disambiguation suffix."""
+    return name if n == 0 else f"{name}_{n + 1}"
+
+
 def _operation(
-    definition: HandlerDefinition, request_name: str, response_name: str
+    definition: HandlerDefinition, operation: str, request_name: str, response_name: str
 ) -> dict[str, Any]:
     """The OpenAPI Operation object for one registered handler."""
     summary = f"Invoke topic {definition.topic}"
     if definition.version:
         summary = f"{summary} (version {definition.version})"
     return {
-        "operationId": operation_id(definition.topic, definition.version),
+        "operationId": operation,
         "summary": summary,
         "requestBody": {
             "required": True,

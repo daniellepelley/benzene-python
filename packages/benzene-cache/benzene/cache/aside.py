@@ -28,8 +28,9 @@ async def get_or_load(
 
     On a hit the value comes straight from ``cache`` and ``loader`` is never called. On a miss
     ``loader`` runs — it may be sync or async (an awaitable return is awaited) — and its value is
-    written back under ``key`` with ``ttl`` before being returned. A loader that yields ``None`` is
-    honoured as-is: ``None`` is cached like any other value.
+    written back under ``key`` with ``ttl`` before being returned. Note that ``None`` is the cache's
+    miss sentinel (:meth:`Cache.get` returns ``None`` for an absent key), so a loader that yields
+    ``None`` is returned to *this* caller but re-loads on the next call rather than replaying.
     """
     cached = await cache.get(key)
     if cached is not None:

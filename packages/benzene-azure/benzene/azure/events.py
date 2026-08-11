@@ -46,21 +46,6 @@ _CLOUD_EVENT_ATTRIBUTES = frozenset(
     }
 )
 
-#: The native Event Grid schema envelope fields; ``data`` is the payload, the rest is metadata.
-_EVENT_GRID_ATTRIBUTES = frozenset(
-    {
-        "id",
-        "topic",
-        "subject",
-        "eventtype",
-        "eventtime",
-        "dataversion",
-        "metadataversion",
-        "data",
-        "headers",
-    }
-)
-
 
 def body_to_text(body: Any) -> str:
     """Decode a native message body (bytes / str / iterable of bytes) to text."""
