@@ -21,8 +21,8 @@ capability, put the handler in `orders_domain` and wire it from the hosts rather
 | Example | Host | Transports | Package |
 |---|---|---|---|
 | [`gcp_orders/`](gcp_orders) | Google Cloud Functions | HTTP + Pub/Sub + Pub/Sub egress | `benzene-gcp` |
-| [`aws_orders/`](aws_orders) | AWS Lambda | API Gateway (HTTP) + SQS + SNS + SNS egress | `benzene-aws` |
-| [`azure_orders/`](azure_orders) | Azure Functions | HTTP + Service Bus + Event Hub + Service Bus egress | `benzene-azure` |
+| [`aws_orders/`](aws_orders) | AWS Lambda | API Gateway (HTTP) + SQS + SNS + EventBridge + SNS egress | `benzene-aws` |
+| [`azure_orders/`](azure_orders) | Azure Functions | HTTP + Service Bus + Event Hub + Event Grid + Service Bus egress | `benzene-azure` |
 
 ## Non-cloud hosts
 
@@ -31,6 +31,14 @@ capability, put the handler in `orders_domain` and wire it from the hosts rather
 | [`http_orders/`](http_orders) | standalone HTTP server | HTTP (ASGI) + HTTP egress | `benzene-http` |
 | [`grpc_orders/`](grpc_orders) | gRPC server | gRPC unary (method = topic) + faked egress | `benzene-grpc[transport]` |
 | [`kafka_orders/`](kafka_orders) | self-hosted Kafka consumer | Kafka consume (topic = header) + Kafka produce egress | `benzene-kafka` |
+| [`rabbitmq_orders/`](rabbitmq_orders) | self-hosted RabbitMQ consumer | AMQP consume (topic = header) + AMQP publish egress | `benzene-rabbitmq` |
+
+The [`rabbitmq_orders`](rabbitmq_orders) example mounts the same `orders_domain` on the **RabbitMQ**
+binding: a self-hosted consumer that turns each delivery into one pipeline invocation (at-least-once —
+ack on success, nack on failure) and a `RabbitMqMessageSender` that publishes `orders:created`. Like
+Kafka it owns its own loop (no HTTP surface) and is tested through the shared harness
+(`create_test_host(...).build_rabbitmq()` + `send_rabbitmq`) — only that one call differs from the
+Kafka suite.
 
 The [`http_orders`](http_orders) example is the Python analog of the .NET `Asp` example: it mounts the
 same `orders_domain` directly on `benzene-http`'s ASGI binding (no cloud runtime) and tests it through
@@ -54,18 +62,19 @@ Beyond the host examples, these demonstrate a cross-cutting Benzene *pattern* ra
 | [`mesh_fleet/`](mesh_fleet) | a multi-service mesh: descriptors, tracing, and a collector fleet view | `benzene-mesh` |
 | [`mesh_dashboard/`](mesh_dashboard) | the observer side: project a mesh into the full mesh-ui artifact set (schemas, health, topology, usage) | `benzene-mesh` |
 
-## Not yet — awaiting adapter packages
+## Candidate pattern examples
 
-The .NET repo ships several more pattern examples that this port cannot build *faithfully* yet,
-because the port's [golden rule](../AGENTS.md) is to port from the .NET original rather than design
-from scratch — and the adapter packages they depend on have not been ported to Python. These are
-**deliberately deferred**, not overlooked, and land when their package does (see the
-[roadmap](../README.md#roadmap)):
+The .NET repo ships more pattern examples than this port has yet written up. The adapter packages
+they need have **now all shipped** (see the [roadmap](../README.md#roadmap)), so these are unblocked —
+a natural next addition rather than a limitation:
 
-| Deferred example | Needs | Why it can't be faithful yet |
+| Candidate example | Package (now shipped) | Notes |
 |---|---|---|
-| Saga | a `benzene-saga` orchestration package | no saga primitives exist in this port |
-| OpenTelemetry | a `benzene-opentelemetry` adapter | no OTel exporter/adapter exists in this port |
+| Saga | `benzene-resilience` (`Saga`) | in-process compensating rollback — see the package's tests for the shape |
+| OpenTelemetry | `benzene-otel` (`OtelTraceExporter`) | export the port's existing spans through a real OTel SDK |
+| Auth | `benzene-auth` | Basic/JWT interception + an API Gateway authorizer |
+| Caching | `benzene-cache` | cache-aside over an in-memory or Redis backend |
+| OpenAPI | `benzene-openapi` | project the registry into an OpenAPI 3.1 document |
 
 Payload **casting** with caster chaining (the .NET `Versioning` example's "Mechanism B") is a natural
 extension of the [`versioning`](versioning) example once a dedicated casting example is warranted — the

@@ -13,9 +13,14 @@ dependencies = [
     # The AWS Lambda host + API Gateway/SQS/SNS bindings. Add the [boto3] extra
     # (benzene-aws[boto3]) when you register a real SNS/SQS outbound client for egress.
     "benzene-aws>=0.0.1",
-{%- else %}
+{%- elif transport == "grpc" %}
     # The gRPC host; the [transport] extra pulls in grpcio (the server/client transport).
     "benzene-grpc[transport]>=0.0.1",
+{%- else %}
+    # The self-hosted {% if transport == "kafka" %}Kafka{% else %}RabbitMQ{% endif %} consumer host. Add the [{{ transport }}] extra
+    # (benzene-{{ transport }}[{{ transport }}]) to pull in the real client ({% if transport == "kafka" %}confluent-kafka{% else %}pika{% endif %}), used by
+    # ``python -m {{ project_slug }}.main`` and by any {% if transport == "kafka" %}KafkaMessageSender{% else %}RabbitMqMessageSender{% endif %} you register for egress.
+    "benzene-{{ transport }}>=0.0.1",
 {%- endif %}
 ]
 
@@ -35,8 +40,10 @@ test = [
 #               -e /path/to/benzene-python/packages/benzene-http \
 {%- if transport in ("aws-apigateway", "aws-sqs") %}
 #               -e /path/to/benzene-python/packages/benzene-aws \
-{%- else %}
+{%- elif transport == "grpc" %}
 #               -e /path/to/benzene-python/packages/benzene-grpc \
+{%- else %}
+#               -e /path/to/benzene-python/packages/benzene-{{ transport }} \
 {%- endif %}
 {%- if include_tests %}
 #               -e /path/to/benzene-python/packages/benzene-testing \

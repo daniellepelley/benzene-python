@@ -59,6 +59,8 @@ transport:
     "AWS Lambda + API Gateway (HTTP request/response)": aws-apigateway
     "AWS Lambda + SQS (fire-and-forget queue consumer)": aws-sqs
     "gRPC server (method = topic, host anywhere)": grpc
+    "Kafka consumer (self-hosted, topic-driven)": kafka
+    "RabbitMQ consumer (self-hosted, topic-driven)": rabbitmq
 
 include_tests:
   type: bool

@@ -13,7 +13,7 @@ from benzene.aws import to_lambda_handler
 from .host import build_app
 
 handler = to_lambda_handler(build_app())
-{%- else -%}
+{%- elif transport == "grpc" -%}
 """gRPC server entry point — run ``python -m {{ project_slug }}.main`` to serve.
 
 Registers a real ``GrpcMessageSender`` for egress in production if this service calls out to a next
@@ -34,4 +34,59 @@ def serve(bind: str = "[::]:50051") -> None:
 
 if __name__ == "__main__":
     serve()
+{%- else -%}
+{% set broker = "Kafka" if transport == "kafka" else "RabbitMQ" -%}
+"""{{ broker }} consumer entry point — run ``python -m {{ project_slug }}.main`` to serve.
+
+Opens a real {{ broker }} client and drives :func:`~benzene.{{ transport }}.run_consumer_loop`, which turns
+each {% if transport == "kafka" %}record{% else %}delivery{% endif %} into one pipeline invocation and {% if transport == "kafka" %}commits the offset{% else %}acks it{% endif %} on success (at-least-once).
+Requires the real client (the ``benzene-{{ transport }}[{{ transport }}]`` extra) and a broker.
+"""
+
+from __future__ import annotations
+
+import os
+
+from benzene.{{ transport }} import run_consumer_loop
+
+from .host import build_consumer_app
+
+
+async def main() -> None:  # pragma: no cover - the real broker entry point
+{%- if transport == "kafka" %}
+    from confluent_kafka import Consumer
+
+    consumer = Consumer(
+        {
+            "bootstrap.servers": os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092"),
+            "group.id": os.environ.get("KAFKA_GROUP", "{{ project_slug }}"),
+            "enable.auto.commit": False,  # the loop commits on success (at-least-once)
+            "auto.offset.reset": "earliest",
+        }
+    )
+    consumer.subscribe([os.environ["KAFKA_CONSUME_TOPIC"]])
+    try:
+        await run_consumer_loop(build_consumer_app(), consumer)
+    finally:
+        consumer.close()
+{%- else %}
+    import pika
+
+    connection = pika.BlockingConnection(
+        pika.ConnectionParameters(host=os.environ.get("RABBITMQ_URL", "localhost"))
+    )
+    channel = connection.channel()
+    queue = os.environ["RABBITMQ_QUEUE"]
+    channel.queue_declare(queue=queue, durable=True)
+    try:
+        await run_consumer_loop(build_consumer_app(), channel, queue=queue)
+    finally:
+        connection.close()
+{%- endif %}
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import asyncio
+
+    asyncio.run(main())
 {%- endif %}

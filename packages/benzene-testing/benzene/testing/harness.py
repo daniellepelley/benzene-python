@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from benzene.grpc.testing import GrpcTestHost
     from benzene.http.testing import HttpTestHost
     from benzene.kafka.testing import KafkaTestHost
+    from benzene.rabbitmq.testing import RabbitMqTestHost
 
 
 class TestHostBuilder:
@@ -144,6 +145,25 @@ class TestHostBuilder:
             ) from ex
         definition, scope = self._build()
         host = KafkaTestHost(KafkaConsumerApp.from_definition(definition))
+        host.scope = scope
+        return host
+
+    def build_rabbitmq(self) -> RabbitMqTestHost:
+        """Specialize to a self-hosted RabbitMQ consumer test host (requires ``benzene-rabbitmq``).
+
+        The RabbitMQ binding is a consumer loop, not an HTTP host, so there is no router to mount: the
+        registry is driven one delivery at a time through a :class:`RabbitMqConsumerApp`, in memory.
+        Feed deliveries with ``await host.send_rabbitmq(topic, body, headers)``.
+        """
+        try:
+            from benzene.rabbitmq import RabbitMqConsumerApp
+            from benzene.rabbitmq.testing import RabbitMqTestHost
+        except ImportError as ex:  # pragma: no cover - environment-specific
+            raise ImportError(
+                "build_rabbitmq() requires the 'benzene-rabbitmq' package to be installed"
+            ) from ex
+        definition, scope = self._build()
+        host = RabbitMqTestHost(RabbitMqConsumerApp.from_definition(definition))
         host.scope = scope
         return host
 

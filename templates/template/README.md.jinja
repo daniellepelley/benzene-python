@@ -1,7 +1,7 @@
 # {{ project_name }}
 
 A [Benzene](https://github.com/daniellepelley/benzene-python) service on
-{% if transport == "aws-apigateway" %}**AWS Lambda**, triggered by **API Gateway** HTTP requests{% elif transport == "aws-sqs" %}**AWS Lambda**, triggered by **SQS**{% else %}**gRPC** (method = topic){% endif %},
+{% if transport == "aws-apigateway" %}**AWS Lambda**, triggered by **API Gateway** HTTP requests{% elif transport == "aws-sqs" %}**AWS Lambda**, triggered by **SQS**{% elif transport == "grpc" %}**gRPC** (method = topic){% elif transport == "kafka" %}a self-hosted **Kafka** consumer (topic-driven){% else %}a self-hosted **RabbitMQ** consumer (topic-driven){% endif %},
 generated from the Benzene Python `{{ transport }}` template.
 
 ## Layout
@@ -10,8 +10,8 @@ generated from the Benzene Python `{{ transport }}` template.
 {{ project_slug }}/
   handlers.py   # your logic — the demo Greeter service + hello handler (replace these)
   startup.py    # the composition root ({{ startup_class }}) — every host and test boots from it
-  host.py       # {% if transport in ("aws-apigateway", "aws-sqs") %}builds the AWS Lambda app{% else %}builds the gRPC server{% endif %} (the only transport-specific file)
-  main.py       # {% if transport in ("aws-apigateway", "aws-sqs") %}Lambda entry point ({{ project_slug }}.main.handler){% else %}server entry point (python -m {{ project_slug }}.main){% endif %}
+  host.py       # {% if transport in ("aws-apigateway", "aws-sqs") %}builds the AWS Lambda app{% elif transport == "grpc" %}builds the gRPC server{% else %}builds the consumer app{% endif %} (the only transport-specific file)
+  main.py       # {% if transport in ("aws-apigateway", "aws-sqs") %}Lambda entry point ({{ project_slug }}.main.handler){% else %}consumer/server entry point (python -m {{ project_slug }}.main){% endif %}
 {%- if include_tests %}
 tests/
   test_hello.py # component test: drives the demo handler through the real pipeline
@@ -29,8 +29,10 @@ pip install -e /path/to/benzene-python/packages/benzene-core \
             -e /path/to/benzene-python/packages/benzene-http \
 {%- if transport in ("aws-apigateway", "aws-sqs") %}
             -e /path/to/benzene-python/packages/benzene-aws \
-{%- else %}
+{%- elif transport == "grpc" %}
             -e /path/to/benzene-python/packages/benzene-grpc \
+{%- else %}
+            -e /path/to/benzene-python/packages/benzene-{{ transport }} \
 {%- endif %}
 {%- if include_tests %}
             -e /path/to/benzene-python/packages/benzene-testing \
@@ -53,7 +55,7 @@ pytest
 
 The component test boots the **same** app `{{ project_slug }}/startup.py` configures for a real
 deployment, swaps the `Greeter` for a spy, then pushes a message through the whole Benzene pipeline
-via the {% if transport == "aws-apigateway" %}API Gateway{% elif transport == "aws-sqs" %}SQS{% else %}gRPC{% endif %} front door and asserts the handler ran.
+via the {% if transport == "aws-apigateway" %}API Gateway{% elif transport == "aws-sqs" %}SQS{% elif transport == "grpc" %}gRPC{% elif transport == "kafka" %}Kafka{% else %}RabbitMQ{% endif %} front door and asserts the handler ran.
 
 {% endif -%}
 ## Run / deploy
@@ -67,7 +69,7 @@ Point your Lambda function's handler at `{{ project_slug }}.main.handler` and ad
 mapping. Each message is routed by its `topic` message attribute to the matching handler; failures
 are reported via the SQS partial-batch response. See the
 [AWS host guide](https://github.com/daniellepelley/benzene-python/blob/main/examples/aws_orders).
-{%- else -%}
+{%- elif transport == "grpc" -%}
 ```bash
 python -m {{ project_slug }}.main      # serves on [::]:50051
 ```
@@ -75,6 +77,28 @@ python -m {{ project_slug }}.main      # serves on [::]:50051
 Every Benzene topic is one generic gRPC unary method (`/benzene.Benzene/<topic>`). A client is a
 `MessageSender` over a channel — see the
 [gRPC example](https://github.com/daniellepelley/benzene-python/blob/main/examples/grpc_orders).
+{%- elif transport == "kafka" -%}
+```bash
+pip install "benzene-kafka[kafka]"
+export KAFKA_BOOTSTRAP=localhost:9092
+export KAFKA_CONSUME_TOPIC=hello-in      # the physical Kafka topic to consume
+python -m {{ project_slug }}.main
+```
+
+The service owns its own loop: `run_consumer_loop` subscribes a consumer, dispatches one record at a
+time by its `topic` header, and commits the offset on success (at-least-once). There is no HTTP surface.
+See the [Kafka example](https://github.com/daniellepelley/benzene-python/blob/main/examples/kafka_orders).
+{%- else -%}
+```bash
+pip install "benzene-rabbitmq[rabbitmq]"
+export RABBITMQ_URL=localhost
+export RABBITMQ_QUEUE=hello-in           # the queue to consume
+python -m {{ project_slug }}.main
+```
+
+The service owns its own loop: `run_consumer_loop` pulls a delivery off the queue, dispatches one at a
+time by its `topic` header, and acks it on success (at-least-once). There is no HTTP surface. See the
+[RabbitMQ example](https://github.com/daniellepelley/benzene-python/blob/main/examples/rabbitmq_orders).
 {%- endif %}
 
 ## Where to go next

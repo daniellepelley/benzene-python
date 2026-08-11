@@ -59,6 +59,8 @@ toggle that omits the `tests/` directory (and its dev-deps) when off.
 | `aws-apigateway` | AWS Lambda behind API Gateway (HTTP)             | `GET /hello/{name}` route     |
 | `aws-sqs`        | AWS Lambda triggered by SQS (fire-and-forget)    | `hello:world` topic           |
 | `grpc`           | a gRPC server (method = topic, host anywhere)    | `hello:world` topic           |
+| `kafka`          | a self-hosted Kafka consumer (topic-driven)      | `hello:world` topic           |
+| `rabbitmq`       | a self-hosted RabbitMQ consumer (topic-driven)   | `hello:world` topic           |
 
 These are the **common cross-language core** every Benzene port ships as starters. The generated
 project's own `README.md` covers deploying/running that specific transport.
@@ -83,7 +85,8 @@ my-service/
 The component test mirrors the .NET templates' pattern: boot the **same** app `StartUp` configures
 for a real deployment via `create_test_host(StartUp)`, override the `Greeter` with a spy through the
 `with_services` seam, then push a message through the whole pipeline via the transport's own front
-door (`send_http` / `send_sqs` / `send_grpc`) and assert the handler ran.
+door (`send_http` / `send_sqs` / `send_grpc` / `send_kafka` / `send_rabbitmq`) and assert the handler
+ran.
 
 ## Published vs. local dependencies
 

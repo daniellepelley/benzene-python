@@ -21,7 +21,7 @@ def build_app() -> AwsLambdaApp:
         application=application_from(definition),
         standard_paths=definition.standard_paths,
     )
-{%- else -%}
+{%- elif transport == "grpc" -%}
 """gRPC host wiring: boot the shared ``{{ startup_class }}`` and serve it over gRPC.
 
 Deployment and tests build the app from the *same* composition root (``{{ startup_class }}``); a test
@@ -55,4 +55,31 @@ def build_server(bind: str = "[::]:50051", *, max_workers: int = 4) -> tuple[Any
     add_benzene_handler(server, application_from(definition))
     port = server.add_insecure_port(bind)
     return server, port
+{%- else -%}
+{% set consumer_app = "KafkaConsumerApp" if transport == "kafka" else "RabbitMqConsumerApp" -%}
+{% set broker = "Kafka" if transport == "kafka" else "RabbitMQ" -%}
+"""{{ broker }} host wiring: boot the shared ``{{ startup_class }}`` and run it as a self-hosted consumer.
+
+Deployment and tests build the app from the *same* composition root (``{{ startup_class }}``); a test
+overrides a registration with a fake, nothing else changes. Only this file is {{ broker }}-specific.
+
+Unlike the cloud hosts (triggered by a runtime), a {{ broker }} service owns its own loop: it subscribes a
+consumer and runs :func:`~benzene.{{ transport }}.run_consumer_loop`, which turns each {% if transport == "kafka" %}record{% else %}delivery{% endif %} into one
+pipeline invocation. There is no HTTP surface — the demo handler is reached over messages whose ``topic``
+header names the Benzene topic (``hello:world``). If this service calls out to a next hop, register a
+``{% if transport == "kafka" %}KafkaMessageSender{% else %}RabbitMqMessageSender{% endif %}`` for egress in ``startup.py`` (the demo has none).
+"""
+
+from __future__ import annotations
+
+from benzene.core import build_application
+from benzene.{{ transport }} import {{ consumer_app }}
+
+from .startup import {{ startup_class }}
+
+
+def build_consumer_app() -> {{ consumer_app }}:
+    """Build the {{ broker }} consumer app for {{ project_name }}, booting from ``{{ startup_class }}``."""
+    definition, _ = build_application({{ startup_class }})
+    return {{ consumer_app }}.from_definition(definition)
 {%- endif %}

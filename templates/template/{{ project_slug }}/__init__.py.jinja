@@ -1,4 +1,4 @@
-"""{{ project_name }} — a Benzene service on {% if transport == "aws-apigateway" %}AWS Lambda (API Gateway){% elif transport == "aws-sqs" %}AWS Lambda (SQS){% else %}gRPC{% endif %}."""
+"""{{ project_name }} — a Benzene service on {% if transport == "aws-apigateway" %}AWS Lambda (API Gateway){% elif transport == "aws-sqs" %}AWS Lambda (SQS){% elif transport == "grpc" %}gRPC{% elif transport == "kafka" %}Kafka{% else %}RabbitMQ{% endif %}."""
 
 from __future__ import annotations
 
