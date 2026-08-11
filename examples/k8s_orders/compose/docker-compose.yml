@@ -1,0 +1,84 @@
+# Local, no-Kubernetes-needed way to see all three legs of this example running against real (if
+# emulated) SQS and Kafka. Each service's build.context is relative to this file, so run it from
+# anywhere with `docker compose -f examples/k8s_orders/compose/docker-compose.yml up --build` (see
+# the README for the full walkthrough). localstack/kafka here stand in for a real AWS SQS queue and a
+# real Kafka cluster - swap the env vars in ../k8s/ for the real thing to run the exact same three
+# images anywhere else.
+services:
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      - SERVICES=sqs
+      - AWS_DEFAULT_REGION=eu-west-1
+    ports:
+      - "4566:4566"
+
+  sqs-init:
+    image: amazon/aws-cli:2.17.62
+    depends_on:
+      - localstack
+    environment:
+      - AWS_ACCESS_KEY_ID=local
+      - AWS_SECRET_ACCESS_KEY=local
+      - AWS_DEFAULT_REGION=eu-west-1
+    entrypoint:
+      - sh
+      - -c
+      - |
+        until aws --endpoint-url=http://localstack:4566 sqs create-queue --queue-name orders-in; do sleep 2; done
+        aws --endpoint-url=http://localstack:4566 sqs create-queue --queue-name orders-events
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  orders-api:
+    build:
+      context: ../../..
+      dockerfile: examples/k8s_orders/Api.Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - BENZENE_ORDERS_EVENTS_URL=http://localhost:9999   # unreachable on purpose - see the README
+
+  orders-sqs-worker:
+    build:
+      context: ../../..
+      dockerfile: examples/k8s_orders/SqsWorker.Dockerfile
+    depends_on:
+      - sqs-init
+    environment:
+      - BENZENE_SQS_CONSUME_QUEUE_URL=http://localstack:4566/000000000000/orders-in
+      - BENZENE_SQS_EVENTS_QUEUE_URL=http://localstack:4566/000000000000/orders-events
+      - SQS_ENDPOINT_URL=http://localstack:4566
+      - AWS_ACCESS_KEY_ID=local
+      - AWS_SECRET_ACCESS_KEY=local
+      - AWS_DEFAULT_REGION=eu-west-1
+
+  orders-kafka-worker:
+    build:
+      context: ../../..
+      dockerfile: examples/k8s_orders/KafkaWorker.Dockerfile
+    depends_on:
+      - kafka
+    environment:
+      - BENZENE_KAFKA_BOOTSTRAP=kafka:29092
+      - BENZENE_KAFKA_CONSUME_TOPIC=orders-in
+      - BENZENE_KAFKA_TOPIC=orders-events
+      - BENZENE_KAFKA_GROUP=orders

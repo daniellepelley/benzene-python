@@ -2,19 +2,24 @@
 
 Drive an :class:`~benzene.aws.AwsLambdaApp` with the exact event shapes the bound sources deliver —
 API Gateway, SQS, SNS, S3, EventBridge, DynamoDB Streams, Kinesis, and Kafka/MSK — in memory, so an
-example's tests dogfood the real bindings with neither AWS nor boto3.
+example's tests dogfood the real bindings with neither AWS nor boto3. Also covers the self-hosted SQS
+*consumer* (:class:`~benzene.aws.sqs_consumer.SqsConsumerApp`) — a different binding from the Lambda
+SQS trigger above, so it gets its own builder/fake/test-host trio below rather than reusing
+:class:`SqsEventBuilder` (whose shape is the Lambda event's, not ``receive_message``'s).
 """
 
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from benzene.core import encode_body
+from benzene.results import Result
 
 from .app import AwsLambdaApp
 from .events import TOPIC_ATTRIBUTE
+from .sqs_consumer import SqsConsumerApp
 
 
 def _b64(payload: Any) -> str:
@@ -386,3 +391,89 @@ class AwsLambdaTestHost:
             .build()
         )
         self._app.handle(event)
+
+
+class SqsMessageBuilder:
+    """Builds a ``receive_message()``-shaped message dict for the self-hosted SQS consumer.
+
+    Distinct from :class:`SqsEventBuilder`: that one builds a Lambda *event* record
+    (``messageAttributes`` with ``stringValue``); this builds one message as ``boto3``'s
+    ``receive_message()`` actually returns it (``MessageAttributes`` with ``StringValue``).
+    """
+
+    def __init__(self, topic: str) -> None:
+        self._topic = topic
+        self._headers: dict[str, str] = {}
+        self._body: str = ""
+        self._receipt_handle: str | None = None
+
+    def with_header(self, key: str, value: str) -> SqsMessageBuilder:
+        self._headers[key] = value
+        return self
+
+    def with_body(self, body: Any) -> SqsMessageBuilder:
+        self._body = encode_body(body)
+        return self
+
+    def with_receipt_handle(self, receipt_handle: str) -> SqsMessageBuilder:
+        self._receipt_handle = receipt_handle
+        return self
+
+    def build(self) -> dict[str, Any]:
+        attributes = {
+            TOPIC_ATTRIBUTE: {"StringValue": self._topic, "DataType": "String"},
+            **{
+                str(k): {"StringValue": str(v), "DataType": "String"}
+                for k, v in self._headers.items()
+            },
+        }
+        return {
+            "MessageId": f"msg-{id(self)}",
+            "ReceiptHandle": self._receipt_handle or f"receipt-{id(self)}",
+            "Body": self._body,
+            "MessageAttributes": attributes,
+        }
+
+
+@dataclass
+class RecordingSqsClient:
+    """An in-memory ``boto3`` SQS client stand-in: replays a fixed list of messages, then reports
+    empty receives.
+
+    Messages deleted via :meth:`delete_message` are appended to :attr:`deleted`, so a test can assert
+    the loop's at-least-once behaviour (a failed message is *not* deleted) without a real queue.
+    """
+
+    messages: list[dict[str, Any]]
+    deleted: list[str] = field(default_factory=list)
+
+    def receive_message(self, **_kwargs: Any) -> dict[str, Any]:
+        if not self.messages:
+            return {"Messages": []}
+        batch, self.messages = self.messages, []
+        return {"Messages": batch}
+
+    def delete_message(self, *, QueueUrl: str, ReceiptHandle: str, **_kwargs: Any) -> None:  # noqa: N803
+        self.deleted.append(ReceiptHandle)
+
+
+class SqsConsumerTestHost:
+    """Wraps an :class:`~benzene.aws.sqs_consumer.SqsConsumerApp` for in-memory tests of the
+    self-hosted SQS ingress."""
+
+    #: The resolved root scope, set by ``create_test_host(...).build_sqs_consumer()`` for assertions.
+    scope: Scope | None = None
+
+    def __init__(self, app: SqsConsumerApp) -> None:
+        self._app = app
+
+    async def send_sqs_consumer(
+        self, topic: str, body: Any = None, headers: dict[str, str] | None = None
+    ) -> Result:
+        """Deliver one message on ``topic`` (``headers`` become message attributes); returns the result."""
+        builder = SqsMessageBuilder(topic)
+        for key, value in (headers or {}).items():
+            builder.with_header(key, value)
+        if body is not None:
+            builder.with_body(body)
+        return await self._app.handle_message(builder.build())

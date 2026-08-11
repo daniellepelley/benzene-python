@@ -147,6 +147,26 @@ split this way, and the reference docs for each package:
 [`benzene.results`](reference/results.md), [`benzene.core`](reference/core.md),
 [`benzene.http`](reference/http.md).
 
+## Why not just a minimal ASGI app?
+
+Worth asking honestly: a bare route on FastAPI, Flask, or Starlette —
+`@app.get("/greet/{name}") def greet(name: str): return {"greeting": f"Hello {name}"}` — does the
+same job as steps 1–4 above in one line, no `benzene-core`/`benzene-http` install. For an HTTP-only
+service that never talks to anything else, that line does the same job this guide's four steps do, and
+you don't need Benzene to get it — a real ASGI framework already gives HTTP everything Benzene's
+envelope gives it here.
+
+The payoff shows up the moment this same handler needs a **second** entry point — a queue another team
+publishes to, a Kafka topic, a batch job that used to call this endpoint but really just wants to drop
+a message. A route decorator has no answer for that; you'd write a second, separate handler and keep
+both in sync by hand. With Benzene the handler above doesn't change at all: `benzene-aws`'s
+[self-hosted SQS consumer](../examples/sqs_orders) or `benzene-kafka`'s
+[self-hosted consumer](../examples/kafka_orders) point a worker at the *same* `@message("say:hello")`
+function, because it was never written against an ASGI request in the first place — see
+[`examples/k8s_orders`](../examples/k8s_orders) for that running as three independent Kubernetes
+Deployments from one composition root. If HTTP genuinely is and always will be the only way in, reach
+for FastAPI/Flask directly instead — you'll write less code, not more.
+
 ## Troubleshooting
 
 - **`ModuleNotFoundError: No module named 'benzene.http'`** — you installed a lower layer only.

@@ -1,0 +1,29 @@
+# The Kafka leg - a worker Deployment with no Service (nothing calls it; it calls out to Kafka). No
+# bundled broker here: point KAFKA_BOOTSTRAP at a real cluster. For a credential-free local run
+# against a throwaway broker instead, see ../compose/docker-compose.yml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-kafka-worker
+  namespace: k8s-orders
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: orders-kafka-worker }
+  template:
+    metadata:
+      labels: { app: orders-kafka-worker }
+    spec:
+      containers:
+        - name: orders-kafka-worker
+          image: orders-kafka-worker:local
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BENZENE_KAFKA_BOOTSTRAP
+              value: "kafka-bootstrap.kafka.svc.cluster.local:9092"   # <- replace
+            - name: BENZENE_KAFKA_CONSUME_TOPIC
+              value: "orders-in"
+            - name: BENZENE_KAFKA_TOPIC
+              value: "orders-events"
+            - name: BENZENE_KAFKA_GROUP
+              value: "orders"

@@ -33,7 +33,7 @@ from benzene.core import BenzeneStartUp, Container, build_application
 if TYPE_CHECKING:
     # Return types for editor/mypy help only — the cloud packages stay lazy runtime imports so
     # benzene-testing keeps its benzene-core-only dependency.
-    from benzene.aws.testing import AwsLambdaTestHost
+    from benzene.aws.testing import AwsLambdaTestHost, SqsConsumerTestHost
     from benzene.azure.testing import AzureFunctionsTestHost
     from benzene.core import AppDefinition, Scope
     from benzene.gcp.testing import GcpFunctionsTestHost
@@ -164,6 +164,27 @@ class TestHostBuilder:
             ) from ex
         definition, scope = self._build()
         host = RabbitMqTestHost(RabbitMqConsumerApp.from_definition(definition))
+        host.scope = scope
+        return host
+
+    def build_sqs_consumer(self) -> SqsConsumerTestHost:
+        """Specialize to a self-hosted SQS consumer test host (requires ``benzene-aws``).
+
+        The SQS binding is a poll loop, not an HTTP host, so there is no router to mount: the
+        registry is driven one message at a time through an :class:`SqsConsumerApp`, in memory. Feed
+        messages with ``await host.send_sqs_consumer(topic, body, headers)``. Distinct from
+        ``.build_aws()`` — that specializes to the Lambda *event-source* binding, this one to the
+        self-hosted poller.
+        """
+        try:
+            from benzene.aws import SqsConsumerApp
+            from benzene.aws.testing import SqsConsumerTestHost
+        except ImportError as ex:  # pragma: no cover - environment-specific
+            raise ImportError(
+                "build_sqs_consumer() requires the 'benzene-aws' package to be installed"
+            ) from ex
+        definition, scope = self._build()
+        host = SqsConsumerTestHost(SqsConsumerApp.from_definition(definition))
         host.scope = scope
         return host
 

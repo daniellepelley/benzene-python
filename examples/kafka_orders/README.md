@@ -10,6 +10,15 @@ Unlike the cloud hosts (triggered by a runtime), a Kafka service owns its own lo
 success (at-least-once). There is no HTTP surface — the domain is reached over records whose `topic`
 header names the Benzene topic.
 
+**Worth using even if Kafka is the only transport this service ever has.** Unlike HTTP, where a real
+ASGI framework already gives you routing and cross-cutting middleware for free (see
+[Why not just a minimal ASGI app?](../../docs/getting-started.md#why-not-just-a-minimal-asgi-app)),
+`confluent-kafka`'s `Consumer.poll()` on its own hands you a raw record and stops — deserializing the
+payload, dispatching on whatever identifies its type, and every cross-cutting concern (validation,
+correlation, retries, structured logging) is code you'd otherwise write yourself, usually inline in
+the consume loop. `KafkaConsumerApp` + the middleware pipeline is that missing layer, for Kafka
+specifically.
+
 ## Run it against a broker
 
 ```bash

@@ -31,6 +31,7 @@ capability, put the handler in `orders_domain` and wire it from the hosts rather
 | [`http_orders/`](http_orders) | standalone HTTP server | HTTP (ASGI) + HTTP egress | `benzene-http` |
 | [`grpc_orders/`](grpc_orders) | gRPC server | gRPC unary (method = topic) + faked egress | `benzene-grpc[transport]` |
 | [`kafka_orders/`](kafka_orders) | self-hosted Kafka consumer | Kafka consume (topic = header) + Kafka produce egress | `benzene-kafka` |
+| [`sqs_orders/`](sqs_orders) | self-hosted SQS consumer | SQS poll (topic = message attribute) + SQS produce egress | `benzene-aws` |
 | [`rabbitmq_orders/`](rabbitmq_orders) | self-hosted RabbitMQ consumer | AMQP consume (topic = header) + AMQP publish egress | `benzene-rabbitmq` |
 
 The [`rabbitmq_orders`](rabbitmq_orders) example mounts the same `orders_domain` on the **RabbitMQ**
@@ -39,6 +40,12 @@ ack on success, nack on failure) and a `RabbitMqMessageSender` that publishes `o
 Kafka it owns its own loop (no HTTP surface) and is tested through the shared harness
 (`create_test_host(...).build_rabbitmq()` + `send_rabbitmq`) — only that one call differs from the
 Kafka suite.
+
+The [`sqs_orders`](sqs_orders) example mounts the same `orders_domain` on the **self-hosted SQS
+consumer** binding — distinct from `aws_orders`, which reaches SQS via a *Lambda event source*. This
+one polls the queue itself (at-least-once — deletes only on success) and is tested through the shared
+harness (`create_test_host(...).build_sqs_consumer()` + `send_sqs_consumer`), the same
+one-specialization-step setup as every other suite here.
 
 The [`http_orders`](http_orders) example is the Python analog of the .NET `Asp` example: it mounts the
 same `orders_domain` directly on `benzene-http`'s ASGI binding (no cloud runtime) and tests it through
@@ -51,6 +58,15 @@ harness like every cloud (`create_test_host(...).build_grpc()` + `send_grpc`), p
 test that proves the `GrpcMessageSender` client over a live channel. Because the binding serves every
 topic as one generic method, the domain's `POST /orders` / `GET /orders/{id}` routes are reached as the
 `orders:place` / `orders:get` topics.
+
+## On Kubernetes: the same domain, three independent Deployments
+
+[`k8s_orders/`](k8s_orders) doesn't add a fourth transport — it packages three of the hosts above
+(`http_orders`, `sqs_orders`, `kafka_orders`) as three separate container images and Kubernetes
+Deployments, all mounting the *same* `orders_domain`. See
+[docs/getting-started-kubernetes.md](../docs/getting-started-kubernetes.md) for why that's worth
+doing (a queue or stream is where Benzene earns its keep even as the *only* transport a service has;
+HTTP alone doesn't need it).
 
 ## Pattern examples
 
