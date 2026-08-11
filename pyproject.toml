@@ -31,14 +31,14 @@ ignore = [
 "tests/**" = ["B011"]
 
 [tool.mypy]
-# Type-check the ten packages as one PEP 420 namespace. A pragmatic-but-rigorous bar: default checks
+# Type-check the twelve packages as one PEP 420 namespace. A pragmatic-but-rigorous bar: default checks
 # plus the high-signal flags that catch real bugs (untyped-body checking, return-Any, redundant
 # ignores, strict equality) without requiring exhaustive annotation of every internal helper.
 python_version = "3.10"
 namespace_packages = true
 explicit_package_bases = true
 ignore_missing_imports = true # third-party (grpcio, pydantic, cloud SDKs) ship without stubs
-mypy_path = "packages/benzene-results:packages/benzene-core:packages/benzene-http:packages/benzene-grpc:packages/benzene-mesh:packages/benzene-pydantic:packages/benzene-testing:packages/benzene-gcp:packages/benzene-aws:packages/benzene-azure:packages/benzene-kafka:deploy/mesh"
+mypy_path = "packages/benzene-results:packages/benzene-core:packages/benzene-http:packages/benzene-grpc:packages/benzene-mesh:packages/benzene-pydantic:packages/benzene-testing:packages/benzene-gcp:packages/benzene-aws:packages/benzene-azure:packages/benzene-kafka:packages/benzene-resilience:deploy/mesh"
 files = [
     "packages/benzene-results/benzene",
     "packages/benzene-core/benzene",
@@ -51,6 +51,7 @@ files = [
     "packages/benzene-aws/benzene",
     "packages/benzene-azure/benzene",
     "packages/benzene-kafka/benzene",
+    "packages/benzene-resilience/benzene",
     "deploy/mesh/collector",
     "deploy/mesh/fleet",
 ]
@@ -82,6 +83,7 @@ pythonpath = [
     "packages/benzene-aws",
     "packages/benzene-azure",
     "packages/benzene-kafka",
+    "packages/benzene-resilience",
     "examples",
     "deploy/mesh",
 ]

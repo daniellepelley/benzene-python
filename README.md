@@ -42,6 +42,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + egress) | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` |
 | `benzene-azure` | `benzene.azure` | Azure Functions host (HTTP + Service Bus + Event Hub + egress) | `benzene-core`, `benzene-http` | `Benzene.Azure.Function.*` |
 | `benzene-kafka` | `benzene.kafka` | Apache Kafka host — self-hosted consumer + Kafka-produce egress (`[kafka]`) | `benzene-core` (+ `confluent-kafka`) | `Benzene.Kafka.Core` |
+| `benzene-resilience` | `benzene.resilience` | circuit breaker, bulkhead, rate limiting, idempotency, in-process saga | `benzene-core` | `Benzene.Resilience.Polly` + `Benzene.RateLimiting` + `Benzene.Idempotency` + `Benzene.Saga` |
 | `benzene-mesh` | `benzene.mesh` | ServiceDescriptor + `benzene:mesh` endpoint + tracing + collector feeds + a `MeshCollector` | `benzene-core` | `Benzene.Mesh.Wire` + `Benzene.Mesh.Collector` |
 | `benzene-pydantic` | `benzene.pydantic` | validate handler requests with pydantic models | `benzene-core`, `pydantic` | `Benzene.FluentValidation` |
 | `benzene-testing` | `benzene.testing` | in-memory test host + fakes (dev/test) | `benzene-core` | `Benzene.Testing` |
@@ -332,11 +333,13 @@ take it from "conformant" to "as capable as .NET" — each is scoped directly ag
 21. **(planned)** RabbitMQ — a self-hosted consumer plus an outbound `RabbitMqMessageSender`, mirroring
     `Benzene.RabbitMq` and shaped like this port's existing Kafka binding (item 18): duck-typed against
     an optional `[rabbitmq]` extra, one record per invocation/scope, at-least-once ack on success.
-22. **(planned)** Resilience beyond retry — a circuit breaker, a bulkhead, rate limiting actually wired
-    to the `too-many-requests` status, idempotency (dedupe redelivered messages), and an in-process saga
-    (compensation/rollback, not durable). Mirrors `Benzene.Resilience.Polly`, `Benzene.RateLimiting`,
-    `Benzene.Idempotency`, and `Benzene.Saga`. This port currently has retry and nothing else in this
-    category.
+22. **(done)** Resilience beyond retry — a circuit breaker, a bulkhead, rate limiting wired to the
+    `too-many-requests` status, idempotency (dedupe redelivered messages), and an in-process saga
+    (compensation/rollback, not durable), shipped as
+    [`benzene-resilience`](packages/benzene-resilience). Each gating policy exposes one `execute(run)`
+    seam and ships in two shapes off it — an inbound `*_interception` middleware and an outbound
+    `MessageSender` decorator — so resilience composes with the core's existing `with_retry`. Mirrors
+    `Benzene.Resilience.Polly`, `Benzene.RateLimiting`, `Benzene.Idempotency`, and `Benzene.Saga`.
 23. **(planned)** Auth — Basic auth and JWT/OAuth2 bearer-token middleware, plus an API Gateway custom
     authorizer adapter. Mirrors `Benzene.Auth.{Basic,OAuth2}` and
     `Benzene.Aws.Lambda.ApiGateway.ApiGatewayCustomAuthorizer`. Currently absent outright.
@@ -356,7 +359,8 @@ take it from "conformant" to "as capable as .NET" — each is scoped directly ag
 Sequencing: 19–21 (transports) first, since they're the largest and most visible gap and the pattern
 each follows is already proven by this port's own Kafka binding; 22–24 (resilience/auth/caching) next,
 since every sibling port has at least most of these and their absence is the sharpest cross-language
-outlier; 25–27 last.
+outlier — resilience (22) has now landed as `benzene-resilience`, leaving auth and caching as the next
+up; 25–27 last.
 
 ## Documentation
 

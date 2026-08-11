@@ -1,19 +1,20 @@
 name: Release
 
-# Build all ten Benzene distributions and publish them to PyPI via **trusted publishing**
+# Build all twelve Benzene distributions and publish them to PyPI via **trusted publishing**
 # (OpenID Connect — no API tokens stored in the repo). Fires on a version tag (e.g. `v0.0.1`) and
 # is also runnable on demand via the Actions tab.
 #
 # One-time maintainer setup (see docs/publishing.md):
-#   1. On PyPI, add a "pending" trusted publisher for EACH of the ten project names
+#   1. On PyPI, add a "pending" trusted publisher for EACH of the twelve project names
 #      (benzene-results, benzene-core, benzene-http, benzene-grpc, benzene-mesh, benzene-pydantic,
-#      benzene-testing, benzene-gcp, benzene-aws, benzene-azure, benzene-kafka), all pointing at:
+#      benzene-testing, benzene-gcp, benzene-aws, benzene-azure, benzene-kafka, benzene-resilience),
+#      all pointing at:
 #         owner/repo = daniellepelley/benzene-python
 #         workflow   = release.yml
 #         environment = pypi
 #   2. Create a GitHub Environment named `pypi` on this repo (optionally with required reviewers).
-# The single publish step uploads all twenty artifacts; PyPI routes each to its project and verifies
-# the OIDC identity per project.
+# The single publish step uploads all twenty-four artifacts; PyPI routes each to its project and
+# verifies the OIDC identity per project.
 
 on:
   push:
