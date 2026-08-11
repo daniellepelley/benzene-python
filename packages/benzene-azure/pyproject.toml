@@ -5,13 +5,24 @@ build-backend = "hatchling.build"
 [project]
 name = "benzene-azure"
 version = "0.0.1"
-description = "Benzene Azure Functions host — HTTP + Service Bus + Event Hub bindings and a Service Bus outbound client."
+description = "Benzene Azure Functions host — HTTP, Service Bus, Event Hub, Queue/Blob Storage, Cosmos DB, Timer, and Event Grid bindings plus outbound clients."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Benzene" }]
-keywords = ["benzene", "azure", "azure-functions", "service-bus", "event-hub", "hexagonal"]
+keywords = [
+    "benzene",
+    "azure",
+    "azure-functions",
+    "service-bus",
+    "event-hub",
+    "queue-storage",
+    "blob-storage",
+    "cosmos-db",
+    "event-grid",
+    "hexagonal",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -26,8 +37,10 @@ classifiers = [
 dependencies = ["benzene-core>=0.0.1", "benzene-http>=0.0.1"]
 
 [project.optional-dependencies]
-# Only needed for the real Service Bus outbound client; inbound bindings + tests need no Azure SDK.
+# Only needed for the real outbound clients; inbound bindings + the test host need no Azure SDK.
 servicebus = ["azure-servicebus>=7.0"]
+storage = ["azure-storage-queue>=12.0"]
+eventgrid = ["azure-eventgrid>=4.0"]
 
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"

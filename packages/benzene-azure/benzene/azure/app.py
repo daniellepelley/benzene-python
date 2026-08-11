@@ -7,11 +7,14 @@
   properties; a failure raises so the message is retried / dead-lettered.
 - **Event Hub** — a batch of events; **one scope per event**, processed in order; a failure raises
   (stops at the first failure, matching checkpoint semantics).
+- **Queue Storage / Blob Storage / Timer** — one invocation apiece; the topic comes from the payload
+  (a Queue envelope) or an injectable default (blob-created / timer tick have no topic of their own).
+- **Cosmos DB change feed** — a batch of changed documents; **one scope per document**, like Event Hub.
+- **Event Grid** — a single event or a batch; **one scope per event**; native schema or CloudEvents 1.0.
 
-The :func:`http_function` / :func:`service_bus_function` / :func:`event_hub_function` helpers wrap an
-app as the plain callables an Azure Functions trigger invokes (adapting the ``azure-functions``
-request/message types lazily), mirroring ``benzene.gcp.http_function`` and
-``benzene.aws.to_lambda_handler``. The package itself (and its tests) need no Azure SDK — see the
+The ``*_function`` helpers wrap an app as the plain callables an Azure Functions trigger invokes
+(adapting the ``azure-functions`` request/message types lazily), mirroring ``benzene.gcp.http_function``
+and ``benzene.aws.to_lambda_handler``. The package itself (and its tests) need no Azure SDK — see the
 example's ``function_app.py`` for the v2-model wiring.
 """
 
@@ -32,7 +35,18 @@ from benzene.core import (
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
 from benzene.results import is_successful
 
-from .events import decode_event_hub_event, decode_service_bus
+from .events import (
+    DEFAULT_BLOB_TOPIC,
+    DEFAULT_COSMOS_TOPIC,
+    DEFAULT_TIMER_TOPIC,
+    decode_blob_created,
+    decode_cosmos_document,
+    decode_event_grid,
+    decode_event_hub_event,
+    decode_queue_storage,
+    decode_service_bus,
+    decode_timer,
+)
 
 
 @dataclass
@@ -111,6 +125,46 @@ class AzureFunctionsApp:
 
         asyncio.run(run())
 
+    # --- Queue Storage trigger -------------------------------------------------------------
+    def handle_queue_storage(self, message: Any, *, default_topic: str = "") -> None:
+        # One message per invocation; topic from the embedded envelope, else ``default_topic``.
+        asyncio.run(self._run_or_raise(decode_queue_storage(message, default_topic=default_topic)))
+
+    # --- Blob Storage trigger --------------------------------------------------------------
+    def handle_blob(self, blob: Any, *, default_topic: str = DEFAULT_BLOB_TOPIC) -> None:
+        # One blob-created notification per invocation; the descriptor is the body.
+        asyncio.run(self._run_or_raise(decode_blob_created(blob, default_topic=default_topic)))
+
+    # --- Cosmos DB change-feed trigger -----------------------------------------------------
+    def handle_cosmos(self, documents: Any, *, default_topic: str = DEFAULT_COSMOS_TOPIC) -> None:
+        # A batch (list) of changed documents; one scope per document, in order (Event Hub precedent).
+        if not isinstance(documents, (list, tuple)):
+            documents = [documents]
+
+        async def run() -> None:
+            for document in documents:
+                await self._run_or_raise(
+                    decode_cosmos_document(document, default_topic=default_topic)
+                )
+
+        asyncio.run(run())
+
+    # --- Timer trigger ---------------------------------------------------------------------
+    def handle_timer(self, timer: Any, *, default_topic: str = DEFAULT_TIMER_TOPIC) -> None:
+        # One tick, one invocation; the schedule info is the body.
+        asyncio.run(self._run_or_raise(decode_timer(timer, default_topic=default_topic)))
+
+    # --- Event Grid trigger ----------------------------------------------------------------
+    def handle_event_grid(self, event: Any, *, default_topic: str = "") -> None:
+        # A single event or a batch (list); one scope per event, in order. Native or CloudEvents 1.0.
+        events = event if isinstance(event, (list, tuple)) else [event]
+
+        async def run() -> None:
+            for item in events:
+                await self._run_or_raise(decode_event_grid(item, default_topic=default_topic))
+
+        asyncio.run(run())
+
     async def _run_or_raise(self, envelope: dict[str, Any]) -> None:
         response = await self._application.handle(envelope)
         if not is_successful(response["statusCode"]):
@@ -159,6 +213,61 @@ def event_hub_function(app: AzureFunctionsApp) -> Callable[[Any], None]:
 
     def entry(events: Any) -> None:
         app.handle_event_hub(events)
+
+    return entry
+
+
+def queue_storage_function(
+    app: AzureFunctionsApp, *, default_topic: str = ""
+) -> Callable[[Any], None]:
+    """Return a Queue Storage entry point: ``def entry(message)``. ``default_topic`` routes plain text."""
+
+    def entry(message: Any) -> None:
+        app.handle_queue_storage(message, default_topic=default_topic)
+
+    return entry
+
+
+def blob_function(
+    app: AzureFunctionsApp, *, default_topic: str = DEFAULT_BLOB_TOPIC
+) -> Callable[[Any], None]:
+    """Return a Blob Storage entry point: ``def entry(blob)`` (a blob-created notification)."""
+
+    def entry(blob: Any) -> None:
+        app.handle_blob(blob, default_topic=default_topic)
+
+    return entry
+
+
+def cosmos_function(
+    app: AzureFunctionsApp, *, default_topic: str = DEFAULT_COSMOS_TOPIC
+) -> Callable[[Any], None]:
+    """Return a Cosmos DB change-feed entry point: ``def entry(documents)`` (a batch of documents)."""
+
+    def entry(documents: Any) -> None:
+        app.handle_cosmos(documents, default_topic=default_topic)
+
+    return entry
+
+
+def timer_function(
+    app: AzureFunctionsApp, *, default_topic: str = DEFAULT_TIMER_TOPIC
+) -> Callable[[Any], None]:
+    """Return a Timer entry point: ``def entry(timer)`` (one tick)."""
+
+    def entry(timer: Any) -> None:
+        app.handle_timer(timer, default_topic=default_topic)
+
+    return entry
+
+
+def event_grid_function(
+    app: AzureFunctionsApp, *, default_topic: str = ""
+) -> Callable[[Any], None]:
+    """Return an Event Grid entry point: ``def entry(event)`` (single event or a batch, either schema)."""
+
+    def entry(event: Any) -> None:
+        app.handle_event_grid(event, default_topic=default_topic)
 
     return entry
 
