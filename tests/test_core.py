@@ -13,7 +13,9 @@ from benzene.core import (
     DuplicateHandlerError,
     MiddlewarePipeline,
     Registry,
+    decode_response,
     encode_body,
+    encode_response,
     message,
     to_camel,
     to_jsonable,
@@ -242,3 +244,37 @@ def test_datetime_payload_round_trips_through_a_response_envelope() -> None:
     response = asyncio.run(app.handle({"topic": "t", "headers": {}, "body": "{}"}))
     assert response["statusCode"] == Status.OK
     assert json.loads(response["body"]) == {"id": "e1", "at": "2020-01-01T12:00:00"}
+
+
+# --- decode_response (the inverse of encode_response) -------------------------------------------
+
+
+def test_decode_response_round_trips_a_successful_payload() -> None:
+    envelope = encode_response(Result.created({"id": "o-1"}))
+    result = decode_response(envelope)
+    assert result.status == Status.CREATED
+    assert result.payload == {"id": "o-1"}
+
+
+def test_decode_response_round_trips_a_payload_less_success() -> None:
+    result = decode_response(encode_response(Result.ok()))
+    assert result.is_successful
+    assert result.payload is None
+
+
+def test_decode_response_round_trips_failure_errors() -> None:
+    envelope = encode_response(Result.bad_request("sku is required", "quantity must be positive"))
+    result = decode_response(envelope)
+    assert result.status == Status.BAD_REQUEST
+    assert result.errors == ("sku is required", "quantity must be positive")
+
+
+def test_decode_response_treats_a_malformed_body_as_unexpected_error_not_a_crash() -> None:
+    result = decode_response({"statusCode": Status.OK, "body": "not json"})
+    assert result.status == Status.UNEXPECTED_ERROR
+
+
+def test_decode_response_defaults_a_missing_status_to_unexpected_error() -> None:
+    result = decode_response({})
+    assert result.status == Status.UNEXPECTED_ERROR
+    assert result.payload is None

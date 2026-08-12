@@ -40,10 +40,13 @@ def event_source(event: dict[str, Any]) -> str | None:
     """Classify an event by its distinguishing shape.
 
     Returns one of ``"apigateway"``, ``"sqs"``, ``"sns"``, ``"s3"``, ``"eventbridge"``,
-    ``"dynamodb"``, ``"kinesis"``, ``"kafka"``, or ``None`` when the shape is unrecognised. The order
-    matters: EventBridge (a bare ``detail-type`` at the top level) and Kafka (``aws:kafka`` with a
-    lower-case ``records`` map, not the ``Records`` array the other sources use) are keyed off
-    top-level markers before the ``Records[0].eventSource`` discriminator sorts the rest.
+    ``"dynamodb"``, ``"kinesis"``, ``"kafka"``, ``"invoke"``, or ``None`` when the shape is
+    unrecognised. The order matters: EventBridge (a bare ``detail-type`` at the top level) and Kafka
+    (``aws:kafka`` with a lower-case ``records`` map, not the ``Records`` array the other sources use)
+    are keyed off top-level markers before the ``Records[0].eventSource`` discriminator sorts the
+    rest; ``"invoke"`` — a bare ``{"topic": ...}`` Payload, carrying no Lambda trigger markers at all —
+    is checked last, since it is the most generic shape and every other source's own marker must be
+    ruled out first.
     """
     if is_api_gateway(event):
         return "apigateway"
@@ -65,6 +68,8 @@ def event_source(event: dict[str, Any]) -> str | None:
             return "kinesis"
         if first.get("EventSource") == "aws:sns" or "Sns" in first:
             return "sns"
+    if "topic" in event:
+        return "invoke"
     return None
 
 
@@ -215,3 +220,21 @@ def kafka_record_envelope(record: dict[str, Any]) -> dict[str, Any]:
         topic = str(record.get("topic", ""))
     body = _b64_to_text(record.get("value"))
     return {"topic": topic, "headers": headers, "body": body}
+
+
+def invoke_envelope(event: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a direct Lambda-invoke event to a Benzene envelope.
+
+    A direct ``lambda.invoke()`` Payload *is* the transport-neutral Benzene envelope already
+    (``{topic, headers, body}`` — the same shape :class:`~benzene.core.BenzeneMessageApplication`
+    and the Cloud Service Profile's ``/benzene/invoke`` HTTP surface both accept), so unlike every
+    other decoder here there is no native wire shape to translate *from* — this only fills in
+    defaults for absent fields, the same normalisation :meth:`~benzene.core.BenzeneMessageApplication.
+    handle` itself would apply. Unlike the channel-less sources (S3, EventBridge, DynamoDB, Kinesis),
+    the caller's topic is trusted as-is: it travelled explicitly, not inferred from a convention.
+    """
+    return {
+        "topic": event.get("topic") or "",
+        "headers": event.get("headers") or {},
+        "body": event.get("body") or "",
+    }

@@ -135,7 +135,19 @@ The message version is read inbound from the first present header in `VERSION_HE
 `benzene-version` (the canonical `VERSION_HEADER`, written outbound), then `version`, then `x-version`
 (versioning.md §2) — via `resolve_version(headers)`. Helpers `encode_response(result)` and
 `error_payload(result)` produce the response envelope and the problem-details error body
-(`{"status", "detail"}`) respectively.
+(`{"status", "detail"}`) respectively; `decode_response(response)` is the inverse — a response envelope
+back into a `Result` — for any transport whose reply *is* the Benzene envelope verbatim rather than a
+translated status code (an in-process dispatch, a direct AWS Lambda invoke of another Benzene
+function, or a bespoke caller speaking the wire envelope directly).
+
+```python
+from benzene.core import decode_response, encode_response
+from benzene.results import Result
+
+envelope = encode_response(Result.bad_request("sku is required"))
+result = decode_response(envelope)
+# Result(status="bad-request", payload=None, errors=("sku is required",))
+```
 
 ## Composition root
 
@@ -399,7 +411,7 @@ rationale.
 `HealthCheckResult`, `HealthReport`, `DuplicateHealthCheckError`, `HEALTH_TOPIC`,
 `health_interception`, `VERSION_HEADER`,
 `VERSION_HEADER_NAMES`, `VersionSelector`, `application_from`, `build_application`, `definition_of`,
-`encode_response`, `error_payload`, `exact_version`, `highest_version`, `message`, `message_router`,
+`decode_response`, `encode_response`, `error_payload`, `exact_version`, `highest_version`, `message`, `message_router`,
 `resolve_version`, `read_message_metadata`, `MetadataKeys`, `DEFAULT_METADATA_KEYS`,
 `DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `MessageSender`, `with_retry`, `with_correlation_id`,
 `RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `SchemaCasters`,

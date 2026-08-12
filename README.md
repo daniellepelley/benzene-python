@@ -47,7 +47,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-http` | `benzene.http` | inbound HTTP (ASGI) binding + status mapping | `benzene-core` | `Benzene.Http` |
 | `benzene-grpc` | `benzene.grpc` | Benzene↔gRPC status mapping + trailer rule + server/client transport (`[transport]`) | `benzene-core` (+ `grpcio`) | `Benzene.Grpc` |
 | `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
-| `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + S3 + EventBridge + DynamoDB Streams + Kinesis + MSK/Kafka + egress) + a self-hosted SQS consumer | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` + `Benzene.Clients.Aws.*` + `Benzene.Aws.Sqs` |
+| `benzene-aws` | `benzene.aws` | AWS Lambda host (API Gateway + SQS + SNS + S3 + EventBridge + DynamoDB Streams + Kinesis + MSK/Kafka + direct invoke + egress) + a self-hosted SQS consumer | `benzene-core`, `benzene-http` | `Benzene.Aws.Lambda.*` + `Benzene.Clients.Aws.*` + `Benzene.Aws.Sqs` |
 | `benzene-azure` | `benzene.azure` | Azure Functions host (HTTP + Service Bus + Event Hub + Queue/Blob Storage + Cosmos Change Feed + Timer + Event Grid + egress) | `benzene-core`, `benzene-http` | `Benzene.Azure.Function.*` + `Benzene.Clients.Azure.*` |
 | `benzene-kafka` | `benzene.kafka` | Apache Kafka host — self-hosted consumer + Kafka-produce egress (`[kafka]`) | `benzene-core` (+ `confluent-kafka`) | `Benzene.Kafka.Core` |
 | `benzene-rabbitmq` | `benzene.rabbitmq` | RabbitMQ host — self-hosted consumer + AMQP-publish egress (`[rabbitmq]`) | `benzene-core` (+ `pika`) | `Benzene.RabbitMq` |
@@ -385,14 +385,26 @@ take it from "conformant" to "as capable as .NET" — each is scoped directly ag
     discovery adapters (AWS Cloud Map / Azure / Kubernetes, each behind an optional extra) and fleet
     trace-mappers (Jaeger / Tempo-OTLP / X-Ray) that project the `benzene.mesh` `TraceEvent` model into
     each backend's shape. Mirrors `Benzene.Mesh.Discovery.*` and `Benzene.Mesh.Fleet.*`.
+29. **(done)** Direct Lambda-to-Lambda invoke — `benzene-aws` now recognizes a bare
+    `{topic, headers, body}` Payload (what `lambda.invoke()` sends) as a synchronous `"invoke"`
+    source, answered like API Gateway with the response envelope returned verbatim; the new
+    `LambdaMessageSender` outbound client calls a target function's `Invoke` API directly and decodes
+    its response back into a `Result` — no broker, AWS's own request/response primitive. Any existing
+    `AwsLambdaApp` answers it automatically, with zero extra host wiring. The response-envelope decode
+    this needed (`benzene.core.decode_response`, the inverse of `encode_response`) is now a public,
+    reusable primitive — it also replaces the equivalent inline logic the in-process sender
+    (`benzene.core.inprocess`) already had. Azure Functions and Kubernetes services have no equivalent
+    native primitive; they reach the same synchronous-call outcome over HTTP/gRPC instead
+    (`HttpMessageSender` / `GrpcMessageSender`), which is why this item is AWS-only.
 
-Every roadmap item (1–28) is now implemented. Sequencing followed the plan: the self-hosted SQS
+Every roadmap item (1–29) is now implemented. Sequencing followed the plan: the self-hosted SQS
 consumer (19) landed alongside the Kubernetes multi-transport story it exists for (see [Getting
 Started: Kubernetes](docs/getting-started-kubernetes.md)); transports (20–22) next, since they were
 the largest, most visible gap and the pattern was already proven by the Kafka/SQS bindings;
 resilience/auth/caching (23–25) closed the sharpest cross-language outlier; then OpenTelemetry,
 OpenAPI, and mesh discovery/fleet (26–28). Each landed as its own independently-installable
-distribution, so a service still pulls in only the layers it uses.
+distribution, so a service still pulls in only the layers it uses. Direct Lambda invoke (29) landed
+last, prompted by a direct comparison against AWS's own Lambda-to-Lambda invoke capability.
 
 ## Documentation
 

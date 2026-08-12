@@ -32,7 +32,7 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 - **[`benzene.http`](reference/http.md)** — the inbound HTTP (ASGI) transport binding.
 - **[`benzene.grpc`](reference/grpc.md)** — the Benzene↔gRPC status mapping and trailer rule.
 - **[`benzene.gcp`](reference/gcp.md)** — the Google Cloud Functions host (HTTP + Pub/Sub).
-- **[`benzene.aws`](reference/aws.md)** — the AWS Lambda host (API Gateway + SQS + SNS + S3 + EventBridge + DynamoDB Streams + Kinesis + Kafka/MSK inbound, SNS/SQS/EventBridge/Kinesis egress) plus a self-hosted SQS consumer.
+- **[`benzene.aws`](reference/aws.md)** — the AWS Lambda host (API Gateway + SQS + SNS + S3 + EventBridge + DynamoDB Streams + Kinesis + Kafka/MSK + direct invoke inbound, SNS/SQS/EventBridge/Kinesis/Lambda egress) plus a self-hosted SQS consumer.
 - **[`benzene.azure`](reference/azure.md)** — the Azure Functions host (HTTP + Service Bus + Event Hub + Queue Storage + Blob Storage + Cosmos DB change feed + Timer + Event Grid inbound, Service Bus/Queue Storage/Event Grid egress).
 - **[`benzene.kafka`](reference/kafka.md)** — the Apache Kafka host (self-hosted consumer + produce client).
 - **[`benzene.rabbitmq`](reference/rabbitmq.md)** — the RabbitMQ transport (self-hosted consumer + publish client).

@@ -15,11 +15,19 @@
   record's sequence number (only the failed records are reprocessed).
 - **Kafka / MSK**: records grouped by topic-partition; one invocation per record; the MSK event
   source has no partial-batch channel, so a failure raises for redelivery.
+- **Direct invoke**: a bare ``{"topic", "headers", "body"}`` Payload — what another Lambda's
+  ``lambda.invoke(FunctionName=..., Payload=...)`` sends (see
+  :class:`~benzene.aws.LambdaMessageSender`), or any caller speaking the wire envelope directly. This
+  is the one *synchronous* source besides API Gateway: the response envelope is returned verbatim as
+  the invoke's own response Payload, for the caller to decode back into a
+  :class:`~benzene.results.Result` (:func:`~benzene.core.decode_response`).
 
 Topic for the attribute-carrying transports (SQS, SNS, Kafka) comes from the reserved ``topic``
 metadata key; the channel-less sources (S3, EventBridge, DynamoDB, Kinesis) take their topic from an
-injectable convention configured on the host. The free function :func:`to_lambda_handler` produces
-the ``handler(event, context)`` callable Lambda invokes.
+injectable convention configured on the host; a direct invoke's topic is exactly what the caller sent.
+The free function :func:`to_lambda_handler` produces the ``handler(event, context)`` callable Lambda
+invokes — the *same* function answers every source above, so a Lambda already reached over API
+Gateway/SQS/SNS/etc. is, with zero extra wiring, also directly invokable by another Lambda.
 """
 
 from __future__ import annotations
@@ -46,6 +54,7 @@ from .events import (
     dynamodb_record_envelope,
     event_source,
     eventbridge_envelope,
+    invoke_envelope,
     kafka_record_envelope,
     kafka_records,
     kinesis_record_envelope,
@@ -116,9 +125,11 @@ class AwsLambdaApp:
         if source == "kafka":
             self._handle_kafka(event)  # MSK has no partial-batch channel: a failure raises
             return None
+        if source == "invoke":
+            return self._handle_invoke(event)
         raise ValueError(
             "Unrecognised Lambda event: not API Gateway, SQS, SNS, S3, EventBridge, "
-            "DynamoDB, Kinesis, or Kafka"
+            "DynamoDB, Kinesis, Kafka, or a direct invoke (a bare {topic, headers, body} Payload)"
         )
 
     # --- API Gateway -----------------------------------------------------------------------
@@ -211,6 +222,18 @@ class AwsLambdaApp:
             return failures
 
         return {"batchItemFailures": asyncio.run(run())}
+
+    # --- Direct invoke (synchronous, like API Gateway) --------------------------------------
+    def _handle_invoke(self, event: dict[str, Any]) -> dict[str, Any]:
+        """Answer a direct ``lambda.invoke()`` Payload with the response envelope, verbatim.
+
+        Unlike every trigger-delivered source, a direct invoke already speaks the Benzene wire
+        envelope on both sides, so there is no transport-shaped response to build — the raw
+        ``{statusCode, headers, body}`` :class:`~benzene.core.BenzeneMessageApplication` produces
+        *is* the invoke's response Payload, ready for :class:`~benzene.aws.LambdaMessageSender` (or
+        any caller) to decode back into a :class:`~benzene.results.Result`.
+        """
+        return asyncio.run(self._application.handle(invoke_envelope(event)))
 
     async def _dispatch_or_raise(self, envelope: dict[str, Any]) -> None:
         """Run one envelope; on a failure result raise ``MessageHandlingError`` (retry/redeliver).

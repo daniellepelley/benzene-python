@@ -1,13 +1,15 @@
 """``benzene.aws`` — the AWS Lambda host and its transport bindings.
 
 Distribution ``benzene-aws``: host the same Benzene handlers behind API Gateway (HTTP), SQS, SNS, S3
-(object-created), EventBridge, DynamoDB Streams, Kinesis Data Streams, and Kafka/MSK Lambda event
-sources, plus SNS/SQS/EventBridge/Kinesis outbound clients. Also ships a **self-hosted** SQS consumer
-(:mod:`benzene.aws.sqs_consumer` — ``SqsConsumerApp``/``run_sqs_consumer_loop``), distinct from the
-Lambda SQS trigger above: that one is invoked by a Lambda event source mapping, this one polls a queue
-itself, the shape a long-running worker or a Kubernetes Deployment needs. Depends on ``benzene-core``
-and ``benzene-http``. Mirrors .NET's ``Benzene.Aws.Lambda.*`` / ``Benzene.Clients.Aws.*`` /
-``Benzene.Aws.Sqs``.
+(object-created), EventBridge, DynamoDB Streams, Kinesis Data Streams, Kafka/MSK, and direct
+Lambda-invoke Lambda event sources, plus SNS/SQS/EventBridge/Kinesis/Lambda outbound clients — the
+last (``LambdaMessageSender``) calling another Lambda directly via AWS's own ``Invoke`` API, answered
+automatically by any ``AwsLambdaApp`` with zero extra wiring. Also ships a **self-hosted** SQS
+consumer (:mod:`benzene.aws.sqs_consumer` — ``SqsConsumerApp``/``run_sqs_consumer_loop``), distinct
+from the Lambda SQS trigger above: that one is invoked by a Lambda event source mapping, this one
+polls a queue itself, the shape a long-running worker or a Kubernetes Deployment needs. Depends on
+``benzene-core`` and ``benzene-http``. Mirrors .NET's ``Benzene.Aws.Lambda.*`` /
+``Benzene.Clients.Aws.*`` / ``Benzene.Aws.Sqs``.
 
     from benzene.aws import AwsLambdaApp, to_lambda_handler
 
@@ -22,6 +24,7 @@ from .app import AwsLambdaApp, to_lambda_handler
 from .clients import (
     EventBridgeMessageSender,
     KinesisMessageSender,
+    LambdaMessageSender,
     SnsMessageSender,
     SqsMessageSender,
 )
@@ -33,6 +36,7 @@ from .events import (
     dynamodb_record_envelope,
     event_source,
     eventbridge_envelope,
+    invoke_envelope,
     kafka_record_envelope,
     kafka_records,
     kinesis_record_envelope,
@@ -47,6 +51,7 @@ __all__ = [
     "AwsLambdaApp",
     "EventBridgeMessageSender",
     "KinesisMessageSender",
+    "LambdaMessageSender",
     "SnsMessageSender",
     "SqsConsumerApp",
     "SqsMessageSender",
@@ -55,6 +60,7 @@ __all__ = [
     "dynamodb_record_envelope",
     "eventbridge_envelope",
     "event_source",
+    "invoke_envelope",
     "kafka_record_envelope",
     "kafka_records",
     "kinesis_record_envelope",

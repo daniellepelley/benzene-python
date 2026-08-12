@@ -20,9 +20,11 @@ from benzene.aws import (
     AwsLambdaApp,
     EventBridgeMessageSender,
     KinesisMessageSender,
+    LambdaMessageSender,
     dynamodb_record_envelope,
     event_source,
     eventbridge_envelope,
+    invoke_envelope,
     kafka_record_envelope,
     kafka_records,
     kinesis_record_envelope,
@@ -295,3 +297,192 @@ def test_kinesis_sender_maps_a_put_failure_to_service_unavailable() -> None:
     result = asyncio.run(KinesisMessageSender("stream", client=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
     assert "kinesis down" in " ".join(result.errors)
+
+
+# --- direct invoke: one AWS Lambda calling another via lambda.invoke() -----------------------
+
+
+def test_event_source_classifies_a_bare_envelope_as_invoke() -> None:
+    assert event_source({"topic": "orders:place", "headers": {}, "body": "{}"}) == "invoke"
+    assert event_source({"topic": ""}) == "invoke"  # still recognised; the router rejects it deeper
+    # Every other source's own marker is checked first, so none of them is mistaken for an invoke.
+    assert event_source({"detail-type": "orders.created", "detail": {}}) == "eventbridge"
+
+
+def test_invoke_envelope_normalizes_absent_fields() -> None:
+    assert invoke_envelope({"topic": "t"}) == {"topic": "t", "headers": {}, "body": ""}
+    assert invoke_envelope({}) == {"topic": "", "headers": {}, "body": ""}
+
+
+def test_invoke_is_synchronous_like_api_gateway_and_returns_the_response_envelope() -> None:
+    async def place(request: dict) -> Result:
+        return Result.created({"id": "o1", "sku": request["sku"]})
+
+    app = AwsLambdaApp(registry=Registry().register("orders:place", place))
+    host = AwsLambdaTestHost(app)
+
+    result = host.send_invoke("orders:place", {"sku": "ABC"})
+    assert result.status == Status.CREATED
+    assert result.payload == {"id": "o1", "sku": "ABC"}
+
+
+def test_invoke_failure_decodes_status_and_errors_not_a_raise() -> None:
+    async def place(_request: dict) -> Result:
+        return Result.bad_request("sku is required")
+
+    app = AwsLambdaApp(registry=Registry().register("orders:place", place))
+    result = AwsLambdaTestHost(app).send_invoke("orders:place", {})
+    assert result.status == Status.BAD_REQUEST
+    assert result.errors == ("sku is required",)
+
+
+class _FakeLambdaPayload:
+    """A stand-in for the ``StreamingBody`` boto3 hands back as ``response["Payload"]``."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+
+class _FakeLambdaClient:
+    """A boto3 ``lambda`` client stand-in whose ``invoke`` replays a scripted response."""
+
+    def __init__(self, response: dict) -> None:
+        self._response = response
+        self.calls: list[dict] = []
+
+    def invoke(self, **kwargs) -> dict:
+        self.calls.append(kwargs)
+        return self._response
+
+
+def _invoke_response(payload: dict, *, function_error: str | None = None) -> dict:
+    response = {"StatusCode": 200, "Payload": _FakeLambdaPayload(json.dumps(payload).encode())}
+    if function_error:
+        response["FunctionError"] = function_error
+    return response
+
+
+def test_lambda_sender_decodes_a_successful_response_envelope() -> None:
+    envelope = {
+        "statusCode": Status.CREATED,
+        "headers": {"content-type": "application/json"},
+        "body": json.dumps({"id": "o1"}),
+    }
+    fake = _FakeLambdaClient(_invoke_response(envelope))
+    result = asyncio.run(
+        LambdaMessageSender("target-fn", client=fake).send_message(
+            "orders:place", {"sku": "ABC"}, headers={"traceparent": "tp"}
+        )
+    )
+    assert result.status == Status.CREATED
+    assert result.payload == {"id": "o1"}
+
+    call = fake.calls[0]
+    assert call["FunctionName"] == "target-fn"
+    assert call["InvocationType"] == "RequestResponse"
+    sent = json.loads(call["Payload"].decode("utf-8"))
+    assert sent == {
+        "topic": "orders:place",
+        "headers": {"traceparent": "tp"},
+        "body": '{"sku": "ABC"}',
+    }
+
+
+def test_lambda_sender_decodes_a_failure_response_envelope() -> None:
+    envelope = {
+        "statusCode": Status.NOT_FOUND,
+        "body": json.dumps({"status": "not-found", "detail": "no such order"}),
+    }
+    fake = _FakeLambdaClient(_invoke_response(envelope))
+    result = asyncio.run(
+        LambdaMessageSender("target-fn", client=fake).send_message("orders:get", {})
+    )
+    assert result.status == Status.NOT_FOUND
+    assert result.errors == ("no such order",)
+
+
+def test_lambda_sender_maps_a_function_error_to_service_unavailable() -> None:
+    # The target Lambda itself faulted (an unhandled exception) — AWS's own error shape, never a
+    # Benzene envelope.
+    fake = _FakeLambdaClient(
+        _invoke_response(
+            {"errorMessage": "boom", "errorType": "ValueError"}, function_error="Unhandled"
+        )
+    )
+    result = asyncio.run(LambdaMessageSender("target-fn", client=fake).send_message("t", {}))
+    assert result.status == Status.SERVICE_UNAVAILABLE
+    assert "boom" in " ".join(result.errors)
+
+
+def test_lambda_sender_maps_an_invoke_exception_to_service_unavailable() -> None:
+    class Boom:
+        def invoke(self, **kwargs):
+            raise RuntimeError("lambda invoke failed")
+
+    result = asyncio.run(LambdaMessageSender("target-fn", client=Boom()).send_message("t", {}))
+    assert result.status == Status.SERVICE_UNAVAILABLE
+    assert "lambda invoke failed" in " ".join(result.errors)
+
+
+def test_lambda_sender_maps_a_non_benzene_response_to_service_unavailable_not_a_crash() -> None:
+    # The target answered but isn't a Benzene function (returned a bare string, not an envelope).
+    fake = _FakeLambdaClient(
+        {"StatusCode": 200, "Payload": _FakeLambdaPayload(b'"not an envelope"')}
+    )
+    result = asyncio.run(LambdaMessageSender("target-fn", client=fake).send_message("t", {}))
+    assert result.status == Status.SERVICE_UNAVAILABLE
+
+
+def test_lambda_sender_event_invocation_is_accepted_without_decoding_a_response() -> None:
+    fake = _FakeLambdaClient({"StatusCode": 202, "Payload": _FakeLambdaPayload(b"")})
+    result = asyncio.run(
+        LambdaMessageSender("target-fn", client=fake, invocation_type="Event").send_message("t", {})
+    )
+    assert result.status == Status.ACCEPTED
+    assert fake.calls[0]["InvocationType"] == "Event"
+
+
+def test_lambda_sender_passes_a_qualifier_when_given() -> None:
+    fake = _FakeLambdaClient(_invoke_response({"statusCode": Status.OK, "body": ""}))
+    asyncio.run(
+        LambdaMessageSender("target-fn", client=fake, qualifier="live").send_message("t", {})
+    )
+    assert fake.calls[0]["Qualifier"] == "live"
+
+
+def test_lambda_to_lambda_round_trip_with_no_aws_at_all() -> None:
+    """The full story: a fake ``lambda.invoke()`` that actually dispatches to a second, independent
+    ``AwsLambdaApp`` — proving a real Lambda-to-Lambda call end to end without any boto3/AWS."""
+
+    async def get_order(request: dict) -> Result:
+        return (
+            Result.ok({"id": request["id"], "sku": "ABC"})
+            if request["id"] == "o1"
+            else Result.not_found()
+        )
+
+    target_app = AwsLambdaApp(registry=Registry().register("orders:get", get_order))
+
+    class FakeLambdaService:
+        """Stands in for AWS: routes an ``invoke()`` Payload straight to the target function."""
+
+        def invoke(
+            self, *, FunctionName: str, InvocationType: str, Payload: bytes, **_kwargs
+        ) -> dict:
+            event = json.loads(Payload.decode("utf-8"))
+            response = target_app.handle(event)
+            return {
+                "StatusCode": 200,
+                "Payload": _FakeLambdaPayload(json.dumps(response).encode("utf-8")),
+            }
+
+    sender = LambdaMessageSender("orders-service", client=FakeLambdaService())
+    result = asyncio.run(sender.send_message("orders:get", {"id": "o1"}))
+    assert result.is_successful
+    assert result.payload == {"id": "o1", "sku": "ABC"}
+
+    missing = asyncio.run(sender.send_message("orders:get", {"id": "o404"}))
+    assert missing.status == Status.NOT_FOUND

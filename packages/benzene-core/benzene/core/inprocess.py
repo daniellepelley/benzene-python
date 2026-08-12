@@ -33,13 +33,12 @@ architecture, not a limitation introduced here:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any
 
-from benzene.results import Result, Status, is_successful
+from benzene.results import Result
 
-from .envelope import BenzeneMessageApplication
+from .envelope import BenzeneMessageApplication, decode_response
 from .mapping import encode_body
 
 logger = logging.getLogger(__name__)
@@ -193,22 +192,4 @@ async def _dispatch(
     response = await application.handle(
         {"topic": topic, "headers": headers or {}, "body": encode_body(message)}
     )
-    status = response.get("statusCode") or Status.UNEXPECTED_ERROR
-    body = response.get("body") or ""
-    if not body:
-        return Result(status, None)
-
-    try:
-        parsed = json.loads(body)
-    except (ValueError, TypeError):
-        return Result.unexpected_error(f"in-process response body is not valid JSON: {body!r}")
-
-    if not is_successful(status) and isinstance(parsed, dict) and "detail" in parsed:
-        # encode_response() (envelope.py) always encodes an unsuccessful Result as
-        # error_payload()'s {"status": ..., "detail": ...} shape - surface the detail as the
-        # Result's error message, matching what a real client deserializing this envelope would do.
-        detail = parsed.get("detail") or ""
-        errors = tuple(e for e in detail.split(", ") if e) if detail else ()
-        return Result(status, None, errors)
-
-    return Result(status, parsed)
+    return decode_response(response)

@@ -14,7 +14,7 @@ import base64
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from benzene.core import encode_body
+from benzene.core import decode_response, encode_body
 from benzene.results import Result
 
 from .app import AwsLambdaApp
@@ -391,6 +391,20 @@ class AwsLambdaTestHost:
             .build()
         )
         self._app.handle(event)
+
+    def send_invoke(
+        self, topic: str, body: Any = None, headers: dict[str, str] | None = None
+    ) -> Result:
+        """Deliver one direct-invoke Payload; returns the decoded `Result` — what a real
+        :class:`~benzene.aws.LambdaMessageSender` would resolve to on the caller's side."""
+        event = {
+            "topic": topic,
+            "headers": dict(headers or {}),
+            "body": encode_body(body) if body is not None else "",
+        }
+        response = self._app.handle(event)
+        assert response is not None  # a direct invoke always yields a response envelope
+        return decode_response(response)
 
 
 class SqsMessageBuilder:

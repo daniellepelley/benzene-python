@@ -1,12 +1,17 @@
-"""AWS outbound clients (SNS, SQS, EventBridge, Kinesis) implementing the ``MessageSender`` port.
+"""AWS outbound clients (SNS, SQS, EventBridge, Kinesis, Lambda) implementing the ``MessageSender``
+port.
 
-Two carrying conventions, matching what each service exposes on the wire:
+Three carrying conventions, matching what each service exposes on the wire:
 
 - **SNS / SQS** have a native message-attribute channel, so the Benzene topic and headers ride there
   (the ``topic`` attribute plus one attribute per header) — the same shape the inbound decoders read.
 - **EventBridge / Kinesis** have *no* metadata channel, so the sender embeds the whole Benzene
   envelope ``{topic, headers, body}`` inside the payload it serializes. This keeps
   correlation/trace propagation working end to end regardless of the transport.
+- **Lambda** (:class:`LambdaMessageSender`) calls another function directly — AWS's own
+  request/response primitive, no broker involved — so the envelope travels as the invoke Payload
+  itself and the *response* Payload decodes straight back into a :class:`~benzene.results.Result`
+  (see :class:`~benzene.aws.AwsLambdaApp`'s ``"invoke"`` source, the receiving half of this).
 
 Mirrors .NET's ``Benzene.Clients.Aws.*``. ``boto3`` is an optional dependency, imported lazily, so
 the module (and its tests, which inject a fake client) load with no AWS SDK present.
@@ -19,10 +24,11 @@ follow, and what keeps an outbound publish from stalling an ASGI server co-hoste
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from typing import Any
 
-from benzene.core import encode_body
+from benzene.core import decode_response, encode_body
 from benzene.results import Result, Status
 
 from .events import TOPIC_ATTRIBUTE
@@ -214,3 +220,100 @@ class KinesisMessageSender:
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
+
+
+class LambdaMessageSender:
+    """Invokes another AWS Lambda function directly — AWS's own ``Invoke`` API, no broker in
+    between (mirrors direct Lambda-to-Lambda calls; the AWS-specific counterpart to
+    :class:`~benzene.http.HttpMessageSender` / :class:`~benzene.grpc.GrpcMessageSender`, which reach
+    the same *outcome* over HTTP/gRPC on platforms with no equivalent invoke primitive).
+
+    The invoke Payload **is** the transport-neutral Benzene envelope (``{topic, headers, body}``), so
+    the target needs no special wiring — *any* :class:`~benzene.aws.AwsLambdaApp` recognises this
+    shape as its ``"invoke"`` source automatically, the same function it already answers API
+    Gateway/SQS/SNS/etc. through.
+
+    ``invocation_type`` selects AWS's two invoke modes:
+
+    - ``"RequestResponse"`` (the default) — synchronous: waits for the target to run and decodes its
+      response envelope back into a :class:`~benzene.results.Result`
+      (:func:`~benzene.core.decode_response`) — the "call another function and get an answer" pattern.
+    - ``"Event"`` — asynchronous: returns as soon as AWS accepts the invoke, before the target even
+      runs; maps to :meth:`~benzene.results.Result.accepted`, matching every fire-and-forget sender
+      here (no visibility into the target's own outcome).
+
+    ``qualifier`` pins a specific version/alias (``Qualifier`` on the AWS API) when given.
+    """
+
+    def __init__(
+        self,
+        function_name: str,
+        client: Any | None = None,
+        serializer: Callable[[Any], str] | None = None,
+        *,
+        invocation_type: str = "RequestResponse",
+        qualifier: str | None = None,
+    ) -> None:
+        self._function_name = function_name
+        self._client = client
+        self._serialize = serializer or encode_body
+        self._invocation_type = invocation_type
+        self._qualifier = qualifier
+
+    def _lambda(self) -> Any:
+        if self._client is None:
+            import boto3  # lazy: optional dependency
+
+            self._client = boto3.client("lambda")
+        return self._client
+
+    async def send_message(
+        self, topic: str, message: Any, headers: dict[str, str] | None = None
+    ) -> Result:
+        envelope = {"topic": topic, "headers": headers or {}, "body": self._serialize(message)}
+        kwargs: dict[str, Any] = {
+            "FunctionName": self._function_name,
+            "InvocationType": self._invocation_type,
+            "Payload": json.dumps(envelope).encode("utf-8"),
+        }
+        if self._qualifier:
+            kwargs["Qualifier"] = self._qualifier
+
+        try:
+            response = await asyncio.to_thread(self._lambda().invoke, **kwargs)
+        except Exception as ex:
+            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+
+        if self._invocation_type != "RequestResponse":
+            return Result.accepted()  # queued; the target's own outcome is never visible here
+
+        if response.get("FunctionError"):
+            # The invoke itself faulted (an unhandled exception/timeout in the target, or a Payload
+            # AwsLambdaApp couldn't classify) — never a Benzene envelope to decode.
+            return Result.failure(Status.SERVICE_UNAVAILABLE, _invoke_error_detail(response))
+        payload = _read_payload(response)
+        if not isinstance(payload, dict):
+            # The target answered, but not with a Benzene response envelope (it isn't a Benzene
+            # function, or returned something else entirely) — a mapped failure, not a crash.
+            return Result.failure(
+                Status.SERVICE_UNAVAILABLE, f"Unexpected invoke response: {payload!r}"
+            )
+        return decode_response(payload)
+
+
+def _read_payload(response: dict[str, Any]) -> Any:
+    """Read and JSON-decode a Lambda invoke response's ``Payload`` stream; raw text if not JSON."""
+    raw = response["Payload"].read().decode("utf-8")
+    try:
+        return json.loads(raw) if raw else None
+    except (ValueError, TypeError):
+        return raw
+
+
+def _invoke_error_detail(response: dict[str, Any]) -> str:
+    """The target's own error message when ``FunctionError`` is set (AWS's ``{errorMessage, ...}``
+    shape for an unhandled exception), falling back to the raw payload or the error type."""
+    payload = _read_payload(response)
+    if isinstance(payload, dict) and payload.get("errorMessage"):
+        return str(payload["errorMessage"])
+    return str(payload) if payload else str(response["FunctionError"])

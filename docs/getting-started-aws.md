@@ -300,12 +300,15 @@ headers (`benzene.core.read_message_metadata`).
 
 > **Compared with the .NET port:** the Python `benzene.aws` package now hosts the full set of Lambda
 > event sources — **API Gateway, SQS, SNS, S3 (object-created), EventBridge, DynamoDB Streams, Kinesis
-> Data Streams, and Kafka/MSK** — alongside **EventBridge and Kinesis outbound clients** (on top of the
-> SNS/SQS senders) and a **self-hosted SQS consumer** (`SqsConsumerApp` / `run_sqs_consumer_loop`) for a
-> long-running worker or a Kubernetes Deployment that polls a queue itself rather than being invoked by a
-> Lambda event-source mapping. The channel-less sources (S3, EventBridge, DynamoDB, Kinesis) take their
-> topic from an injectable convention on the host; SQS, SNS, and Kafka read it from the `topic` message
-> attribute. The one .NET affordance still missing is a `UsePresetTopic` option for the attribute-carrying
+> Data Streams, Kafka/MSK, and direct Lambda-to-Lambda invoke** — alongside **EventBridge, Kinesis, and
+> Lambda outbound clients** (on top of the SNS/SQS senders) and a **self-hosted SQS consumer**
+> (`SqsConsumerApp` / `run_sqs_consumer_loop`) for a long-running worker or a Kubernetes Deployment that
+> polls a queue itself rather than being invoked by a Lambda event-source mapping. The channel-less
+> sources (S3, EventBridge, DynamoDB, Kinesis) take their topic from an injectable convention on the
+> host; SQS, SNS, and Kafka read it from the `topic` message attribute; a direct invoke's topic travels
+> explicitly in its `{topic, headers, body}` Payload — the one **synchronous** source besides API
+> Gateway, since `LambdaMessageSender` decodes the target's response envelope straight back into a
+> `Result`. The one .NET affordance still missing is a `UsePresetTopic` option for the attribute-carrying
 > transports — accepting messages from a **raw, non-Benzene SQS producer** that never writes a `topic`
 > attribute; here SQS/SNS still require that attribute.
 

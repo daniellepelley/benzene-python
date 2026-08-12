@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from benzene.results import Result, Status
+from benzene.results import Result, Status, is_successful
 
 from .context import Context
 from .dependencies import Container
@@ -107,3 +107,37 @@ def encode_response(result: Result[Any] | None) -> dict[str, Any]:
         body = json.dumps(error_payload(result))
 
     return {"statusCode": result.status, "headers": headers, "body": body}
+
+
+def decode_response(response: Mapping[str, Any]) -> Result[Any]:
+    """The inverse of :func:`encode_response`: a response envelope ``{statusCode, headers, body}``
+    back into a :class:`~benzene.results.Result`.
+
+    For a **transport whose response Payload/body IS the Benzene response envelope verbatim** — an
+    in-process dispatch, a direct AWS Lambda invoke of another Benzene function, or any bespoke
+    caller that speaks the wire envelope directly rather than translating through HTTP status codes
+    or gRPC codes — this is the one decode step needed, no reverse status-code table involved (unlike
+    ``benzene.http``'s ``from_http`` or ``benzene.grpc``'s ``code_to_status``, whose peers speak a
+    *different* status vocabulary on the wire). An empty ``body`` maps to a ``None`` payload; a failure
+    body in :func:`error_payload`'s shape (``{"status", "detail"}``) has its ``detail`` split back into
+    the result's ``errors`` tuple; a body that isn't valid JSON becomes ``unexpected-error`` rather than
+    raising, matching this envelope's "never crash the caller" rule everywhere else.
+    """
+    status = response.get("statusCode") or Status.UNEXPECTED_ERROR
+    body = response.get("body") or ""
+    if not body:
+        return Result(status, None)
+
+    try:
+        parsed = json.loads(body)
+    except (ValueError, TypeError):
+        return Result.unexpected_error(f"response body is not valid JSON: {body!r}")
+
+    if not is_successful(status) and isinstance(parsed, dict) and "detail" in parsed:
+        # error_payload() always encodes a failure as {"status": ..., "detail": ...} - surface the
+        # detail as the Result's error message(s), matching what a peer decoding this envelope does.
+        detail = parsed.get("detail") or ""
+        errors = tuple(e for e in detail.split(", ") if e) if detail else ()
+        return Result(status, None, errors)
+
+    return Result(status, parsed)

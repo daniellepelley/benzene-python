@@ -1,9 +1,9 @@
 # `benzene.aws`
 
 Host Benzene handlers on **AWS Lambda** — API Gateway (HTTP), SQS, SNS, S3, EventBridge, DynamoDB
-Streams, Kinesis, and Kafka/MSK event sources in one function — plus SNS/SQS/EventBridge/Kinesis
-outbound clients and a **self-hosted** SQS consumer. **Distribution: `benzene-aws` (depends on
-`benzene-core`, `benzene-http`).**
+Streams, Kinesis, Kafka/MSK, and direct Lambda-invoke event sources in one function — plus
+SNS/SQS/EventBridge/Kinesis/Lambda outbound clients and a **self-hosted** SQS consumer.
+**Distribution: `benzene-aws` (depends on `benzene-core`, `benzene-http`).**
 
 ```bash
 pip install benzene-aws            # add [boto3] for the real outbound clients
@@ -24,11 +24,17 @@ One host, inner bindings selected by event shape (transport-bindings §1):
   so failures are reported via `batchItemFailures` keyed by the record's sequence number.
 - **Kafka / MSK** — records grouped by topic-partition; one scope per record; the MSK event source has
   no partial-batch channel, so a failure raises for redelivery.
+- **Direct invoke** — a bare `{"topic", "headers", "body"}` Payload, what another Lambda's
+  `lambda.invoke(FunctionName=..., Payload=...)` sends (see `LambdaMessageSender` below). The one
+  *synchronous* source besides API Gateway: the response envelope is returned verbatim as the
+  invoke's response Payload, for the caller to decode back into a `Result`
+  (`benzene.core.decode_response`).
 
 Topic for the attribute-carrying transports (SQS, SNS, Kafka) comes from the `topic` message attribute
 / header. The channel-less sources (S3, EventBridge, DynamoDB, Kinesis) have no metadata channel on the
 wire, so their topic comes from an injectable convention configured on the host — or, for DynamoDB,
-from the record's `eventName` (`dynamodb:insert`).
+from the record's `eventName` (`dynamodb:insert`). A direct invoke's topic is exactly what the caller
+sent, no convention involved.
 
 ## `AwsLambdaApp`
 
@@ -40,17 +46,19 @@ handler = to_lambda_handler(app)                            # def handler(event,
 ```
 
 - `handle(event, context=None)` — dispatches by event shape (`event_source(event)` classifies it);
-  returns an API Gateway proxy response, or a `{"batchItemFailures": [...]}` partial-batch response
-  (SQS, DynamoDB, Kinesis), or `None` (SNS, S3, EventBridge, Kafka).
+  returns an API Gateway proxy response, a `{"batchItemFailures": [...]}` partial-batch response
+  (SQS, DynamoDB, Kinesis), the raw Benzene response envelope (a direct invoke), or `None` (SNS, S3,
+  EventBridge, Kafka).
 - `to_lambda_handler(app)` — the callable AWS Lambda invokes.
 - The topic conventions for the channel-less sources are constructor keyword arguments:
   `s3_topic="s3:object-created"`, `eventbridge_topic="eventbridge:event"`,
   `kinesis_topic="kinesis:record"`, and `dynamodb_topic=None` (`None` means "derive per record from its
-  `eventName`", e.g. `dynamodb:modify`).
+  `eventName`", e.g. `dynamodb:modify`). A direct invoke has no convention — its topic travels
+  explicitly in the Payload.
 
 `benzene.aws` also exports the per-source decoders behind these bindings for custom wiring:
 `s3_record_envelope`, `eventbridge_envelope`, `dynamodb_record_envelope`, `kinesis_record_envelope`,
-`kafka_records` / `kafka_record_envelope`, and the `event_source` classifier.
+`kafka_records` / `kafka_record_envelope`, `invoke_envelope`, and the `event_source` classifier.
 
 ## Outbound clients
 
@@ -62,12 +70,28 @@ handler = to_lambda_handler(app)                            # def handler(event,
 - `KinesisMessageSender(stream_name, partition_key_header="partition-key", client=None)` — puts a
   record on a Kinesis Data Stream; the partition key is read from `partition_key_header` when present,
   else the topic (so a topic's records co-locate on a shard and stay ordered).
+- `LambdaMessageSender(function_name, client=None, *, invocation_type="RequestResponse", qualifier=None)`
+  — invokes another Lambda function directly via AWS's `Invoke` API (no broker). The invoke Payload
+  *is* the Benzene envelope, so the target needs no special wiring — any `AwsLambdaApp` answers it as
+  its `"invoke"` source automatically. With the default `"RequestResponse"`, the call is synchronous:
+  it waits for the target and decodes its response envelope back into a `Result`
+  (`benzene.core.decode_response`) — this is the "call another function and get an answer" pattern,
+  AWS's own equivalent of Lambda-to-Lambda calls. `invocation_type="Event"` is fire-and-forget instead
+  — it returns `Result.accepted()` as soon as AWS queues the invoke, before the target even runs. A
+  `FunctionError` in the response (the target itself faulted) or a payload that isn't a Benzene
+  envelope both map to `service-unavailable`, never a crash.
 
-All four implement `benzene.core.MessageSender` and use `boto3` (a lazy, optional import). SNS/SQS have
+All five implement `benzene.core.MessageSender` and use `boto3` (a lazy, optional import). SNS/SQS have
 a native attribute channel, so the Benzene topic rides in the `topic` message attribute and headers as
 attributes. EventBridge/Kinesis have *no* metadata channel, so the sender embeds the whole Benzene
 envelope `{topic, headers, body}` inside the payload it serializes — keeping correlation/trace
-propagation intact. A send failure maps to `service-unavailable`, never a raise.
+propagation intact. Lambda's invoke Payload *is* the envelope already. A send failure maps to
+`service-unavailable`, never a raise.
+
+Azure Functions and Kubernetes services have no equivalent native "invoke another function directly"
+primitive — the cross-platform way to reach the same synchronous-call outcome is over HTTP or gRPC
+(`benzene.http.HttpMessageSender` / `benzene.grpc.GrpcMessageSender`), which is why `LambdaMessageSender`
+is AWS-only.
 
 ## Self-hosted SQS consumer
 
@@ -100,11 +124,14 @@ await run_sqs_consumer_loop(app, client, queue_url)    # long-poll -> dispatch -
 
 `benzene.aws.testing` provides `AwsLambdaTestHost` with one `send_*` per source — `send_http`,
 `send_sqs` / `send_sqs_event`, `send_sns`, `send_s3`, `send_eventbridge`, `send_dynamodb`,
-`send_kinesis`, `send_kafka` — and a native-event builder behind each (`ApiGatewayRequestBuilder`,
-`SqsEventBuilder`, `SnsEventBuilder`, `S3EventBuilder`, `EventBridgeEventBuilder`,
-`DynamoDbStreamBuilder`, `KinesisEventBuilder`, `KafkaLambdaEventBuilder`). The partial-batch sources
+`send_kinesis`, `send_kafka`, `send_invoke` — and a native-event builder behind each
+(`ApiGatewayRequestBuilder`, `SqsEventBuilder`, `SnsEventBuilder`, `S3EventBuilder`,
+`EventBridgeEventBuilder`, `DynamoDbStreamBuilder`, `KinesisEventBuilder`, `KafkaLambdaEventBuilder`;
+a direct invoke needs no builder, its Payload already *is* the envelope). The partial-batch sources
 (`send_sqs*`, `send_dynamodb`, `send_kinesis`) return an `SqsBatchResponse` — assert on
-`response.batch_item_failures` — mirroring how `send_http` returns a response object.
+`response.batch_item_failures` — mirroring how `send_http` returns a response object. `send_invoke`
+returns the decoded `Result` directly (`benzene.core.decode_response`) — the same thing a real
+`LambdaMessageSender` would resolve to on the caller's side.
 
 The self-hosted SQS consumer has its own harness: `SqsConsumerTestHost` (`send_sqs_consumer` → the
 mapped `Result`), the `SqsMessageBuilder` (a `receive_message()`-shaped dict, distinct from the Lambda
