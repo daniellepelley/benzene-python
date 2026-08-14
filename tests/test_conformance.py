@@ -16,6 +16,8 @@ from .canonical_handlers import register_canonical
 from .conformance_runner import (
     CONFORMANCE_DIR,
     _is_subset,
+    run_contract_document_cases,
+    run_contract_hash_cases,
     run_http_mapping,
     run_status_vocabulary,
 )
@@ -27,6 +29,14 @@ def test_status_vocabulary_conforms() -> None:
 
 def test_http_status_mapping_conforms() -> None:
     assert run_http_mapping() == []
+
+
+def test_contract_document_cases_conform() -> None:
+    assert run_contract_document_cases() == []
+
+
+def test_contract_hash_cases_conform() -> None:
+    assert run_contract_hash_cases() == []
 
 
 def _envelope_cases() -> list:

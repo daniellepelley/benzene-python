@@ -28,6 +28,7 @@ Python equivalent.
 | [`benzene-mesh-fleet`](https://pypi.org/project/benzene-mesh-fleet/) | `benzene.mesh_fleet` | cloud service-discovery adapters (AWS/Azure/Kubernetes) and trace-mappers (Jaeger/Tempo/X-Ray) for a fleet | `benzene-core`, `benzene-mesh` |
 | [`benzene-pydantic`](https://pypi.org/project/benzene-pydantic/) | `benzene.pydantic` | validate handler requests with pydantic models (an optional adapter) | `benzene-core`, `pydantic` |
 | [`benzene-testing`](https://pypi.org/project/benzene-testing/) | `benzene.testing` | in-memory test host + test doubles (a dev/test dependency) | `benzene-core` |
+| [`benzene-codegen-client`](https://pypi.org/project/benzene-codegen-client/) | `benzene.codegen_client` | the `benzene-codegen` CLI — generates a typed client from any service's Contract Document (a build-time dependency) | `benzene-core` |
 
 Because Benzene uses a [PEP 420 namespace package](https://peps.python.org/pep-0420/), all of these
 contribute submodules to one shared `benzene` namespace. Installing a higher layer pulls in the
@@ -121,3 +122,10 @@ So the Python port keeps the **meaningful adoption seams** as separate packages 
 as `Benzene.Dependencies` lives in `benzene.core.dependencies`. If and when a genuinely optional
 concern appears (e.g. a bring-your-own-container adapter, or a validation adapter over `pydantic`),
 *that* earns its own package, because it is a real adoption choice rather than an assembly boundary.
+
+`benzene-codegen-client` is exactly that kind of genuinely optional concern: a service that never
+consumes another Benzene service's Contract Document has no reason to install an OpenAPI-schema
+walker, an RFC 8785 canonicalizer, or the `benzene-codegen` CLI. It mirrors .NET's
+`Benzene.CodeGen.Client` as its own leaf package rather than folding into `benzene-core`, and — the
+one place it differs from every other row in the table above — nothing in this port depends *on* it:
+it's a build-time/CLI tool that depends down on `benzene-core`, not a layer other packages build on.

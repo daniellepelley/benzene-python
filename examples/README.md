@@ -97,6 +97,16 @@ Payload **casting** with caster chaining (the .NET `Versioning` example's "Mecha
 extension of the [`versioning`](versioning) example once a dedicated casting example is warranted — the
 core primitives (`SchemaCasters` + `casting_handler`) already exist in `benzene-core`.
 
+## Consuming another service: `orders_payments_client`
+
+[`orders_payments_client/`](orders_payments_client) dogfoods `benzene-codegen-client` against a
+real, .NET-produced Contract Document (`contracts/payments.spec.json`, copied verbatim from
+`benzene-dotnet`'s `AwsMesh` example) — not a fixture written for this port. `generate.py`
+regenerates the checked-in `generated/payments_capture_client.py` (a topic-scoped client for
+`payments:capture` only); its tests wire the generated client to `FakeMessageSender` and assert the
+send, the typed payload, the embedded contract hash, and that no `benzene:*` reserved topic leaks
+into the output. See [`docs/codegen-client.md`](../docs/codegen-client.md).
+
 ## Running the tests
 
 All example tests run as part of the normal suite (they're on `testpaths`):

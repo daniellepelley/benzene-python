@@ -46,6 +46,12 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 - **[`benzene.pydantic`](reference/pydantic.md)** — validate handler requests with pydantic models.
 - **[`benzene.testing`](reference/testing.md)** — the in-memory test host and test doubles.
 
+## Tools
+
+- **[`benzene-codegen-client`](codegen-client.md)** — generates a typed, topic-scoped Python client
+  from any Benzene service's Contract Document (`{Service}.spec.json`) — .NET, Go, TypeScript, or
+  Python. A build-time/CLI tool, not a runtime dependency.
+
 ## Guides & cookbooks
 
 - **[Hosting on Google Cloud Functions](cookbooks/hosting-on-gcp.md)** — one set of handlers behind
