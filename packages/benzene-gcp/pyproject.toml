@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-gcp"
-version = "0.0.1"
+version = "0.1.0b1"
 description = "Benzene Google Cloud Functions host — HTTP + Pub/Sub transport bindings and a Pub/Sub outbound client."
 readme = "README.md"
 requires-python = ">=3.10"

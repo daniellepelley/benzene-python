@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-testing"
-version = "0.0.1"
+version = "0.1.0b1"
 description = "In-memory test host and test doubles for testing Benzene applications (dogfooded by the examples)."
 readme = "README.md"
 requires-python = ">=3.10"

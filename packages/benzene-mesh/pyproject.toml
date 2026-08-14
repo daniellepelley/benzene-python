@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-mesh"
-version = "0.0.1"
+version = "0.1.0b1"
 description = "Benzene mesh module — ServiceDescriptor self-description, the benzene:mesh endpoint, per-invocation tracing, and collector feeds."
 readme = "README.md"
 requires-python = ">=3.10"

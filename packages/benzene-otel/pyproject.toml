@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-otel"
-version = "0.0.1"
+version = "0.1.0b1"
 description = "Benzene OpenTelemetry bridge — export the port's mesh traces to an OTel SDK, plus a response-as-event pattern."
 readme = "README.md"
 requires-python = ">=3.10"

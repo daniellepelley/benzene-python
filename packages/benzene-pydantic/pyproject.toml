@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-pydantic"
-version = "0.0.1"
+version = "0.1.0b1"
 description = "Benzene pydantic adapter — validate handler requests with pydantic models, validation errors as validation-error."
 readme = "README.md"
 requires-python = ">=3.10"

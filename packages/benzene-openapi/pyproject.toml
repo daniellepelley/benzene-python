@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-openapi"
-version = "0.0.1"
+version = "0.1.0b1"
 description = "Benzene OpenAPI generation — derive an OpenAPI 3.1 document from the handler registry."
 readme = "README.md"
 requires-python = ">=3.10"

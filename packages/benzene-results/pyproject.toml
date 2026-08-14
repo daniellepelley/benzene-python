@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-results"
-version = "0.0.1"
+version = "0.1.0b1"
 description = "Benzene Result type and status vocabulary — the bottom layer of the Python Benzene port."
 readme = "README.md"
 requires-python = ">=3.10"
