@@ -37,7 +37,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Typing :: Typed",
 ]
-dependencies = ["benzene-core>=0.0.1", "benzene-http>=0.0.1"]
+dependencies = ["benzene-core>=0.1.0b1", "benzene-http>=0.1.0b1"]
 
 [project.optional-dependencies]
 # Only needed for the real SNS/SQS outbound clients; inbound bindings + tests need no AWS SDK.

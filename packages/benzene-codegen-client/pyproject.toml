@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Benzene" }]
 keywords = ["benzene", "codegen", "client", "openapi", "hexagonal", "message-handler"]
-dependencies = ["benzene-core", "rfc8785>=0.1.4"]
+dependencies = ["benzene-core>=0.1.0b1", "rfc8785>=0.1.4"]
 
 [project.scripts]
 benzene-codegen = "benzene.codegen_client.cli:main"

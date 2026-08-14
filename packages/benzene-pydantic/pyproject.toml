@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Typing :: Typed",
 ]
-dependencies = ["benzene-core>=0.0.1", "pydantic>=2"]
+dependencies = ["benzene-core>=0.1.0b1", "pydantic>=2"]
 
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"

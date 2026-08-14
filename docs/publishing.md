@@ -10,14 +10,32 @@ Connect, so no API tokens are stored in the repository.
 Until Benzene for Python reaches 1.0, every version published carries a
 [PEP 440](https://peps.python.org/pep-0440/) prerelease segment — `0.1.0b1`, `0.1.0b2`, …, `0.1.0rc1`,
 never a bare `0.1.0`. This is not just a label: `packaging.version.Version("0.1.0b1").is_prerelease`
-is `True`, and pip's resolver **skips prereleases by default**. A plain `pip install benzene-core`
-will not resolve to it — only an explicit `pip install benzene-core==0.1.0b1`,
-`pip install --pre benzene-core`, or a `benzene-core>=0.1.0b1` (or similar) requirement that itself
-opts in will. That is deliberate: these packages are for early testing, not production, and the
-version string itself enforces that rather than relying on a reader noticing a low number or a
-"beta" note in the README. Inter-package dependencies (`benzene-core>=0.0.1`, etc.) stay as a
-permissive floor — pip only allows prereleases into a resolution once *something* in it was
-explicitly requested as a prerelease, so this does not accidentally loosen anything.
+is `True`, and pip's resolver **skips prereleases by default**. That is deliberate: these packages
+are for early testing, not production, and the version string says so rather than relying on a
+reader noticing a low number or a "beta" note in the README.
+
+**Inter-package dependencies must carry a prerelease floor — `benzene-core>=0.1.0b1`, not
+`benzene-core>=0.0.1`.** PEP 440 permits prereleases into a resolution only when the specifier
+*itself* names one as a bound. With a plain `>=0.0.1` floor and nothing but prereleases published,
+pip has no candidate it is willing to pick, and the install fails outright:
+
+```
+$ pip install benzene-core
+ERROR: Could not find a version that satisfies the requirement benzene-results>=0.0.1
+       (from benzene-core) (from versions: 0.1.0b1)
+```
+
+That failed with **and without** `--pre`, so it was not a gate — it made every multi-package
+install impossible. Fixed by raising all inter-package floors to `>=0.1.0b1`; raise them again with
+each version bump.
+
+> **A note on what the prerelease version does and does not gate.** It does not stop a plain
+> `pip install`. When the *only* published version satisfying a requirement is a prerelease, pip
+> takes it anyway — so `pip install benzene-results` today installs `0.1.0b1` with no `--pre`
+> (verified 2026-08-14). The prerelease segment is therefore honest signalling, not enforcement; it
+> starts excluding these builds only once a stable version exists to prefer instead. Do not
+> reintroduce a non-prerelease floor believing it gates anything — the exclusion happens at the
+> top level, not through the dependency floors.
 
 ## What a release does
 

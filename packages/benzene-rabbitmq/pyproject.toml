@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Typing :: Typed",
 ]
-dependencies = ["benzene-core>=0.0.1"]
+dependencies = ["benzene-core>=0.1.0b1"]
 
 [project.optional-dependencies]
 # Only the default publish/consume clients need the SDK; the binding (decode, consumer loop,

@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Typing :: Typed",
 ]
-dependencies = ["benzene-core>=0.0.1"]
+dependencies = ["benzene-core>=0.1.0b1"]
 
 [project.optional-dependencies]
 # Only the server/client transport needs grpcio; the status mapping is dependency-free.
