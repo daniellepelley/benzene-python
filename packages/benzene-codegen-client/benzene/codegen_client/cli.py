@@ -23,21 +23,28 @@ import sys
 from pathlib import Path
 
 from .document import ContractDocument, ContractDocumentError, parse_document
-from .generator import GeneratedClient, TopicNotFoundError, generate_service_client, generate_topic_client
+from .generator import (
+    GeneratedClient,
+    TopicNotFoundError,
+    generate_service_client,
+    generate_topic_client,
+)
 from .topic_scope import UnknownTopicsError
 
 
 def _load_document(spec_path: str) -> ContractDocument:
     try:
         raw = json.loads(Path(spec_path).read_text())
-    except FileNotFoundError:
-        raise SystemExit(f"benzene-codegen: no such file: {spec_path!r}")
+    except FileNotFoundError as exc:
+        raise SystemExit(f"benzene-codegen: no such file: {spec_path!r}") from exc
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"benzene-codegen: {spec_path!r} is not valid JSON: {exc}")
+        raise SystemExit(f"benzene-codegen: {spec_path!r} is not valid JSON: {exc}") from exc
     try:
         return parse_document(raw)
     except ContractDocumentError as exc:
-        raise SystemExit(f"benzene-codegen: {spec_path!r} is not a valid Contract Document: {exc}")
+        raise SystemExit(
+            f"benzene-codegen: {spec_path!r} is not a valid Contract Document: {exc}"
+        ) from exc
 
 
 def _write(out_path: str | None, generated: GeneratedClient) -> None:

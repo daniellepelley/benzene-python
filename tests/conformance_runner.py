@@ -17,7 +17,11 @@ from typing import Any
 from benzene.codegen_client import contract_hash as codegen_contract_hash
 from benzene.codegen_client.document import parse_document
 from benzene.codegen_client.schema_closure import reachable_names
-from benzene.codegen_client.topic_scope import TopicScopeOptions, UnknownTopicsError, apply_topic_scope
+from benzene.codegen_client.topic_scope import (
+    TopicScopeOptions,
+    UnknownTopicsError,
+    apply_topic_scope,
+)
 from benzene.core import (
     BenzeneMessageApplication,
     MetadataKeys,

@@ -4,11 +4,12 @@ regenerate instead (see docs/codegen-client.md's build-integration note).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Union, cast
+from dataclasses import dataclass
+from typing import cast
 
 from benzene.core.clients import MessageSender
 from benzene.results import Result
+
 
 @dataclass
 class CapturePayment:

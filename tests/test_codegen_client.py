@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from benzene.codegen_client import (
     UnknownTopicsError,
     generate_service_client,
@@ -21,7 +20,12 @@ from benzene.codegen_client import (
 )
 from benzene.codegen_client.cli import main as cli_main
 from benzene.codegen_client.generator import TopicNotFoundError
-from benzene.codegen_client.naming import class_name, default_method_name, field_name, topic_identifier
+from benzene.codegen_client.naming import (
+    class_name,
+    default_method_name,
+    field_name,
+    topic_identifier,
+)
 
 _CONFORMANCE_DIR = Path(__file__).resolve().parent.parent / "conformance"
 _PAYMENTS_SPEC = (

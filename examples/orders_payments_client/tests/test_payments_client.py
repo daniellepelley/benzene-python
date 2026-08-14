@@ -12,12 +12,10 @@ import json
 from pathlib import Path
 
 import pytest
-
 from benzene.codegen_client import compute_contract_hash, generate_service_client, parse_document
 from benzene.codegen_client.document import ContractDocument, to_raw_document
 from benzene.codegen_client.schema_closure import reachable_schemas
 from benzene.testing import FakeMessageSender
-
 from orders_payments_client.generated.payments_capture_client import (
     CONTRACT_HASH,
     REQUIRED_TOPICS,
@@ -69,7 +67,7 @@ def test_contract_hash_matches_the_expected_topic_scoped_projection() -> None:
     )
     expected_hash = compute_contract_hash(to_raw_document(projected), topic_scoped=True)
 
-    assert CONTRACT_HASH == expected_hash
+    assert expected_hash == CONTRACT_HASH
 
 
 def test_no_reserved_benzene_topic_appears_anywhere_in_the_generated_client() -> None:
