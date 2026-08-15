@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-kafka"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Benzene Kafka transport binding — a self-hosted consumer and a Kafka-produce outbound client."
 readme = "README.md"
 requires-python = ">=3.10"

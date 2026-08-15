@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-azure"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Benzene Azure Functions host — HTTP, Service Bus, Event Hub, Queue/Blob Storage, Cosmos DB, Timer, and Event Grid bindings plus outbound clients."
 readme = "README.md"
 requires-python = ">=3.10"

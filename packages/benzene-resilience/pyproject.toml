@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-resilience"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Benzene resilience policies — circuit breaker, bulkhead, rate limiting, idempotency, and in-process sagas."
 readme = "README.md"
 requires-python = ">=3.10"

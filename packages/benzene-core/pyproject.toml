@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-core"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Benzene transport-neutral message-handling engine — pipeline, registry, DI, and the BenzeneMessage envelope."
 readme = "README.md"
 requires-python = ">=3.10"

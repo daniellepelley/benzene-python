@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-codegen-client"
-version = "0.0.1"
+version = "0.1.0b2"
 description = "Generates a typed, topic-scoped Python client SDK from a Benzene Contract Document (.spec.json) — no .NET SDK required."
 readme = "README.md"
 requires-python = ">=3.10"

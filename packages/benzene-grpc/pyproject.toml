@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-grpc"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Benzene gRPC status mapping — the Benzene<->gRPC StatusCode contract and the benzene-status trailer rule."
 readme = "README.md"
 requires-python = ">=3.10"

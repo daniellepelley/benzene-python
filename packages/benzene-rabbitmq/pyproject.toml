@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-rabbitmq"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Benzene RabbitMQ transport binding — a self-hosted consumer and a RabbitMQ-publish outbound client."
 readme = "README.md"
 requires-python = ">=3.10"

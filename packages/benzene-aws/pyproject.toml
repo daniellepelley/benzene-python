@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-aws"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Benzene AWS Lambda host — API Gateway, SQS, SNS, S3, EventBridge, DynamoDB Streams, Kinesis and Kafka/MSK bindings plus matching outbound clients."
 readme = "README.md"
 requires-python = ">=3.10"
