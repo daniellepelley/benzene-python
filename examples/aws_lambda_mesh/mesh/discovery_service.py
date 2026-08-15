@@ -11,12 +11,18 @@ On each run it:
    ``health_interception``) — :class:`~benzene.mesh.MeshPoller` over one
    :class:`~benzene.mesh.CallableServiceSource` per discovered function, exactly the seam
    ``benzene.mesh`` ships for a bespoke transport;
-3. **publishes** the discovered registry and the aggregated catalog (manifest/services/topics/topology/
+3. **drains the trace inbox** — every :class:`~benzene.mesh.S3TraceInbox` object a service Lambda
+   pushed since the last pass (``service/host.py``'s :class:`~benzene.mesh.MeshFeedSender`), merging
+   each batch into the same collector this pass just polled;
+4. **publishes** the discovered registry and the aggregated catalog (manifest/services/topics/topology/
    usage/asyncapi/annotations) to S3 via :class:`~benzene.mesh.S3ArtifactStore`.
 
-Also home to :func:`ingest_pushed_feed`, the receiving half of a service Lambda's direct-invoke trace
-push (``service/host.py``'s :class:`~benzene.mesh.MeshFeedSender`) — ``main.py``'s handler routes to
-it whenever the invoke Payload carries a ``topic``, rather than running a full aggregation pass.
+This pass is the collector's **sole writer** — the reason traces are pushed to an inbox rather than
+ingested straight into the shared collector snapshot from each service Lambda's own invocation: two
+services fanned out from one SNS/EventBridge message push independently and (nearly) concurrently, and
+a direct load-mutate-save against shared state races under exactly that condition (whichever writer
+saves last wins, discarding what the other wrote). Draining the inbox only here, one aggregation pass
+at a time, keeps the collector's persisted snapshot single-writer.
 
 Nothing here is AWS-Lambda-*hosting* concerned (that's ``main.py``): this module is plain async
 Python, driven directly by the tests with a fake discovery + a fake Lambda client, and by ``main.py``
@@ -30,7 +36,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from benzene.aws import LambdaMessageSender
-from benzene.core import HEALTH_TOPIC, BenzeneMessageApplication
+from benzene.core import HEALTH_TOPIC
 from benzene.mesh import (
     MESH_TOPIC,
     CallableServiceSource,
@@ -40,7 +46,7 @@ from benzene.mesh import (
     NullCollectorStore,
     PollError,
     S3ArtifactStore,
-    collector_registry,
+    S3TraceInbox,
     write_artifacts_to_s3,
 )
 from benzene.mesh_fleet import Discovery, ServiceEndpoint
@@ -102,43 +108,37 @@ async def run_mesh_aggregation(
     lambda_client: Any | None = None,
     generated_at: str | None = None,
     collector_store: CollectorStore | None = None,
+    trace_inbox: S3TraceInbox | None = None,
 ) -> MeshAggregateSummary:
-    """Discover -> interrogate -> publish, once. Never raises for one down service — a failed
+    """Discover -> interrogate -> drain -> publish, once. Never raises for one down service — a failed
     interrogation is folded into the collector's catalog as an unreachable/unhealthy service, exactly
     as :class:`~benzene.mesh.MeshPoller` already handles a down :class:`~benzene.mesh.ServiceSource`.
 
     ``collector_store`` (default :class:`~benzene.mesh.NullCollectorStore`, i.e. in-memory only) backs
-    the collector this pass polls into. Pointed at the same durable store the mesh Lambda's direct-
-    invoke trace handler writes through (:class:`~benzene.mesh.S3CollectorStore` in production), this
-    pass picks up **already-ingested consumer edges** from traces pushed between aggregation runs —
-    fresh descriptor/health data from this poll merges with that carried-over trace history, so the
-    published catalog reflects both.
+    the collector this pass polls into and persists it after. ``trace_inbox``, when given, is drained
+    into the *same* collector before publishing — every trace batch a service Lambda pushed since the
+    last pass, merged in this single-writer pass so consumer edges derived from them land in the
+    published catalog without racing the concurrent pushes that produced them (see the module
+    docstring). Both default to doing nothing (in-memory only / no inbox), matching every existing
+    caller and test that doesn't pass them.
     """
     endpoints = await discovery.discover()
     sources = [lambda_service_source(e.address, client=lambda_client) for e in endpoints]
 
     collector = MeshCollector(store=collector_store or NullCollectorStore())
     await MeshPoller(collector, sources).poll_once()
+    if trace_inbox is not None:
+        drained = trace_inbox.drain()
+        if drained:
+            # One merged ingest (one persisted-store write), not one per pushed batch.
+            events = [event for batch in drained for event in batch.get("events") or []]
+            collector.ingest_traces({"events": events})
 
     at = generated_at or _utc_now()
     store.write("registry.json", _registry_document(endpoints, at))
     write_artifacts_to_s3(store, collector, generated_at=at)
 
     return MeshAggregateSummary(discovered=len(endpoints))
-
-
-async def ingest_pushed_feed(event: dict[str, Any], *, collector_store: CollectorStore) -> dict[str, Any]:
-    """Handle a direct Lambda invoke pushing a mesh feed (trace/register/heartbeat/issue) from a
-    service Lambda — the collector's reserved-topic registry (:func:`~benzene.mesh.collector_registry`),
-    backed by the persistent ``collector_store``, answering exactly as any other
-    :class:`~benzene.aws.AwsLambdaApp` answers a direct invoke. The invoke Payload *is* the Benzene
-    envelope (``main.py``'s ``handler`` routes here whenever the event carries a ``topic``), so no
-    event-source classification is needed — this is the receiving half of
-    ``service/host.py``'s :class:`~benzene.mesh.MeshFeedSender`.
-    """
-    collector = MeshCollector(store=collector_store)
-    app = BenzeneMessageApplication(collector_registry(collector))
-    return await app.handle(event)
 
 
 def _utc_now() -> str:

@@ -45,6 +45,7 @@ from .feeds import (
     Heartbeat,
     MeshFeedSender,
 )
+from .inbox import S3TraceInbox
 from .interception import DescriptorSource, mesh_interception
 from .issues import (
     CLASSIFICATIONS,
@@ -139,6 +140,7 @@ __all__ = [
     "REGISTER_TOPIC",
     "S3ArtifactStore",
     "S3CollectorStore",
+    "S3TraceInbox",
     "collector_registry",
     "Schema",
     "ServiceDescriptor",

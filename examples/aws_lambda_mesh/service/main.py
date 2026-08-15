@@ -5,15 +5,15 @@ A managed Python runtime needs no custom bootstrap: ``to_lambda_handler`` wraps 
 service functions' ``handler`` at ``service.main.handler`` (one shared zip — see ``deploy/main.tf``
 and ``deploy/build_service.sh``), differing only in the ``SERVICE_NAME`` (and outbound target) env vars.
 
-After each invocation, drains the trace exporter and pushes the batch to the mesh Lambda (when
-``MESH_FUNCTION_NAME`` is set) — best-effort, mirrors ``deploy/mesh/fleet/service.py``'s
-``lambda_handler_for`` exactly (a Lambda only runs *during* an invocation, so this pushes once per
-invocation rather than on a background loop a long-lived host would use). A push never raises
-(:class:`~benzene.aws.LambdaMessageSender` catches its own exceptions and returns a failed
-:class:`~benzene.results.Result` instead — see ``clients.py``), so a genuine failure (e.g. IAM denied,
-wrong ``MESH_FUNCTION_NAME``) is logged rather than silently discarded: check this Lambda's CloudWatch
-logs for a "trace push failed" warning before assuming a missing consumer edge means no traffic has
-flowed yet.
+After each invocation, drains the trace exporter and pushes the batch into the mesh's
+:class:`~benzene.mesh.S3TraceInbox` (when ``MESH_ARTIFACT_BUCKET`` is set) — best-effort, mirrors
+``deploy/mesh/fleet/service.py``'s ``lambda_handler_for`` exactly (a Lambda only runs *during* an
+invocation, so this pushes once per invocation rather than on a background loop a long-lived host would
+use). A push never raises (every :class:`~benzene.core.MessageSender` in this port, including
+:class:`~benzene.mesh.S3TraceInbox`, catches its own exceptions and returns a failed
+:class:`~benzene.results.Result` instead), so a genuine failure (e.g. IAM denied, wrong bucket) is
+logged rather than silently discarded: check this Lambda's CloudWatch logs for a "trace push failed"
+warning before assuming a missing consumer edge means no traffic has flowed yet.
 """
 
 from __future__ import annotations
@@ -41,11 +41,11 @@ def lambda_handler_for(service: ServiceLambda):
                 try:
                     push = asyncio.run(service.feeds.publish_traces(events))
                 except Exception:  # noqa: BLE001 - best-effort: never fails the request
-                    logger.warning("trace push to the mesh Lambda raised", exc_info=True)
+                    logger.warning("trace push to the mesh's S3 inbox raised", exc_info=True)
                 else:
                     if not push.is_successful:
                         logger.warning(
-                            "trace push to the mesh Lambda failed: %s (%s)",
+                            "trace push to the mesh's S3 inbox failed: %s (%s)",
                             push.status,
                             "; ".join(push.errors) or "no detail",
                         )

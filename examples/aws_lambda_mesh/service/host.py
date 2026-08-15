@@ -22,12 +22,11 @@ from typing import Any
 from benzene.aws import (
     AwsLambdaApp,
     EventBridgeMessageSender,
-    LambdaMessageSender,
     SnsMessageSender,
     SqsMessageSender,
 )
 from benzene.core import Container, MessageSender, build_application
-from benzene.mesh import MeshFeedSender, QueueTraceExporter, with_trace_propagation
+from benzene.mesh import MeshFeedSender, QueueTraceExporter, S3TraceInbox, with_trace_propagation
 from benzene.results import Result, Status
 
 from .startup import ServiceStartUp
@@ -102,11 +101,14 @@ class ServiceLambda:
 def build_service(env: Mapping[str, str] | None = None) -> ServiceLambda:
     """Boot ``ServiceStartUp`` for ``SERVICE_NAME`` and specialize it to Lambda.
 
-    When ``MESH_FUNCTION_NAME`` is set (Terraform wires it on every service Lambda — see
+    When ``MESH_ARTIFACT_BUCKET`` is set (Terraform wires it on every service Lambda — see
     ``deploy/main.tf``), the returned :class:`ServiceLambda` also carries a :class:`MeshFeedSender`
-    that pushes trace batches to the mesh Lambda over a direct invoke
-    (:class:`~benzene.aws.LambdaMessageSender`), so :func:`~aws_lambda_mesh.service.main.handler` can
-    drain and push after each invocation.
+    that pushes trace batches into the mesh's :class:`~benzene.mesh.S3TraceInbox`
+    (``MESH_TRACE_PREFIX``, default ``"_state/traces"``), so
+    :func:`~aws_lambda_mesh.service.main.handler` can drain and push after each invocation. This is a
+    direct S3 write, not a Lambda invoke — deliberately, so that several service Lambdas fanned out
+    from one SNS/EventBridge message and pushing at the same time never contend over shared state (see
+    ``mesh/discovery_service.py``'s module docstring for the race a load-mutate-save push had).
     """
     env = os.environ if env is None else env
     service_name = env.get("SERVICE_NAME")
@@ -123,8 +125,8 @@ def build_service(env: Mapping[str, str] | None = None) -> ServiceLambda:
     exporter = scope.get_service(QueueTraceExporter)
 
     feeds: MeshFeedSender | None = None
-    mesh_function_name = env.get("MESH_FUNCTION_NAME")
-    if mesh_function_name:
-        feeds = MeshFeedSender(LambdaMessageSender(mesh_function_name))
+    bucket = env.get("MESH_ARTIFACT_BUCKET")
+    if bucket:
+        feeds = MeshFeedSender(S3TraceInbox(bucket, env.get("MESH_TRACE_PREFIX", "_state/traces")))
 
     return ServiceLambda(app=app, exporter=exporter, feeds=feeds)

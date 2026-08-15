@@ -27,6 +27,11 @@ data "aws_caller_identity" "current" {}
 locals {
   bucket_name = var.artifact_bucket_name != "" ? var.artifact_bucket_name : "${var.project}-${data.aws_caller_identity.current.account_id}"
 
+  # Both kept outside the public mesh/* prefix (aws_s3_bucket_policy.viewer below) -- neither is part
+  # of the published catalog the static viewer reads, just the mesh Lambda's own internal state.
+  state_key    = "_state/collector.json"
+  trace_prefix = "_state/traces"
+
   # The six Cloud Service Lambdas. orders/payments/shipping form the command chain and publish events;
   # inventory/notifications/analytics are pure event consumers.
   services = {
@@ -175,9 +180,10 @@ data "aws_iam_policy_document" "mesh" {
     actions   = ["lambda:InvokeFunction"]
     resources = [for s in local.services : "arn:aws:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${s}"]
   }
-  # Persist the registry + catalog artifacts.
+  # Persist the registry + catalog artifacts, the durable collector snapshot, and drain (read +
+  # delete) the trace inbox each service Lambda pushes into.
   statement {
-    actions   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"]
     resources = [aws_s3_bucket.artifacts.arn, "${aws_s3_bucket.artifacts.arn}/*"]
   }
 }
@@ -190,9 +196,12 @@ resource "aws_iam_role_policy" "mesh" {
 
 # The shared service role's producer permissions: send to both queues (and consume them — the
 # event-source mapping polls with the function's role), publish the SNS topic, put events on the bus,
-# and push trace batches to the mesh Lambda (a direct invoke — see MESH_FUNCTION_NAME above — so the
-# collector can derive consumer edges; mirrors the mesh role's own invoke permission on the six
-# services, just in the opposite direction).
+# and push trace batches into the mesh's trace inbox — write-only, scoped to just that prefix, NOT the
+# rest of the artifacts bucket (the mesh Lambda alone reads/deletes there — see the mesh policy above).
+# A direct S3 write rather than a Lambda invoke into the mesh, deliberately: several service Lambdas
+# fanned out from one SNS/EventBridge message push at the same time, and each push is one independent,
+# uniquely-keyed object, so concurrent writers never contend (S3TraceInbox's whole reason to exist —
+# see mesh/discovery_service.py's module docstring for the race a shared-state push had).
 data "aws_iam_policy_document" "service_messaging" {
   statement {
     actions   = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
@@ -207,8 +216,8 @@ data "aws_iam_policy_document" "service_messaging" {
     resources = [aws_cloudwatch_event_bus.bus.arn]
   }
   statement {
-    actions   = ["lambda:InvokeFunction"]
-    resources = [aws_lambda_function.mesh.arn]
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/${local.trace_prefix}/*"]
   }
 }
 
@@ -237,7 +246,11 @@ resource "aws_lambda_function" "service" {
 
   environment {
     variables = merge(
-      { SERVICE_NAME = each.key, MESH_FUNCTION_NAME = aws_lambda_function.mesh.function_name },
+      {
+        SERVICE_NAME         = each.key
+        MESH_ARTIFACT_BUCKET = aws_s3_bucket.artifacts.id
+        MESH_TRACE_PREFIX    = local.trace_prefix
+      },
       local.service_env[each.key]
     )
   }
@@ -371,14 +384,12 @@ resource "aws_lambda_permission" "service_api" {
 }
 
 # ---------------------------------------------------------------------------------------------------
-# The mesh Lambda (NOT tagged for discovery) answers two invoke shapes on the one handler:
-#   - the EventBridge schedule's constant payload (or an on-demand invoke with no "topic") -> runs the
-#     discover -> interrogate -> aggregate pass, returning a plain summary dict.
-#   - a direct Lambda invoke carrying a Benzene envelope ({"topic": "benzene:mesh:traces", ...}, pushed
-#     by a service Lambda after each invocation via MESH_FUNCTION_NAME) -> ingested straight into the
-#     persistent collector (MESH_STATE_KEY), so consumer edges derived from those traces are already in
-#     the catalog the next scheduled aggregation pass publishes.
-# It has no HTTP API of its own; read its output from the S3 bucket / the static viewer.
+# The mesh Lambda (NOT tagged for discovery): fires on the EventBridge schedule or an on-demand invoke,
+# running discover -> interrogate -> drain -> publish. "Drain" reads every trace batch a service Lambda
+# pushed into the trace inbox (S3, MESH_TRACE_PREFIX) since the last pass and merges it into the
+# persistent collector (MESH_STATE_KEY) before publishing -- this pass is the collector's ONLY writer,
+# so that merge can never race the (possibly concurrent) pushes that produced the batches. It has no
+# HTTP API of its own; read its output from the S3 bucket / the static viewer.
 # ---------------------------------------------------------------------------------------------------
 resource "aws_lambda_function" "mesh" {
   function_name    = "${var.project}-mesh"
@@ -396,9 +407,8 @@ resource "aws_lambda_function" "mesh" {
       MESH_ARTIFACT_BUCKET   = aws_s3_bucket.artifacts.id
       MESH_ARTIFACT_PREFIX   = "mesh"
       MESH_DISCOVERY_TAG_KEY = var.discovery_tag_key
-      # Outside the public mesh/* prefix (aws_s3_bucket_policy.viewer) -- the collector snapshot is
-      # internal aggregator state, not part of the published catalog the viewer reads.
-      MESH_STATE_KEY = "_state/collector.json"
+      MESH_STATE_KEY         = local.state_key
+      MESH_TRACE_PREFIX      = local.trace_prefix
     }
   }
 }

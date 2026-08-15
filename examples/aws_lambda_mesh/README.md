@@ -38,35 +38,39 @@ Each of the six services is **one Lambda**, tagged `benzene=true` for discovery,
   `/orders` therefore genuinely cascades through the whole estate on a real deploy;
 - runs `benzene.mesh.trace_middleware` outermost (`service/startup.py`) and wraps that router in
   `benzene.mesh.with_trace_propagation`, so a downstream hop joins the caller's trace; after each
-  invocation it drains the batch and pushes it to the mesh Lambda over a direct invoke
-  (`benzene.mesh.MeshFeedSender` + `benzene.aws.LambdaMessageSender`, via the `MESH_FUNCTION_NAME` env
-  var Terraform sets) — the collector derives **consumer edges** from those traces, exactly as
+  invocation it drains the batch and **pushes it straight into the mesh's trace inbox in S3**
+  (`benzene.mesh.MeshFeedSender` + `benzene.mesh.S3TraceInbox`, via the `MESH_ARTIFACT_BUCKET` env var
+  Terraform sets) — the collector derives **consumer edges** from those traces, exactly as
   `examples/k8s_mesh`'s services do over HTTP, just pushed once per invocation rather than on a
   background loop (a Lambda only runs *during* an invocation; mirrors `deploy/mesh/fleet/service.py`).
 
-The **mesh Lambda** (`mesh/main.py`, **not** tagged for discovery — it never interrogates itself)
-answers two invoke shapes on the one handler:
+The **mesh Lambda** (`mesh/main.py`, **not** tagged for discovery — it never interrogates itself) fires
+on the EventBridge schedule (default every 5 minutes) or an on-demand invoke, running discover →
+interrogate → drain → publish:
 
-1. **The EventBridge schedule's constant payload** (default every 5 minutes) or an on-demand invoke —
-   runs the discover → interrogate → publish pass:
-   - **discover** — `benzene.mesh_fleet.AwsLambdaDiscovery` (real `list_functions` + `list_tags`,
-     paginated, filtered by the `benzene` tag);
-   - **interrogate** — one `benzene.mesh.CallableServiceSource` per discovered function
-     (`mesh/discovery_service.py`'s `lambda_service_source`), backed by `benzene.aws.LambdaMessageSender`
-     invoking `benzene:mesh` and `benzene:healthcheck` on each — fed into a real
-     `benzene.mesh.MeshPoller`/`MeshCollector`, the same transport-agnostic core every Benzene mesh uses;
-   - **publish** — the discovered registry (`registry.json`) and the full catalog (`manifest.json`,
-     `topology.json`, `topics.json`, `usage.json`, `asyncapi.json`, `annotations.json`,
-     `services/{name}.json`) to S3 via `benzene.mesh.S3ArtifactStore` / `write_artifacts_to_s3`.
-2. **A direct Lambda invoke carrying a Benzene envelope** — a service Lambda's pushed trace batch
-   (above), handed straight to the collector's reserved-topic registry
-   (`mesh/discovery_service.py`'s `ingest_pushed_feed`) rather than running a full aggregation pass.
+- **discover** — `benzene.mesh_fleet.AwsLambdaDiscovery` (real `list_functions` + `list_tags`,
+  paginated, filtered by the `benzene` tag);
+- **interrogate** — one `benzene.mesh.CallableServiceSource` per discovered function
+  (`mesh/discovery_service.py`'s `lambda_service_source`), backed by `benzene.aws.LambdaMessageSender`
+  invoking `benzene:mesh` and `benzene:healthcheck` on each — fed into a real
+  `benzene.mesh.MeshPoller`/`MeshCollector`, the same transport-agnostic core every Benzene mesh uses;
+- **drain** — every trace batch pushed into the trace inbox (above) since the last pass
+  (`benzene.mesh.S3TraceInbox.drain`), merged into the same collector this pass just polled;
+- **publish** — the discovered registry (`registry.json`) and the full catalog (`manifest.json`,
+  `topology.json`, `topics.json`, `usage.json`, `asyncapi.json`, `annotations.json`,
+  `services/{name}.json`) to S3 via `benzene.mesh.S3ArtifactStore` / `write_artifacts_to_s3`.
 
-Both share one durable collector snapshot in S3 (`benzene.mesh.S3CollectorStore`, `MESH_STATE_KEY` —
-see "Framework additions" below), so consumer edges derived from traces pushed between scheduled
-aggregation runs are already in the catalog the next pass publishes — without it, every topic would
-show a provider but never a consumer, since a fresh in-memory collector each pass would discard
-anything ingested between runs.
+This pass is the collector's **sole writer**, and that's deliberate, not incidental: the durable
+collector snapshot lives in S3 (`benzene.mesh.S3CollectorStore`, `MESH_STATE_KEY`), and one order
+fanning out over SNS/EventBridge invokes *several* service Lambdas at once, each independently pushing
+a trace batch. An earlier version of this example had each push do a load-mutate-save straight against
+that shared snapshot — which **races** under exactly that fan-out condition (not a rare edge case; the
+normal shape of a single order): whichever push saves last wins, silently discarding whatever the
+other wrote in between, so a topic could show a provider but never all of its consumers. Splitting the
+push (many independent, uniquely-keyed S3 objects — nothing to contend over) from the merge (one
+aggregation pass at a time, the only writer of the shared snapshot) removes the race entirely instead
+of adding locking/retries around it. See "Framework additions" below and
+`mesh/discovery_service.py`'s module docstring for the full story.
 
 ## Framework additions
 
@@ -90,8 +94,14 @@ all covered by their own unit tests:
   the collector's whole snapshot, loaded on construction and saved after every ingest, same
   `CollectorStore` protocol. It exists because a Lambda-based mesh has no persistent disk of its own
   *and* no long-lived process to keep the catalog in memory between the separate, stateless invocations
-  that build it up (a scheduled aggregation pass, and a service Lambda's direct-invoke trace push) — the
-  seam every other Benzene mesh gets for free from a long-running host.
+  that build it up — the seam every other Benzene mesh gets for free from a long-running host. **Only
+  the mesh Lambda's own aggregation pass ever touches it**, so it stays single-writer.
+- **`benzene.mesh.S3TraceInbox`** (`packages/benzene-mesh/.../inbox.py`) — a race-free push seam for
+  concurrent, stateless writers: each push (a service Lambda's `MeshFeedSender.publish_traces`) is one
+  independent `PutObject` to a **uniquely keyed** object, so pushes fanned out from the same message
+  never contend. Implements `MessageSender` (drop-in for `MeshFeedSender`, same as `LambdaMessageSender`/
+  `HttpMessageSender` elsewhere in this port); a single reader's `drain()` lists, reads, and deletes
+  every object in one pass — meant for the aggregation pass alone, never a concurrent drain.
 
 All three are purely additive: the local path (`JsonFileCollectorStore`, plain `write_artifacts`) is
 untouched.
@@ -122,13 +132,14 @@ terraform apply
 ```
 
 Terraform provisions: the six tagged service Lambdas + one HTTP API each (API Gateway v2, `$default`
-AWS_PROXY), the mesh Lambda (untagged, no HTTP API — driven by its own EventBridge schedule and by the
-six services' direct-invoke trace pushes), the two SQS queues + event-source mappings, the SNS topic +
+AWS_PROXY), the mesh Lambda (untagged, no HTTP API — driven by its own EventBridge schedule, reading
+what the six services pushed to S3), the two SQS queues + event-source mappings, the SNS topic +
 subscriptions, the custom EventBridge bus + rules + targets, IAM (a shared service execution+messaging
-role — SQS/SNS/EventBridge sends, plus `lambda:InvokeFunction` on the mesh Lambda's ARN for pushing
-trace batches; a mesh role scoped to `lambda:ListFunctions`/`lambda:ListTags`/`lambda:InvokeFunction` on
-the six service ARNs + `s3:GetObject`/`PutObject`/`ListBucket` on the artifacts bucket, covering both the
-published catalog and the durable collector snapshot), and the S3 artifacts bucket.
+role — SQS/SNS/EventBridge sends, plus `s3:PutObject` scoped to just the trace-inbox prefix
+(`_state/traces/*`) for pushing trace batches; a mesh role scoped to
+`lambda:ListFunctions`/`lambda:ListTags`/`lambda:InvokeFunction` on the six service ARNs +
+`s3:GetObject`/`PutObject`/`ListBucket`/`DeleteObject` on the artifacts bucket, covering the published
+catalog, the durable collector snapshot, and draining the trace inbox), and the S3 artifacts bucket.
 
 **Static viewer, not a live HTTP surface on the mesh Lambda.** Following TS's precedent exactly: the
 bucket is configured as an **S3 static website** (`aws_s3_bucket_website_configuration` +
@@ -169,7 +180,11 @@ event shapes each service actually receives (API Gateway, SQS, SNS, EventBridge)
 reserved topics (`benzene:mesh` / `benzene:healthcheck`) really do answer a direct invoke.
 `tests/test_mesh.py` drives the real `run_mesh_aggregation` against a fake `Discovery` and a fake
 `boto3` Lambda client that routes `invoke()` straight to each service's real, in-memory `AwsLambdaApp` —
-proving discover -> interrogate -> collector -> S3 catalog end to end, with no cloud account.
+proving discover -> interrogate -> collector -> S3 catalog end to end, with no cloud account. It also
+covers the fix that motivated `S3TraceInbox`: one test pushes a trace batch between two aggregation
+passes and asserts it survives into the next published catalog's consumers; another pushes **two**
+independently (simulating an SNS/EventBridge fan-out invoking two service Lambdas at once) and asserts
+*both* survive into the same pass — the exact scenario a shared-state push used to lose one of.
 
 ## Projects
 

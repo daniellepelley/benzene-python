@@ -18,10 +18,10 @@ import json
 
 from benzene.aws import AwsLambdaApp
 from benzene.core import Container, MessageSender, build_application
-from benzene.mesh import S3ArtifactStore, S3CollectorStore
+from benzene.mesh import S3ArtifactStore, S3CollectorStore, S3TraceInbox
 from benzene.mesh_fleet import ServiceEndpoint
 
-from aws_lambda_mesh.mesh.discovery_service import ingest_pushed_feed, run_mesh_aggregation
+from aws_lambda_mesh.mesh.discovery_service import run_mesh_aggregation
 from aws_lambda_mesh.service.domain import PAYMENTS_CAPTURE_TOPIC, SERVICE_TOPICS
 from aws_lambda_mesh.service.startup import KNOWN_SERVICES, ServiceStartUp
 
@@ -95,6 +95,28 @@ class _FakeStateS3Client:
         if Key not in self.objects:
             raise _NoSuchKey()
         return {"Body": io.BytesIO(self.objects[Key])}
+
+
+class _FakeTraceInboxS3Client:
+    """A stand-in ``boto3`` ``s3`` client backing :class:`~benzene.mesh.S3TraceInbox`
+    (``put_object``/``list_objects_v2``/``get_object``/``delete_objects``)."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def put_object(self, *, Bucket, Key, Body, ContentType):  # noqa: N803 - boto3 kwarg names
+        self.objects[Key] = Body
+
+    def list_objects_v2(self, *, Bucket, Prefix, ContinuationToken=None):  # noqa: N803
+        keys = sorted(k for k in self.objects if k.startswith(Prefix))
+        return {"Contents": [{"Key": k} for k in keys], "IsTruncated": False}
+
+    def get_object(self, *, Bucket, Key):  # noqa: N803
+        return {"Body": io.BytesIO(self.objects[Key])}
+
+    def delete_objects(self, *, Bucket, Delete):  # noqa: N803
+        for entry in Delete["Objects"]:
+            self.objects.pop(entry["Key"], None)
 
 
 def _endpoint(name: str) -> ServiceEndpoint:
@@ -192,17 +214,28 @@ def test_run_mesh_aggregation_empty_mesh_is_zero_not_an_error() -> None:
     assert s3.puts["manifest.json"]["services"] == []
 
 
-# --- consumer edges: a pushed trace batch survives to the NEXT aggregation's published catalog -------
+# --- consumer edges: pushed trace batches survive to the NEXT aggregation's published catalog --------
 #
 # This is the end-to-end proof for the fix: without a durable collector_store, run_mesh_aggregation
-# built a fresh in-memory MeshCollector every pass, so any trace pushed between scheduled runs (via
-# service Lambdas' MeshFeedSender -> mesh Lambda direct invoke -> ingest_pushed_feed) was discarded
-# before the next aggregation published anything -- every topic showed a provider but never a consumer.
+# built a fresh in-memory MeshCollector every pass, so any trace pushed between scheduled runs was
+# discarded before the next aggregation published anything -- every topic showed a provider but never
+# a consumer. Traces now land in a durable S3TraceInbox (a service Lambda's MeshFeedSender pushes
+# straight to S3, service/host.py) and only the aggregation pass -- the collector's sole writer --
+# drains and merges them in, so a push can never race another concurrent push.
+
+
+def _trace_event(*, trace_id, span_id, service, topic, parent_span_id=None):
+    event = {"traceId": trace_id, "spanId": span_id, "service": service, "topic": topic, "status": "ok"}
+    if parent_span_id:
+        event["parentSpanId"] = parent_span_id
+    return event
 
 
 def test_a_trace_pushed_between_aggregation_runs_survives_into_the_next_published_catalog() -> None:
     fake_state = _FakeStateS3Client()
     collector_store = S3CollectorStore("state-bucket", client=fake_state)
+    fake_traces = _FakeTraceInboxS3Client()
+    trace_inbox = S3TraceInbox("state-bucket", client=fake_traces)
     endpoints, lambda_client = _fleet()
 
     # 1. First scheduled pass: discover + interrogate (registers each service as a provider) and
@@ -217,39 +250,23 @@ def test_a_trace_pushed_between_aggregation_runs_survives_into_the_next_publishe
         )
     )
 
-    # 2. Between aggregation runs, orders calls payments (payments:capture) -- exactly the trace batch
-    #    a service Lambda's MeshFeedSender pushes after a real invocation (service/host.py). The
-    #    mesh Lambda's handler routes this straight to ingest_pushed_feed (mesh/main.py).
-    push = {
-        "topic": "benzene:mesh:traces",
-        "headers": {},
-        "body": json.dumps(
-            {
-                "events": [
-                    {
-                        "traceId": "t1" * 16,
-                        "spanId": "s1" * 8,
-                        "service": "orders",
-                        "topic": "order:create",
-                        "status": "ok",
-                    },
-                    {
-                        "traceId": "t1" * 16,
-                        "spanId": "s2" * 8,
-                        "parentSpanId": "s1" * 8,
-                        "service": "payments",
-                        "topic": PAYMENTS_CAPTURE_TOPIC,
-                        "status": "ok",
-                    },
-                ]
-            }
+    # 2. Between aggregation runs, orders calls payments (payments:capture) -- exactly what a service
+    #    Lambda's MeshFeedSender pushes into the trace inbox after a real invocation.
+    events = [
+        _trace_event(trace_id="t1" * 16, span_id="s1" * 8, service="orders", topic="order:create"),
+        _trace_event(
+            trace_id="t1" * 16,
+            span_id="s2" * 8,
+            parent_span_id="s1" * 8,
+            service="payments",
+            topic=PAYMENTS_CAPTURE_TOPIC,
         ),
-    }
-    response = asyncio.run(ingest_pushed_feed(push, collector_store=collector_store))
-    assert response["statusCode"] == "ok"
+    ]
+    push = asyncio.run(trace_inbox.send_message("benzene:mesh:traces", {"events": events}))
+    assert push.is_successful
 
-    # 3. The NEXT scheduled pass re-polls descriptors/health and publishes the merged catalog -- the
-    #    trace pushed in step 2 must still be there.
+    # 3. The NEXT scheduled pass re-polls descriptors/health, drains the inbox, and publishes the
+    #    merged catalog -- the trace pushed in step 2 must still be there.
     catalog_s3 = _FakeS3Client()
     asyncio.run(
         run_mesh_aggregation(
@@ -258,6 +275,7 @@ def test_a_trace_pushed_between_aggregation_runs_survives_into_the_next_publishe
             lambda_client=lambda_client,
             generated_at="2026-08-15T00:05:00+00:00",
             collector_store=collector_store,
+            trace_inbox=trace_inbox,
         )
     )
 
@@ -265,3 +283,86 @@ def test_a_trace_pushed_between_aggregation_runs_survives_into_the_next_publishe
     capture = topics[PAYMENTS_CAPTURE_TOPIC]
     assert [p["service"] for p in capture["producers"]] == ["payments"]
     assert [c["service"] for c in capture["consumers"]] == ["orders"]
+    # Drained objects are gone -- the next pass won't re-count them.
+    assert fake_traces.objects == {}
+
+
+def test_two_fanned_out_pushes_both_survive_into_the_same_pass_no_lost_update() -> None:
+    # The bug this whole redesign fixes: order:placed fans out over SNS to BOTH inventory and
+    # notifications at once, each pushing its own trace batch independently. The old design
+    # (load-mutate-save against one shared S3CollectorStore snapshot) raced under exactly this
+    # condition -- whichever push saved last won, silently discarding the other's event. With
+    # S3TraceInbox, both pushes land as independent objects with nothing to contend over.
+    fake_state = _FakeStateS3Client()
+    collector_store = S3CollectorStore("state-bucket", client=fake_state)
+    fake_traces = _FakeTraceInboxS3Client()
+    trace_inbox = S3TraceInbox("state-bucket", client=fake_traces)
+    endpoints, lambda_client = _fleet()
+
+    asyncio.run(
+        run_mesh_aggregation(
+            discovery=_FakeDiscovery(endpoints),
+            store=S3ArtifactStore("catalog-bucket", "mesh", client=_FakeS3Client()),
+            lambda_client=lambda_client,
+            generated_at="2026-08-15T00:00:00+00:00",
+            collector_store=collector_store,
+        )
+    )
+
+    # "Concurrent" pushes: neither read the other's write, exactly as two Lambdas invoked by the same
+    # SNS fan-out would each independently drain their own exporter and push.
+    parent = _trace_event(trace_id="t2" * 16, span_id="p0" * 8, service="orders", topic="order:placed")
+    inventory_push = asyncio.run(
+        trace_inbox.send_message(
+            "benzene:mesh:traces",
+            {
+                "events": [
+                    parent,
+                    _trace_event(
+                        trace_id="t2" * 16,
+                        span_id="i1" * 8,
+                        parent_span_id="p0" * 8,
+                        service="inventory",
+                        topic="order:placed",
+                    ),
+                ]
+            },
+        )
+    )
+    notifications_push = asyncio.run(
+        trace_inbox.send_message(
+            "benzene:mesh:traces",
+            {
+                "events": [
+                    parent,
+                    _trace_event(
+                        trace_id="t2" * 16,
+                        span_id="n1" * 8,
+                        parent_span_id="p0" * 8,
+                        service="notifications",
+                        topic="order:placed",
+                    ),
+                ]
+            },
+        )
+    )
+    assert inventory_push.is_successful and notifications_push.is_successful
+    assert len(fake_traces.objects) == 2  # two independent objects, nothing overwritten
+
+    catalog_s3 = _FakeS3Client()
+    asyncio.run(
+        run_mesh_aggregation(
+            discovery=_FakeDiscovery(endpoints),
+            store=S3ArtifactStore("catalog-bucket", "mesh", client=catalog_s3),
+            lambda_client=lambda_client,
+            generated_at="2026-08-15T00:05:00+00:00",
+            collector_store=collector_store,
+            trace_inbox=trace_inbox,
+        )
+    )
+
+    topics = {t["topic"]: t for t in catalog_s3.puts["mesh/topics.json"]["topics"]}
+    placed = topics["order:placed"]
+    assert [c["service"] for c in placed["consumers"]] == ["orders"]
+    usage_by_service = {e["service"] for e in catalog_s3.puts["mesh/usage.json"]["entries"]}
+    assert {"inventory", "notifications"} <= usage_by_service
