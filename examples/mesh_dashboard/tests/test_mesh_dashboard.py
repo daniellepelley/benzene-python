@@ -65,7 +65,8 @@ def test_topology_and_usage_come_from_real_traces() -> None:
 
     artifacts = build_artifacts(mesh.collector, generated_at="2026-01-01T00:00:00Z")
 
-    # The call graph the collector stitched from span parentage: orders→inventory→notifications.
+    # The call graph is declared (orders consumes inventory:reserve; inventory consumes notify:send);
+    # placing an order also traces the real orders→inventory→notifications hops.
     edges = {(e["client"], e["server"]) for e in artifacts["topology"]["edges"]}
     assert ("orders", "inventory") in edges
     assert ("inventory", "notifications") in edges

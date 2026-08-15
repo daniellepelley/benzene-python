@@ -33,6 +33,7 @@ from benzene.core import (
 )
 from benzene.http import HttpRouter, StandardPaths
 from benzene.mesh import (
+    OutboundRegistry,
     QueueTraceExporter,
     ServiceDescriptor,
     ServiceInfo,
@@ -45,6 +46,7 @@ from .domain import (
     ORDER_PLACED_TOPIC,
     PAYMENT_CAPTURED_TOPIC,
     PAYMENTS_CAPTURE_TOPIC,
+    SERVICE_CONSUMES,
     SHIPMENT_DISPATCHED_TOPIC,
     SHIPPING_BOOK_TOPIC,
     health_checks,
@@ -123,7 +125,10 @@ class ServiceStartUp(BenzeneStartUp):
             )
 
         checks = health_checks(name)
-        descriptor = ServiceDescriptor.derive(registry, ServiceInfo(service=name))
+        outbound = OutboundRegistry()
+        for topic in SERVICE_CONSUMES[name]:
+            outbound.register(topic)
+        descriptor = ServiceDescriptor.derive(registry, ServiceInfo(service=name), outbound)
         standard = StandardPaths(
             # /benzene/invoke, /benzene/health, /benzene/spec over HTTP (API Gateway) — plus, via the
             # two interceptors below, the *same* benzene:mesh / benzene:healthcheck topics answer a
@@ -135,7 +140,8 @@ class ServiceStartUp(BenzeneStartUp):
         middleware = [
             # Outermost, so it times the whole invocation including routing (mesh.md §3) — the host
             # (build_service, host.py) drains this same exporter instance and pushes the batch to the
-            # mesh Lambda after each invocation, so the collector can derive consumer edges.
+            # mesh Lambda after each invocation, feeding invocation/error stats for the edges the
+            # descriptor above already declared (mesh.md §4).
             trace_middleware(exporter, service=name, instance_id=name),
             mesh_interception(descriptor),
             health_interception(checks),

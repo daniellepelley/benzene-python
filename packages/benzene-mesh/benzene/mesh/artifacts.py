@@ -9,12 +9,14 @@ the Python aggregator's projection into that contract.
 
 The UI **must not invent fields and degrades gracefully when any is absent** (mesh.md §6), so this
 emits exactly what the collector's catalog knows. From the descriptor/spec feed it derives the estate
-(names, health, contract-drift + spec-hash history), the functional map (topics with consumers/producers,
-**request/response schemas, version, and schema-mismatch**), per-service **spec + per-check health**,
-and an **AsyncAPI** export of the domain topics; from the trace feed, the topology (who calls whom) and
-**usage** (exercise counts per topic/service/status). ``annotations.json`` is an honest empty read-model
-(writing is a backend-gated live-plane feature). What genuinely needs feeds this collector doesn't have
-— latency/rate metrics, a usage time window, transports — stays ``null`` rather than being fabricated.
+(names, health, contract-drift + spec-hash history), the functional map (topics with **declared**
+consumers/producers, **request/response schemas, version, and schema-mismatch**), per-service **spec +
+per-check health**, and an **AsyncAPI** export of the domain topics; the topology (who calls whom) comes
+from that same declared graph, and the trace feed layers **usage** (exercise counts per
+topic/service/status) plus each edge's error rate on top. ``annotations.json`` is an honest empty
+read-model (writing is a backend-gated live-plane feature). What genuinely needs feeds this collector
+doesn't have — latency/rate metrics, a usage time window, transports — stays ``null`` rather than being
+fabricated.
 
 Pure and transport-neutral: :func:`build_artifacts` returns plain dicts (inject ``generated_at`` for a
 deterministic result); :func:`write_artifacts` lays them out on disk for the UI to fetch by relative

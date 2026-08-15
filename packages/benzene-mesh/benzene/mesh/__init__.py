@@ -55,6 +55,7 @@ from .issues import (
     classify,
     issue_fingerprint,
 )
+from .outbound import DuplicateOutboundRegistrationError, OutboundDefinition, OutboundRegistry
 from .poller import (
     CallableServiceSource,
     HttpServiceSource,
@@ -113,6 +114,7 @@ __all__ = [
     "CloudServiceProbeReport",
     "CloudServiceProfileReport",
     "DescriptorSource",
+    "DuplicateOutboundRegistrationError",
     "PROFILE_NAME",
     "REQUIREMENT_IDS",
     "RequirementCheck",
@@ -132,6 +134,8 @@ __all__ = [
     "MeshCollector",
     "MeshFeedSender",
     "NullCollectorStore",
+    "OutboundDefinition",
+    "OutboundRegistry",
     "QUERY_FLEET_TOPIC",
     "QUERY_SERVICE_TOPIC",
     "QUERY_TOPIC_TOPIC",

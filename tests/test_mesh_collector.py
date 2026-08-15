@@ -40,9 +40,15 @@ def test_collector_case(case: dict) -> None:
 
 
 def _register(
-    c: MeshCollector, service: str, topics: list[str], descriptor_hash: str | None = None
+    c: MeshCollector,
+    service: str,
+    topics: list[str],
+    descriptor_hash: str | None = None,
+    consumes: list[str] | None = None,
 ) -> None:
-    body = {"service": service, "topics": [{"id": t} for t in topics]}
+    body: dict = {"service": service, "topics": [{"id": t} for t in topics]}
+    if consumes is not None:
+        body["consumes"] = [{"id": t} for t in consumes]
     if descriptor_hash:
         body["descriptorHash"] = descriptor_hash
     c.ingest_register(body)
@@ -57,7 +63,21 @@ def test_reregistration_replaces_provider_edges() -> None:
     assert c.query_topic({"topic": "order:cancel"})["providers"] == ["orders"]
 
 
-def test_consumer_edges_are_derived_from_trace_parentage() -> None:
+def test_consumer_edges_are_declared_not_trace_derived() -> None:
+    c = MeshCollector()
+    _register(c, "payments", ["payments:capture"])
+    _register(c, "orders", ["order:create"], consumes=["payments:capture"])
+    topic = c.query_topic({"topic": "payments:capture"})
+    assert topic["providers"] == ["payments"]
+    assert topic["consumers"] == ["orders"]  # declared, not derived from any trace
+    assert topic["invocations"] == 0
+
+    # Re-registering without `consumes` drops the consumer edge wholesale, like `topics` does.
+    _register(c, "orders", ["order:create"])
+    assert c.query_topic({"topic": "payments:capture"})["consumers"] == []
+
+
+def test_trace_parentage_does_not_admit_a_consumer_edge() -> None:
     c = MeshCollector()
     _register(c, "greeter", ["greet"])
     c.ingest_traces(
@@ -83,7 +103,8 @@ def test_consumer_edges_are_derived_from_trace_parentage() -> None:
     )
     topic = c.query_topic({"topic": "greet"})
     assert topic["providers"] == ["greeter"]
-    assert topic["consumers"] == ["frontdoor"]  # parent span from a different service
+    assert topic["consumers"] == []  # trace parentage feeds stats, not graph membership
+    assert topic["invocations"] == 1
 
 
 def test_heartbeats_drive_health_and_hash_mismatch() -> None:

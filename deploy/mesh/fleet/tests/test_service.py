@@ -92,6 +92,41 @@ def test_traces_are_pushed_to_the_collector_after_an_invocation() -> None:
     assert len(pushed) == 1 and len(pushed[0]) == 1  # one invocation -> one trace event pushed
 
 
+def test_register_declares_the_next_hop_as_a_consumer_at_startup() -> None:
+    # The mesh's consumer edge must exist the moment a service registers — with zero traffic — not
+    # wait on (or come from) a trace (mesh.md §2.3/§4). Injecting `feeds` (like `next_sender` above)
+    # is what makes this observable without a real COLLECTOR_URL/network call.
+    registered: list = []
+
+    class _Feeds:
+        async def register(self, descriptor):
+            registered.append(descriptor)
+            return Result.ok()
+
+    build_service(
+        ServiceConfig("orders", "orders:place", "/orders", next_topic="inventory:reserve"),
+        feeds=_Feeds(),  # type: ignore[arg-type]
+    )
+
+    assert len(registered) == 1
+    payload = registered[0].to_payload()
+    assert payload["service"] == "orders"
+    assert [t["id"] for t in payload["consumes"]] == ["inventory:reserve"]
+
+
+def test_register_declares_no_consumers_for_a_terminal_service() -> None:
+    registered: list = []
+
+    class _Feeds:
+        async def register(self, descriptor):
+            registered.append(descriptor)
+            return Result.ok()
+
+    build_service(ServiceConfig("notifications", "notify:send", "/notifications"), feeds=_Feeds())  # type: ignore[arg-type]
+
+    assert registered[0].to_payload()["consumes"] == []
+
+
 def test_no_collector_configured_means_no_push() -> None:
     service = build_service(ServiceConfig("orders", "orders:place", "/orders"))
     assert service.feeds is None  # COLLECTOR_URL absent -> nothing to push to, no network

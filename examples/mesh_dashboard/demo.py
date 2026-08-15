@@ -8,13 +8,15 @@ To make the dashboard show something worth looking at, the demo drives every inp
 reads from:
 
 - **Typed descriptors** — each service is registered from a *typed* :class:`~benzene.core.Registry`
-  (``request_type`` / ``response_type`` per topic), so :meth:`ServiceDescriptor.derive` carries real
-  request/response schemas and versions into ``topics.json`` and ``services/{name}.json``.
+  (``request_type`` / ``response_type`` per topic) plus an :class:`~benzene.mesh.OutboundRegistry`
+  declaring what it calls, so :meth:`ServiceDescriptor.derive` carries real request/response schemas,
+  versions, and consumer edges into ``topics.json``/``topology.json`` and ``services/{name}.json`` —
+  before a single order is placed (mesh.md §4).
 - **Heartbeats** — each service beats with named health checks, so ``services/{name}.json`` renders
   per-check health, not just an aggregate.
 - **Real traced invocations** — placing an order runs the handlers through ``trace_middleware`` with
-  ``traceparent`` propagated across each hop, so the collector derives the call graph
-  (``topology.json``) and the exercise counts (``usage.json``) from genuine span parentage.
+  ``traceparent`` propagated across each hop, so the collector derives the exercise counts
+  (``usage.json``) and each declared edge's invocation/error stats from genuine span parentage.
 
 The wiring here (in-process senders, one shared collector) is the demo substitute for the deployed
 shape — Lambda services, SNS/HTTP senders, a Fargate collector fed by the poller (pull spec/health)
@@ -38,6 +40,7 @@ from benzene.core import (
 from benzene.mesh import (
     Heartbeat,
     MeshCollector,
+    OutboundRegistry,
     QueueTraceExporter,
     ServiceDescriptor,
     ServiceInfo,
@@ -208,10 +211,17 @@ def build_demo_mesh(collector: MeshCollector | None = None) -> DashboardMesh:
         "inventory": {"database": {"status": "healthy"}, "warehouse-feed": {"status": "healthy"}},
         "notifications": {"smtp": {"status": "healthy"}},
     }
+    # What each service calls (mesh.md §2.3) — this alone is what puts consumer edges in the graph.
+    outbound: dict[str, OutboundRegistry] = {
+        "orders": OutboundRegistry().register(RESERVE_STOCK),
+        "inventory": OutboundRegistry().register(SEND_NOTIFICATION),
+        "notifications": OutboundRegistry(),
+    }
     for name, registry in registries.items():
         descriptor = ServiceDescriptor.derive(
             registry,
             ServiceInfo(service=name, service_version="1.0.0", placement={"cloud": "aws"}),
+            outbound[name],
         )
         collector.ingest_register(descriptor.to_payload())
         collector.ingest_heartbeat(

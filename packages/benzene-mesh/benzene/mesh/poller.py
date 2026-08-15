@@ -13,9 +13,10 @@ egress wiring to appear in the mesh; it only has to be *pollable*.
     await poller.poll_once()                 # one sweep; call on a timer for a live fleet
     fleet = collector.query_fleet({})        # now reflects both services
 
-Pull covers identity, topics, and health. **Consumer-edge topology still comes from traces** (the push
-feed), so a fleet that wants the call graph also pushes traces to the collector — the two feeds compose
-in one collector. A source that is down is recorded as a failed :class:`PollResult` and never breaks the
+Pull covers identity, topics, health, **and the declared producer/consumer graph** — a polled spec's
+``consumes`` folds into the collector exactly like ``topics`` does (mesh.md §4), so the graph exists
+whether a fleet is pulled or pushed to. Traces still feed invocation/error stats, never graph
+membership. A source that is down is recorded as a failed :class:`PollResult` and never breaks the
 sweep of the rest of the fleet.
 """
 
@@ -138,9 +139,15 @@ class MeshPoller:
             return PollResult(source.name, ok=False, error=str(exc))
         service = str(spec.get("service") or source.name)
         topics = spec.get("topics", [])
-        descriptor_hash = _spec_hash(service, topics)
+        consumes = spec.get("consumes", [])
+        descriptor_hash = _spec_hash(service, topics, consumes)
         self._collector.ingest_register(
-            {"service": service, "topics": topics, "descriptorHash": descriptor_hash}
+            {
+                "service": service,
+                "topics": topics,
+                "consumes": consumes,
+                "descriptorHash": descriptor_hash,
+            }
         )
         # Carry the same hash on the heartbeat so the collector can match the running instance against
         # the registered contract (drift detection); the poller polls one instance per source.
@@ -155,14 +162,14 @@ class MeshPoller:
         return PollResult(service, ok=True)
 
 
-def _spec_hash(service: str, topics: Sequence[Any]) -> str:
+def _spec_hash(service: str, topics: Sequence[Any], consumes: Sequence[Any]) -> str:
     """A content hash over the polled contract, so the collector can still detect drift from a pull.
 
-    Canonical JSON (sorted keys, no whitespace) over the service name + topics, matching the descriptor
-    hash's shape (``"sha256:" + hex``) even though a spec carries no hash of its own.
+    Canonical JSON (sorted keys, no whitespace) over the service name + topics + consumes, matching the
+    descriptor hash's shape (``"sha256:" + hex``) even though a spec carries no hash of its own.
     """
     canonical = json.dumps(
-        {"service": service, "topics": list(topics)},
+        {"service": service, "topics": list(topics), "consumes": list(consumes)},
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,

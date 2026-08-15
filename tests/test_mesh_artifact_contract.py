@@ -73,6 +73,7 @@ def _artifacts() -> dict:
         {
             "service": "orders",
             "topics": [{"id": "order:create", "requestSchema": {"type": "object"}}],
+            "consumes": [{"id": "stock:reserve"}],
             "descriptorHash": "h1",
         }
     )

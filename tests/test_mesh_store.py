@@ -175,7 +175,12 @@ def test_collector_rehydrates_from_an_s3_store_on_construction() -> None:
 def test_collector_snapshot_round_trips_the_full_catalog() -> None:
     source = MeshCollector()
     source.ingest_register(
-        {"service": "orders", "topics": [{"id": "order:create"}], "descriptorHash": "h1"}
+        {
+            "service": "orders",
+            "topics": [{"id": "order:create"}],
+            "consumes": [{"id": "stock:reserve"}],
+            "descriptorHash": "h1",
+        }
     )
     source.ingest_heartbeat(
         {
@@ -223,7 +228,7 @@ def test_collector_snapshot_round_trips_the_full_catalog() -> None:
     assert restored.query_service({"service": "orders"}) == source.query_service(
         {"service": "orders"}
     )
-    # Consumer edges (derived from the rebuilt span-owner index) survive the round-trip.
+    # Consumer edges (declared via `consumes`) survive the round-trip.
     assert restored.query_topic({"topic": "stock:reserve"})["consumers"] == ["orders"]
 
 

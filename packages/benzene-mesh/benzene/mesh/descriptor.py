@@ -1,27 +1,33 @@
-"""The ServiceDescriptor — a service's self-description, derived from its registry (mesh.md §2).
+"""The ServiceDescriptor — a service's self-description, derived from its registries (mesh.md §2).
 
-At startup a mesh-enabled service projects its handler registry into a **ServiceDescriptor**: the
-service identity, its placement, and one entry per registered topic carrying the request/response
-schema (:mod:`benzene.mesh.schema`). This is what the mesh UI shows and what a peer checks a
-contract against. It is derived, never hand-written — :meth:`ServiceDescriptor.derive` reads the
-registry, so the descriptor is always the truth of what the service serves.
+At startup a mesh-enabled service projects two registries into a **ServiceDescriptor**: its handler
+registry (:class:`~benzene.core.Registry`) into ``topics`` — what it **provides** — and its outbound
+registry (:class:`~benzene.mesh.OutboundRegistry`, §2.3) into ``consumes`` — what it **consumes** —
+alongside the service identity and placement. This is what the mesh UI shows and what a peer checks
+a contract against, and — as of the 2026-08 revision — what a collector builds the producer/consumer
+graph from directly (mesh.md §4): the graph needs no traffic to exist. It is derived, never
+hand-written — :meth:`ServiceDescriptor.derive` reads both registries, so the descriptor is always
+the truth of what the service serves and calls.
 
-``descriptorHash`` is a content hash over the *contract* (identity, placement, topics, schemas) —
-it detects this service's own redeploys and is deliberately **never compared across ports**. It is
-computed over a canonical JSON form (keys sorted lexicographically, no insignificant whitespace)
-with ``instanceId``, ``degraded``, ``profile``, and ``descriptorHash`` itself excluded, so it is
-invariant to which instance emitted it but sensitive to the service version and the topic set.
+``descriptorHash`` is a content hash over the *contract* (identity, placement, topics, consumes,
+schemas) — it detects this service's own redeploys and is deliberately **never compared across
+ports**. It is computed over a canonical JSON form (keys sorted lexicographically, no insignificant
+whitespace) with ``instanceId``, ``degraded``, ``profile``, and ``descriptorHash`` itself excluded,
+so it is invariant to which instance emitted it but sensitive to the service version, the topic set,
+and the consumed-topic set.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
 from benzene.core import Registry
 
+from .outbound import OutboundDefinition, OutboundRegistry
 from .schema import Schema, json_schema
 
 #: The reserved topic id a mesh-enabled service intercepts to return its descriptor (mesh.md §1).
@@ -73,10 +79,25 @@ class ServiceDescriptor:
 
     info: ServiceInfo
     topics: tuple[TopicDescriptor, ...]
+    consumes: tuple[TopicDescriptor, ...] = ()
 
     @classmethod
-    def derive(cls, registry: Registry, info: ServiceInfo) -> ServiceDescriptor:
-        """Project a registry + :class:`ServiceInfo` into a descriptor (topics sorted by id, version)."""
+    def derive(
+        cls,
+        registry: Registry,
+        info: ServiceInfo,
+        consumes: OutboundRegistry | Iterable[OutboundDefinition] | None = None,
+    ) -> ServiceDescriptor:
+        """Project a registry + :class:`ServiceInfo` into a descriptor (topics sorted by id, version).
+
+        ``consumes`` — an :class:`~benzene.mesh.OutboundRegistry` (or any iterable of
+        :class:`~benzene.mesh.OutboundDefinition`) — projects into the descriptor's own ``consumes``
+        field the same way the registry projects into ``topics``: sorted by id then version, schemas
+        derived the identical way (§2.1). Omitted (the default) yields an empty ``consumes`` — a
+        service that genuinely declares no outbound topics, not a degraded/unknown state (mesh.md
+        §2.3 reserves that distinction for a *port* that hasn't implemented outbound registration at
+        all, which this one has).
+        """
         topics = tuple(
             sorted(
                 (
@@ -91,7 +112,28 @@ class ServiceDescriptor:
                 key=lambda t: (t.id, t.version),
             )
         )
-        return cls(info=info, topics=topics)
+        outbound_definitions: Iterable[OutboundDefinition]
+        if consumes is None:
+            outbound_definitions = ()
+        elif isinstance(consumes, OutboundRegistry):
+            outbound_definitions = consumes.definitions()
+        else:
+            outbound_definitions = consumes
+        consumed = tuple(
+            sorted(
+                (
+                    TopicDescriptor(
+                        id=d.topic,
+                        version=d.version,
+                        request_schema=json_schema(d.request_type),
+                        response_schema=json_schema(d.response_type),
+                    )
+                    for d in outbound_definitions
+                ),
+                key=lambda t: (t.id, t.version),
+            )
+        )
+        return cls(info=info, topics=topics, consumes=consumed)
 
     def descriptor_hash(self) -> str:
         """``"sha256:" + hex(sha256(canonical-json))`` over the contract (mesh.md §2.2)."""
@@ -120,6 +162,7 @@ class ServiceDescriptor:
         if info.placement:
             payload["placement"] = dict(info.placement)
         payload["topics"] = [topic.to_payload() for topic in self.topics]
+        payload["consumes"] = [topic.to_payload() for topic in self.consumes]
         if info.degraded:
             payload["degraded"] = list(info.degraded)
         if info.profile:

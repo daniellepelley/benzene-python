@@ -42,6 +42,18 @@ SERVICE_TOPICS: dict[str, tuple[str, ...]] = {
     "analytics": (PAYMENT_CAPTURED_TOPIC, SHIPMENT_DISPATCHED_TOPIC),
 }
 
+#: Every topic a service *sends* (mirrors the ``sender.send_message`` calls below), keyed by service
+#: name — what ``startup.py`` projects into each service's :class:`~benzene.mesh.OutboundRegistry`, so
+#: the mesh's consumer edges are declared (mesh.md §2.3) rather than waiting on a trace to prove them.
+SERVICE_CONSUMES: dict[str, tuple[str, ...]] = {
+    "orders": (PAYMENTS_CAPTURE_TOPIC, ORDER_PLACED_TOPIC),
+    "payments": (SHIPPING_BOOK_TOPIC, PAYMENT_CAPTURED_TOPIC),
+    "shipping": (SHIPMENT_DISPATCHED_TOPIC,),
+    "inventory": (),
+    "notifications": (),
+    "analytics": (),
+}
+
 
 # --- payloads (each just an order id — enough to route, chain, and observe) -----------------------
 

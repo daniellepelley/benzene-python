@@ -19,8 +19,9 @@ directory ships it as a container (`collector/`) and the Terraform to run it on 
   group — in the account's **default VPC**.
 - **The fleet** (`deploy_fleet=true`, the default): three Lambdas (`orders` → `inventory` →
   `notifications`, all from one zip, env-selected) each behind an HTTP API Gateway, plus their IAM role.
-  The collector is pointed at their URLs automatically; each service calls the next with trace
-  propagation and pushes traces back, so the collector derives the consumer edges.
+  The collector is pointed at their URLs automatically; each service registers what it consumes (so the
+  collector's consumer edges exist with zero traffic) and calls the next with trace propagation,
+  pushing traces back to feed those edges' invocation/error stats.
 
 Roughly the cost of one small Fargate task + an ALB while it runs (the Lambdas + HTTP APIs are
 pay-per-request). Set `-var="deploy_fleet=false"` to deploy just the collector.
@@ -136,9 +137,12 @@ Set `MESH_ARTIFACTS_DIR` (Terraform sets it automatically) to enable it; unset d
 - **Pull (identity/topics/health):** every `baseUrl` in the fleet config is polled every
   `pollIntervalSeconds`. Any pollable Benzene service works — a Lambda behind API Gateway, another
   Fargate service, anything exposing `/benzene/spec` + `/benzene/health`.
-- **Push (the call graph):** services POST their trace batches to `POST <MESH>/mesh/traces` (and
-  optionally `/mesh/register`, `/mesh/heartbeat`, `/mesh/issues`). Consumer edges are derived from the
-  trace parentage — point each service's `MeshFeedSender` (or an HTTP `MessageSender`) at these routes.
+- **Push (the declared graph, then real stats):** a service's `POST <MESH>/mesh/register` carries its
+  full `ServiceDescriptor` — `topics` *and* `consumes` — so its consumer edges exist the moment it
+  registers, with zero traffic (mesh.md §2.3/§4). `POST <MESH>/mesh/traces` then feeds invocation/error
+  stats for those declared edges; it never adds or removes an edge itself. Point each service's
+  `MeshFeedSender` (or an HTTP `MessageSender`) at these routes — `deploy/mesh/fleet/service.py` does
+  both at startup and per-invocation respectively.
 
 ## Persistence
 
@@ -165,7 +169,10 @@ it — a fresh `apply` starts from an empty catalog and refills from the fleet.
 
 - **A metrics feed** — the topology's rate/latency (`requestsPerMinute`, p50/p95/p99) and `usage.json`'s
   time window / transports / durations need a real metrics source (CloudWatch, Tempo). The structural
-  usage counts derived from traces already drive the usage + deprecation views; a metrics feed would
-  fill in the observability numbers the UI leaves reduced today.
+  usage counts derived from traces already drive the usage view; a metrics feed would fill in the
+  observability numbers the UI leaves reduced today.
+- **Declared vs. observed (mesh.md §4.2)** — the spec defines liveness (an unobserved declared edge as a
+  decommission candidate) and drift (`contract-drift` for an observed-but-undeclared edge) as signals a
+  collector may layer on the declared graph; this collector doesn't emit either yet.
 - **Live-plane enhancements** — `annotations.json` writes and other backend-gated features (mesh-ui.md
   §4) are out of scope for the static floor served here.

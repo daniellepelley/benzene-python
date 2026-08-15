@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from benzene.core import Registry, message
+from benzene.mesh import OutboundRegistry
 from benzene.results import Result, is_successful
 
 
@@ -54,9 +55,20 @@ async def panic(request: dict) -> Result:
     raise RuntimeError("conformance:panic always throws")
 
 
+@dataclass
+class LogRequest:
+    message: str  # required — no default
+
+
 def register_canonical(registry: Registry) -> Registry:
     """Register the two canonical handlers (greet + status) — the descriptor's exact topic set."""
     return registry.add(greet).add(status_handler)
+
+
+def register_canonical_outbound(outbound: OutboundRegistry) -> OutboundRegistry:
+    """Register the one canonical outbound topic (``conformance:log``, no handler anywhere) —
+    what ``ServiceDescriptor.consumes`` derives from in the descriptor fixture (mesh.md §2.3)."""
+    return outbound.register("conformance:log", request_type=LogRequest)
 
 
 def register_with_panic(registry: Registry) -> Registry:

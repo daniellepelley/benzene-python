@@ -11,9 +11,10 @@ Derivation rules that are normative (mesh.md §4):
 - ``service`` is required on register, heartbeat, and issues → ``bad-request`` when missing; a traces
   or issues batch of any size (including empty) is accepted.
 - Re-registration **replaces** a service's registration wholesale — a redeploy that drops a topic
-  drops its provider edge.
-- **Consumer edges are derived from trace parentage**: an event whose parent span belongs to a
-  *different* service makes that service a consumer of the event's topic (never declared).
+  drops its provider edge, and one that drops a ``consumes`` entry drops its consumer edge the same way.
+- **The producer/consumer graph is built from the latest registered descriptor alone**: ``topics`` gives
+  provider edges, ``consumes`` gives consumer edges. Trace parentage MUST NOT be used to admit an edge
+  into this graph — it feeds invocation counts and status stats only.
 
 The ``benzene:mesh:query:*`` shapes follow the reference collector and are pinned by
 ``mesh-collector-cases.json`` as the observable surface for the ingest/derivation rules.
@@ -34,7 +35,7 @@ from .feeds import HEARTBEAT_TOPIC, ISSUES_TOPIC, REGISTER_TOPIC, TRACES_TOPIC
 from .store import CollectorStore, NullCollectorStore
 
 # Bumped when the snapshot shape changes incompatibly; an older/newer snapshot is ignored on load.
-_SNAPSHOT_VERSION = 1
+_SNAPSHOT_VERSION = 2
 
 # Query topics (the collector's read models — one collector's shapes, pinned by the fixtures).
 QUERY_FLEET_TOPIC = "benzene:mesh:query:fleet"
@@ -78,6 +79,7 @@ class _Service:
     descriptor_hash: str | None = None
     previous_descriptor_hash: str | None = None  # the hash before the last contract change (drift)
     provided: list[str] = field(default_factory=list)  # topic ids this service currently provides
+    consumed: list[str] = field(default_factory=list)  # topic ids this service currently consumes
     # Per-topic contract detail from the descriptor/spec feed: id -> {version, requestSchema, responseSchema}.
     topic_specs: dict[str, dict[str, Any]] = field(default_factory=dict)
     # The topic_specs from the register before the current one, for per-topic schema-change detection.
@@ -112,7 +114,6 @@ class MeshCollector:
             set()
         )  # topics some service ever declared (for removed-topic detection)
         self._events: list[_Event] = []
-        self._span_owner: dict[str, str] = {}  # span id -> the service that emitted it
         self._issues: dict[str, dict[str, Any]] = {}  # fingerprint -> merged issue
         self._store: CollectorStore = store or NullCollectorStore()
         saved = self._store.load()
@@ -127,15 +128,18 @@ class MeshCollector:
         # A changed contract hash on a service we already knew is drift — remember the prior hash.
         if record.has_descriptor and record.descriptor_hash and new_hash != record.descriptor_hash:
             record.previous_descriptor_hash = record.descriptor_hash
-        # Re-registration replaces wholesale: drop this service's old provider edges + specs first.
+        # Re-registration replaces wholesale: drop this service's old provider/consumer edges + specs first.
         topics = [t for t in body.get("topics", []) if isinstance(t, dict) and "id" in t]
         record.provided = [str(t["id"]) for t in topics]
+        consumes = [t for t in body.get("consumes", []) if isinstance(t, dict) and "id" in t]
+        record.consumed = [str(t["id"]) for t in consumes]
         # Keep the prior contracts so the artifact writer can flag which topics changed schema.
         record.previous_topic_specs = record.topic_specs
         record.topic_specs = {str(t["id"]): _topic_spec(t) for t in topics}
         record.has_descriptor = True
         record.descriptor_hash = new_hash
         self._topics.update(record.provided)
+        self._topics.update(record.consumed)
         self._ever_provided.update(
             record.provided
         )  # remember it was declared, even if later dropped
@@ -166,7 +170,6 @@ class MeshCollector:
                 status=str(raw.get("status", "")),
             )
             self._events.append(event)
-            self._span_owner[event.span_id] = event.service
             self._topics.add(event.topic)
             self._service(event.service)  # a traced service becomes known (possibly anonymous)
         return self._persisted({"accepted": len(events)})
@@ -217,11 +220,7 @@ class MeshCollector:
 
     # --- persistence -----------------------------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
-        """The whole catalog as a JSON-able dict — what a :class:`CollectorStore` persists.
-
-        ``_span_owner`` is not stored: it is a pure index of ``_events`` and is rebuilt on
-        :meth:`restore`, so the snapshot stays the single source of truth with nothing to drift.
-        """
+        """The whole catalog as a JSON-able dict — what a :class:`CollectorStore` persists."""
         return {
             "version": _SNAPSHOT_VERSION,
             "services": [
@@ -231,6 +230,7 @@ class MeshCollector:
                     "descriptorHash": record.descriptor_hash,
                     "previousDescriptorHash": record.previous_descriptor_hash,
                     "provided": record.provided,
+                    "consumed": record.consumed,
                     "topicSpecs": copy.deepcopy(record.topic_specs),
                     "previousTopicSpecs": copy.deepcopy(record.previous_topic_specs),
                     "reportedIssues": record.reported_issues,
@@ -280,6 +280,7 @@ class MeshCollector:
                 descriptor_hash=entry.get("descriptorHash"),
                 previous_descriptor_hash=entry.get("previousDescriptorHash"),
                 provided=list(entry.get("provided", [])),
+                consumed=list(entry.get("consumed", [])),
                 topic_specs=copy.deepcopy(entry.get("topicSpecs", {})),
                 previous_topic_specs=copy.deepcopy(entry.get("previousTopicSpecs", {})),
                 reported_issues=bool(entry.get("reportedIssues", False)),
@@ -306,8 +307,6 @@ class MeshCollector:
             )
             for raw in snapshot.get("events", [])
         ]
-        # Rebuild the span-owner index from the restored events (it is not part of the snapshot).
-        self._span_owner = {event.span_id: event.service for event in self._events}
         # Deep-copied so the restored collector never shares nested issue dicts with the snapshot it
         # was given (the JSON-file store hands back fresh parses; an in-memory snapshot would not).
         self._issues = copy.deepcopy(snapshot.get("issues", {}))
@@ -359,12 +358,13 @@ class MeshCollector:
         if topic not in self._topics:
             raise CollectorNotFound(f"No topic {topic!r} in the catalog")
         events = [event for event in self._events if event.topic == topic]
-        response: dict[str, Any] = {"topic": topic, "providers": self._providers_of(topic)}
-        consumers = self._consumers_of(topic, events)
-        if consumers:
-            response["consumers"] = consumers
+        response: dict[str, Any] = {
+            "topic": topic,
+            "providers": self._providers_of(topic),
+            "consumers": self._consumers_of(topic),
+            "invocations": len(events),
+        }
         if events:
-            response["invocations"] = len(events)
             response["errors"] = sum(1 for event in events if not is_successful(event.status))
             response["statusCounts"] = dict(Counter(event.status for event in events))
         return response
@@ -390,14 +390,8 @@ class MeshCollector:
     def _providers_of(self, topic: str) -> list[str]:
         return sorted(name for name, record in self._services.items() if topic in record.provided)
 
-    def _consumers_of(self, topic: str, events: list[_Event]) -> list[str]:
-        consumers: set[str] = set()
-        for event in events:
-            parent = event.parent_span_id
-            owner = self._span_owner.get(parent) if parent else None
-            if owner is not None and owner != event.service:
-                consumers.add(owner)
-        return sorted(consumers)
+    def _consumers_of(self, topic: str) -> list[str]:
+        return sorted(name for name, record in self._services.items() if topic in record.consumed)
 
     def _invocations_on(self, topic: str) -> int:
         return sum(1 for event in self._events if event.topic == topic)

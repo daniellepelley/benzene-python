@@ -35,6 +35,7 @@ def _fleet() -> MeshCollector:
         {
             "service": "orders",
             "topics": [{"id": "order:create", "version": "1", "requestSchema": _ORDER_SCHEMA}],
+            "consumes": [{"id": "stock:reserve"}],
             "descriptorHash": "h-ord",
         }
     )
@@ -65,7 +66,8 @@ def _fleet() -> MeshCollector:
             "health": {"isHealthy": False},
         }
     )
-    # orders calls inventory (its span parents the inventory event) -> consumer edge; the call errored.
+    # orders declares it consumes stock:reserve (-> consumer edge); this trace of the call feeds
+    # invocation/error stats only, never graph membership.
     c.ingest_traces(
         {
             "events": [
@@ -372,7 +374,12 @@ def test_topology_never_draws_a_service_calling_itself() -> None:
     # builder must skip the alpha->alpha self-loop and keep only alpha->beta.
     c = MeshCollector()
     c.ingest_register(
-        {"service": "alpha", "topics": [{"id": "shared:work"}], "descriptorHash": "a"}
+        {
+            "service": "alpha",
+            "topics": [{"id": "shared:work"}],
+            "consumes": [{"id": "shared:work"}],
+            "descriptorHash": "a",
+        }
     )
     c.ingest_register({"service": "beta", "topics": [{"id": "shared:work"}], "descriptorHash": "b"})
     c.ingest_traces(

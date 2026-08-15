@@ -34,6 +34,7 @@ from benzene.http import from_http, to_http
 from benzene.mesh import (
     InMemoryTraceExporter,
     MeshCollector,
+    OutboundRegistry,
     ServiceDescriptor,
     ServiceInfo,
     collector_registry,
@@ -42,7 +43,11 @@ from benzene.mesh import (
 )
 from benzene.results import is_successful
 
-from .canonical_handlers import register_canonical, register_with_panic
+from .canonical_handlers import (
+    register_canonical,
+    register_canonical_outbound,
+    register_with_panic,
+)
 
 CONFORMANCE_DIR = Path(__file__).resolve().parent.parent / "conformance"
 
@@ -154,7 +159,9 @@ def run_mesh_descriptor() -> list[str]:
     failures: list[str] = []
     data = _load("mesh-descriptor-cases.json")
     info = _info_from_fixture(data["serviceInfo"])
-    descriptor = ServiceDescriptor.derive(register_canonical(Registry()), info)
+    descriptor = ServiceDescriptor.derive(
+        register_canonical(Registry()), info, register_canonical_outbound(OutboundRegistry())
+    )
     payload = descriptor.to_payload()
 
     if not _mesh_subset_absent_ok(data["expectedDescriptor"], payload):
@@ -168,22 +175,32 @@ def run_mesh_descriptor() -> list[str]:
         failures.append(f"mesh-descriptor: hash hex length != {hash_spec['hexLength']}")
     if hash_spec.get("invariantToInstanceId"):
         other = ServiceDescriptor.derive(
-            register_canonical(Registry()), _info_from_fixture(data["serviceInfo"], instance_id="i-xyz")
+            register_canonical(Registry()),
+            _info_from_fixture(data["serviceInfo"], instance_id="i-xyz"),
+            register_canonical_outbound(OutboundRegistry()),
         )
         if other.descriptor_hash() != h:
             failures.append("mesh-descriptor: hash not invariant to instanceId")
     if hash_spec.get("sensitiveToServiceVersion"):
         other = ServiceDescriptor.derive(
-            register_canonical(Registry()), _info_from_fixture(data["serviceInfo"], service_version="9.9.9")
+            register_canonical(Registry()),
+            _info_from_fixture(data["serviceInfo"], service_version="9.9.9"),
+            register_canonical_outbound(OutboundRegistry()),
         )
         if other.descriptor_hash() == h:
             failures.append("mesh-descriptor: hash not sensitive to serviceVersion")
     if hash_spec.get("sensitiveToTopics"):
         from .canonical_handlers import greet
 
-        other = ServiceDescriptor.derive(Registry().add(greet), info)
+        other = ServiceDescriptor.derive(
+            Registry().add(greet), info, register_canonical_outbound(OutboundRegistry())
+        )
         if other.descriptor_hash() == h:
             failures.append("mesh-descriptor: hash not sensitive to the topic set")
+    if hash_spec.get("sensitiveToConsumes"):
+        other = ServiceDescriptor.derive(register_canonical(Registry()), info)  # no consumes at all
+        if other.descriptor_hash() == h:
+            failures.append("mesh-descriptor: hash not sensitive to the consumed-topic set")
     return failures
 
 

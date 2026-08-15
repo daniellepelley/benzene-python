@@ -3,8 +3,10 @@
 Each service runs its own pipeline with ``trace_middleware`` (so every invocation emits a TraceEvent)
 and calls the next service through a ``with_trace_propagation``-wrapped in-process sender (so the
 ``traceparent`` — hence the parent/child span link — crosses the hop). At startup each service
-registers its descriptor with the collector; after a call chain, every service's traces are pushed to
-the collector, which derives the consumer edges from the span parentage.
+registers its descriptor — including an :class:`~benzene.mesh.OutboundRegistry` declaring what it
+calls — with the collector, so the producer/consumer graph exists before a single order is placed;
+after a call chain, every service's traces are pushed to the collector too, feeding invocation/error
+stats and status counts, never graph membership (mesh.md §4).
 
 The wiring here (in-process senders, shared collector) is the *demo substitute* for the deployed shape:
 in AWS each service is a Lambda, the senders are SNS/HTTP, and the collector is a Fargate service fed by
@@ -26,6 +28,7 @@ from benzene.core import (
 )
 from benzene.mesh import (
     MeshCollector,
+    OutboundRegistry,
     QueueTraceExporter,
     ServiceDescriptor,
     ServiceInfo,
@@ -122,13 +125,21 @@ def build_fleet(collector: MeshCollector | None = None) -> Fleet:
     order_registry = Registry().register(PLACE_ORDER, place)
     orders, order_traces = _service("orders", order_registry)
 
-    # Register each service's descriptor with the collector (what a service does on startup).
+    # Register each service's descriptor — including what it consumes — with the collector (what a
+    # service does on startup; this alone is what puts consumer edges in the graph, mesh.md §2.3/§4).
+    outbound: dict[str, OutboundRegistry] = {
+        "orders": OutboundRegistry().register(RESERVE_STOCK),
+        "inventory": OutboundRegistry().register(SEND_NOTIFICATION),
+        "notifications": OutboundRegistry(),
+    }
     for name, registry in (
         ("orders", order_registry),
         ("inventory", inv_registry),
         ("notifications", notif_registry),
     ):
-        descriptor = ServiceDescriptor.derive(registry, ServiceInfo(service=name, placement={"cloud": "aws"}))
+        descriptor = ServiceDescriptor.derive(
+            registry, ServiceInfo(service=name, placement={"cloud": "aws"}), outbound[name]
+        )
         collector.ingest_register(descriptor.to_payload())
 
     return Fleet(

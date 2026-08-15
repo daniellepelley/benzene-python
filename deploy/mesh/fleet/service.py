@@ -4,11 +4,14 @@ One Lambda image serves any node in the demo fleet (``orders`` / ``inventory`` /
 the environment decides its identity, the topic it serves, the sibling it calls next, and where it
 reports traces. Each service:
 
-- exposes ``/benzene/spec`` + ``/benzene/health`` (so the mesh collector can **poll** it),
+- exposes ``/benzene/spec`` + ``/benzene/health`` (so the mesh collector can **poll** it — identity,
+  topics, health only; ``ServiceSpec`` has no ``consumes`` field),
 - runs ``trace_middleware`` and, when ``NEXT_URL`` is set, calls the next service through a
   ``with_trace_propagation``-wrapped HTTP sender (so the ``traceparent`` crosses the hop), and
-- when ``COLLECTOR_URL`` is set, **pushes** its trace batch to the collector after each invocation, so
-  the collector derives the consumer edges (best-effort — a collector hiccup never fails the request).
+- when ``COLLECTOR_URL`` is set, **pushes** its ``ServiceDescriptor`` — ``consumes=[NEXT_TOPIC]`` when
+  there's a next hop — once at startup, so the collector's consumer edge exists before a single request
+  is served (mesh.md §4), then pushes each trace batch after every invocation to feed that edge's
+  invocation/error stats (best-effort — a collector hiccup never fails the request).
 
 Env: ``SERVICE_NAME``, ``SERVICE_TOPIC``, ``SERVICE_ROUTE`` (default ``/<name>``), ``NEXT_URL`` +
 ``NEXT_TOPIC`` (optional), ``COLLECTOR_URL`` (optional).
@@ -34,9 +37,13 @@ from benzene.core import (
 )
 from benzene.http import HttpMessageSender, HttpRouter, StandardPaths
 from benzene.mesh import (
+    REGISTER_TOPIC,
     TRACES_TOPIC,
     MeshFeedSender,
+    OutboundRegistry,
     QueueTraceExporter,
+    ServiceDescriptor,
+    ServiceInfo,
     trace_middleware,
     with_trace_propagation,
 )
@@ -92,9 +99,13 @@ class FleetService:
 
 
 def build_service(
-    config: ServiceConfig, *, next_sender: MessageSender | None = None
+    config: ServiceConfig,
+    *,
+    next_sender: MessageSender | None = None,
+    feeds: MeshFeedSender | None = None,
 ) -> FleetService:
-    """Build the service. ``next_sender`` is injectable for tests; production derives it from the env."""
+    """Build the service. ``next_sender``/``feeds`` are injectable for tests; production derives both
+    from the env (``NEXT_URL``/``NEXT_TOPIC`` and ``COLLECTOR_URL`` respectively)."""
     exporter = QueueTraceExporter()
 
     if next_sender is None and config.next_url and config.next_topic:
@@ -134,12 +145,24 @@ def build_service(
         standard_paths=standard,
     )
 
-    feeds: MeshFeedSender | None = None
-    if config.collector_url:
-        # Push traces to the collector's /mesh/traces route (MeshFeedSender sends to TRACES_TOPIC).
+    if feeds is None and config.collector_url:
+        # Push register (once, below) to /mesh/register and each trace batch to /mesh/traces — one
+        # sender, both routes (MeshFeedSender picks the route by topic).
+        base = config.collector_url.rstrip("/")
         feeds = MeshFeedSender(
-            HttpMessageSender({TRACES_TOPIC: f"{config.collector_url.rstrip('/')}/mesh/traces"})
+            HttpMessageSender(
+                {REGISTER_TOPIC: f"{base}/mesh/register", TRACES_TOPIC: f"{base}/mesh/traces"}
+            )
         )
+    if feeds is not None:
+        # What this service consumes (mesh.md §2.3) — the collector's consumer edge exists from this
+        # one call, with zero traffic; it does not wait on (or come from) a trace.
+        outbound = OutboundRegistry()
+        if config.next_topic:
+            outbound.register(config.next_topic)
+        descriptor = ServiceDescriptor.derive(registry, ServiceInfo(service=config.name), outbound)
+        with contextlib.suppress(Exception):  # register is best-effort, never fails startup
+            asyncio.run(feeds.register(descriptor))
     return FleetService(app=app, exporter=exporter, feeds=feeds)
 
 

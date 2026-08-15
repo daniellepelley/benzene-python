@@ -35,7 +35,11 @@ def build_descriptor(registry) -> ServiceDescriptor:
 
 The derived descriptor carries one topic entry per registered topic — for the order domain that is
 `orders:place`, `orders:get`, and `orders:created` — each with the request/response JSON Schema taken
-from the handler's declared types, and a `descriptorHash` over the contract:
+from the handler's declared types, and a `descriptorHash` over the contract. If this service also
+*calls* another topic (e.g. `payments:capture`), declare that too — pass an `OutboundRegistry` as
+`derive`'s third argument (`ServiceDescriptor.derive(registry, info, outbound)`) — so the mesh's
+consumer edge exists the moment this service registers, with zero traffic
+([reference](../reference/mesh.md#outboundregistry)):
 
 ```python
 from benzene.core import MessageSender, build_application
