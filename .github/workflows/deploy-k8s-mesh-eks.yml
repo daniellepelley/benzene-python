@@ -191,6 +191,7 @@ jobs:
           echo "### Public URLs" >> "$GITHUB_STEP_SUMMARY"
           echo "Mesh UI: http://$MESH_HOST/mesh-ui" >> "$GITHUB_STEP_SUMMARY"
           for s in orders payments shipping; do
+            echo "Waiting for svc/$s's LoadBalancer hostname..."
             HOST=""
             for i in $(seq 1 30); do
               HOST="$(kubectl -n "$NAMESPACE" get svc "$s" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
@@ -198,11 +199,18 @@ jobs:
               sleep 10
             done
             [ -z "$HOST" ] && { echo "::error::LoadBalancer hostname never appeared on svc/$s"; exit 1; }
+            echo "svc/$s ELB: $HOST — waiting for it to answer..."
+            answered=0
             for i in $(seq 1 60); do
-              curl -fsS -m 10 "http://$HOST/benzene/health" >/dev/null 2>&1 && break
-              [ "$i" = "60" ] && { echo "::error::svc/$s never answered at http://$HOST/benzene/health"; exit 1; }
+              if curl -fsS -m 10 "http://$HOST/benzene/health" 2>/dev/null; then
+                answered=1
+                break
+              fi
               sleep 10
             done
+            echo ""
+            [ "$answered" = "1" ] || { echo "::error::svc/$s never answered at http://$HOST/benzene/health"; exit 1; }
+            echo "svc/$s is up: http://$HOST/benzene/spec"
             echo "- $s: http://$HOST/benzene/spec" >> "$GITHUB_STEP_SUMMARY"
           done
 
