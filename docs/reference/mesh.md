@@ -464,9 +464,14 @@ mesh.md §§4–6, pinned by `mesh-collector-cases.json`):
   `topics` gives provider edges, `consumes` gives consumer edges; re-registration **replaces** both
   wholesale. Trace parentage is **never** used to admit an edge into this graph — it feeds a queried
   topic's `invocations` / `errors` / `statusCounts` for the edges the descriptor already declared
-  (mesh.md §4). mesh.md §4.2 additionally defines declared-vs-observed *liveness* (an unobserved
-  declared edge as a decommission candidate) and *drift* (an observed-but-undeclared edge as
-  `contract-drift`) as signals a collector may layer on top; this collector does not yet emit either.
+  (mesh.md §4).
+- **Declared vs. observed** (mesh.md §4.2) — `query_topic`'s `providerActivity` / `consumerActivity`
+  maps every declared name to `{"lastObservedAt": "..."}` when a matching trace has been seen, else
+  `{}` — an entry present with no timestamp is a **decommission candidate**, never removed from
+  `providers`/`consumers` on that basis alone. Symmetrically, the first trace naming a topic a
+  service *hasn't* declared (as either provider or consumer) — checked only for a service that has
+  registered a descriptor; an anonymous one has no contract to diverge from — is filed into the
+  issues feed as a `contract-drift` issue, merged by fingerprint like any other issue (§4.1).
 - **Health** aggregates a service's heartbeat instances (`healthy` / `degraded` / `unhealthy` /
   `unknown`), and a per-instance `hashMatches` surfaces a descriptor-hash drift.
 - **`missingFeeds`** names which of `descriptor` / `health` / `traces` a service hasn't reported, so a

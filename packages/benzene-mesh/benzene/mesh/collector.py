@@ -15,6 +15,12 @@ Derivation rules that are normative (mesh.md §4):
 - **The producer/consumer graph is built from the latest registered descriptor alone**: ``topics`` gives
   provider edges, ``consumes`` gives consumer edges. Trace parentage MUST NOT be used to admit an edge
   into this graph — it feeds invocation counts and status stats only.
+- **Declared vs. observed** (mesh.md §4.2): a trace never changes the graph, but it *is* the only signal
+  for two collector-derived read models layered on top of it — **liveness** (has a declared edge ever
+  been exercised, so an unexercised one is a decommission *candidate*, never a fact) and **drift** (a
+  traced edge nobody declared, filed as a ``contract-drift`` issue the moment it's first observed on a
+  service that *has* registered a descriptor — an anonymous/never-registered service has nothing to
+  diverge from, so it is never flagged).
 
 The ``benzene:mesh:query:*`` shapes follow the reference collector and are pinned by
 ``mesh-collector-cases.json`` as the observable surface for the ingest/derivation rules.
@@ -32,6 +38,7 @@ from benzene.core import Handler, Registry
 from benzene.results import Result, is_successful
 
 from .feeds import HEARTBEAT_TOPIC, ISSUES_TOPIC, REGISTER_TOPIC, TRACES_TOPIC
+from .issues import issue_fingerprint
 from .store import CollectorStore, NullCollectorStore
 
 # Bumped when the snapshot shape changes incompatibly; an older/newer snapshot is ignored on load.
@@ -96,6 +103,7 @@ class _Event:
     service: str
     topic: str
     status: str
+    started_at: str | None = None
 
 
 class MeshCollector:
@@ -114,6 +122,9 @@ class MeshCollector:
             set()
         )  # topics some service ever declared (for removed-topic detection)
         self._events: list[_Event] = []
+        # span id -> the service that emitted it. Used only for the §4.2 observed-signal (liveness,
+        # drift) below — NEVER for graph membership (`_providers_of`/`_consumers_of` are declared-only).
+        self._span_owner: dict[str, str] = {}
         self._issues: dict[str, dict[str, Any]] = {}  # fingerprint -> merged issue
         self._store: CollectorStore = store or NullCollectorStore()
         saved = self._store.load()
@@ -168,11 +179,44 @@ class MeshCollector:
                 service=str(raw.get("service", "")),
                 topic=str(raw.get("topic", "")),
                 status=str(raw.get("status", "")),
+                started_at=raw.get("startedAt"),
             )
             self._events.append(event)
+            self._span_owner[event.span_id] = event.service
             self._topics.add(event.topic)
-            self._service(event.service)  # a traced service becomes known (possibly anonymous)
+            callee = self._service(event.service)  # a traced service becomes known (possibly anonymous)
+            self._flag_drift_if_undeclared(callee, event.topic, callee.provided, event.trace_id)
+            parent = event.parent_span_id
+            caller_name = self._span_owner.get(parent) if parent else None
+            if caller_name and caller_name != event.service:
+                caller = self._services.get(caller_name)
+                if caller is not None:  # only a registered caller has a `consumes` to diverge from
+                    self._flag_drift_if_undeclared(caller, event.topic, caller.consumed, event.trace_id)
         return self._persisted({"accepted": len(events)})
+
+    def _flag_drift_if_undeclared(
+        self, record: _Service, topic: str, declared: list[str], trace_id: str
+    ) -> None:
+        """File a ``contract-drift`` issue the first time a trace observes ``record`` on a topic it
+        hasn't declared — either as a provider (``topic`` not in its ``topics``) or as a consumer
+        (``topic`` not in its ``consumes``), mesh.md §4.2's "Undeclared" signal. A service that has
+        never registered a descriptor has no declared contract to diverge from, so it is never flagged.
+        """
+        if not record.has_descriptor or topic in declared:
+            return
+        fingerprint = issue_fingerprint(record.name, topic, "", "contract-drift", "undeclared-edge")
+        self._merge_issue(
+            fingerprint,
+            {
+                "fingerprint": fingerprint,
+                "classification": "contract-drift",
+                "service": record.name,
+                "topic": topic,
+                "status": "",
+                "count": 1,
+                "exemplarTraceIds": [trace_id] if trace_id else [],
+            },
+        )
 
     def ingest_issues(self, body: dict[str, Any]) -> dict[str, Any]:
         service = _require(body, "service")
@@ -256,6 +300,7 @@ class MeshCollector:
                     "service": event.service,
                     "topic": event.topic,
                     "status": event.status,
+                    "startedAt": event.started_at,
                 }
                 for event in self._events
             ],
@@ -304,9 +349,13 @@ class MeshCollector:
                 service=str(raw.get("service", "")),
                 topic=str(raw.get("topic", "")),
                 status=str(raw.get("status", "")),
+                started_at=raw.get("startedAt"),
             )
             for raw in snapshot.get("events", [])
         ]
+        # Rebuild the span-owner index from the restored events — a pure index over `_events`, not
+        # itself persisted, needed again after restart for the §4.2 observed-signal derivation.
+        self._span_owner = {event.span_id: event.service for event in self._events}
         # Deep-copied so the restored collector never shares nested issue dicts with the snapshot it
         # was given (the JSON-file store hands back fresh parses; an in-memory snapshot would not).
         self._issues = copy.deepcopy(snapshot.get("issues", {}))
@@ -358,15 +407,23 @@ class MeshCollector:
         if topic not in self._topics:
             raise CollectorNotFound(f"No topic {topic!r} in the catalog")
         events = [event for event in self._events if event.topic == topic]
+        providers = self._providers_of(topic)
+        consumers = self._consumers_of(topic)
         response: dict[str, Any] = {
             "topic": topic,
-            "providers": self._providers_of(topic),
-            "consumers": self._consumers_of(topic),
+            "providers": providers,
+            "consumers": consumers,
             "invocations": len(events),
         }
         if events:
             response["errors"] = sum(1 for event in events if not is_successful(event.status))
             response["statusCounts"] = dict(Counter(event.status for event in events))
+        # mesh.md §4.2: per declared edge, report last-observed-at (or its absence) rather than
+        # collapsing liveness to a boolean — an absent entry is a decommission *candidate*, not a fact.
+        if providers:
+            response["providerActivity"] = self._edge_activity(self._observed_providers(topic), providers)
+        if consumers:
+            response["consumerActivity"] = self._edge_activity(self._observed_consumers(topic), consumers)
         return response
 
     def query_trace(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -392,6 +449,48 @@ class MeshCollector:
 
     def _consumers_of(self, topic: str) -> list[str]:
         return sorted(name for name, record in self._services.items() if topic in record.consumed)
+
+    def _observed_providers(self, topic: str) -> dict[str, str | None]:
+        """{service: last-observed-at or None} for every service traced handling ``topic`` — the §4.2
+        observed signal for provider liveness (never used to admit a provider edge into the graph)."""
+        observed: dict[str, str | None] = {}
+        for event in self._events:
+            if event.topic == topic:
+                self._note_observed(observed, event.service, event.started_at)
+        return observed
+
+    def _observed_consumers(self, topic: str) -> dict[str, str | None]:
+        """{service: last-observed-at or None} for every service whose span parented a traced call to
+        ``topic`` by a different service — the §4.2 observed signal for consumer liveness."""
+        observed: dict[str, str | None] = {}
+        for event in self._events:
+            if event.topic != topic or not event.parent_span_id:
+                continue
+            caller = self._span_owner.get(event.parent_span_id)
+            if caller and caller != event.service:
+                self._note_observed(observed, caller, event.started_at)
+        return observed
+
+    @staticmethod
+    def _note_observed(observed: dict[str, str | None], service: str, started_at: str | None) -> None:
+        current = observed.get(service) if service in observed else None
+        if started_at and (current is None or started_at > current):
+            observed[service] = started_at
+        elif service not in observed:
+            observed[service] = None
+
+    @staticmethod
+    def _edge_activity(
+        observed: dict[str, str | None], declared: list[str]
+    ) -> dict[str, dict[str, str]]:
+        """Every declared name -> ``{"lastObservedAt": ...}`` when known, else ``{}`` (observed with no
+        timestamp, or never observed at all — mesh.md §4.2 deliberately treats "unobserved" as a
+        decommission *candidate*, not a removal, so an undeclared entry is never synthesized here)."""
+        activity: dict[str, dict[str, str]] = {}
+        for name in declared:
+            last_observed_at = observed.get(name)
+            activity[name] = {"lastObservedAt": last_observed_at} if last_observed_at else {}
+        return activity
 
     def _invocations_on(self, topic: str) -> int:
         return sum(1 for event in self._events if event.topic == topic)

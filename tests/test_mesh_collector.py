@@ -107,6 +107,148 @@ def test_trace_parentage_does_not_admit_a_consumer_edge() -> None:
     assert topic["invocations"] == 1
 
 
+# --- §4.2 declared vs. observed: liveness + drift --------------------------------------------------
+
+
+def test_a_declared_edge_with_no_trace_is_unobserved_not_removed() -> None:
+    c = MeshCollector()
+    _register(c, "payments", ["payments:capture"])
+    _register(c, "orders", ["order:create"], consumes=["payments:capture"])
+    topic = c.query_topic({"topic": "payments:capture"})
+    assert topic["consumers"] == ["orders"]  # still declared — unobserved is a candidate, not a fact
+    assert topic["consumerActivity"] == {"orders": {}}  # no lastObservedAt: never traced
+    assert topic["providerActivity"] == {"payments": {}}
+
+
+def test_a_declared_edge_is_observed_once_a_matching_trace_arrives() -> None:
+    c = MeshCollector()
+    _register(c, "payments", ["payments:capture"])
+    _register(c, "orders", ["order:create"], consumes=["payments:capture"])
+    c.ingest_traces(
+        {
+            "events": [
+                {
+                    "traceId": "t1",
+                    "spanId": "s1",
+                    "service": "orders",
+                    "topic": "order:create",
+                    "status": "ok",
+                },
+                {
+                    "traceId": "t1",
+                    "spanId": "s2",
+                    "parentSpanId": "s1",
+                    "service": "payments",
+                    "topic": "payments:capture",
+                    "status": "ok",
+                    "startedAt": "2026-08-15T09:00:00Z",
+                },
+            ]
+        }
+    )
+    topic = c.query_topic({"topic": "payments:capture"})
+    assert topic["consumerActivity"] == {"orders": {"lastObservedAt": "2026-08-15T09:00:00Z"}}
+    assert topic["providerActivity"] == {"payments": {"lastObservedAt": "2026-08-15T09:00:00Z"}}
+
+
+def test_an_undeclared_provider_edge_files_a_contract_drift_issue() -> None:
+    c = MeshCollector()
+    _register(c, "payments", ["payments:capture"])  # does NOT provide payments:refund
+    c.ingest_traces(
+        {
+            "events": [
+                {
+                    "traceId": "t1",
+                    "spanId": "s1",
+                    "service": "payments",
+                    "topic": "payments:refund",
+                    "status": "ok",
+                    "startedAt": "2026-08-15T09:00:00Z",
+                }
+            ]
+        }
+    )
+    issues = c.query_fleet({})["issues"]
+    assert len(issues) == 1
+    assert issues[0]["classification"] == "contract-drift"
+    assert issues[0]["service"] == "payments"
+    assert issues[0]["topic"] == "payments:refund"
+
+
+def test_an_undeclared_consumer_edge_files_a_contract_drift_issue() -> None:
+    c = MeshCollector()
+    _register(c, "payments", ["payments:capture"])
+    _register(c, "orders", ["order:create"])  # does NOT declare consumes=[payments:capture]
+    c.ingest_traces(
+        {
+            "events": [
+                {
+                    "traceId": "t1",
+                    "spanId": "s1",
+                    "service": "orders",
+                    "topic": "order:create",
+                    "status": "ok",
+                },
+                {
+                    "traceId": "t1",
+                    "spanId": "s2",
+                    "parentSpanId": "s1",
+                    "service": "payments",
+                    "topic": "payments:capture",
+                    "status": "ok",
+                },
+            ]
+        }
+    )
+    issues = c.query_fleet({})["issues"]
+    drift = [i for i in issues if i["classification"] == "contract-drift"]
+    assert len(drift) == 1
+    assert drift[0]["service"] == "orders"
+    assert drift[0]["topic"] == "payments:capture"
+
+
+def test_an_anonymous_service_is_never_flagged_for_drift() -> None:
+    # A service that never registered has no declared contract to diverge from — it's an existing,
+    # separate signal (missingFeeds: descriptor), not contract-drift.
+    c = MeshCollector()
+    c.ingest_traces(
+        {
+            "events": [
+                {
+                    "traceId": "t1",
+                    "spanId": "s1",
+                    "service": "frontdoor",
+                    "topic": "welcome",
+                    "status": "ok",
+                }
+            ]
+        }
+    )
+    assert c.query_fleet({})["issues"] == []
+
+
+def test_repeated_undeclared_calls_merge_into_one_drift_issue_by_fingerprint() -> None:
+    c = MeshCollector()
+    _register(c, "payments", ["payments:capture"])
+    for trace_id in ("t1", "t2", "t3"):
+        c.ingest_traces(
+            {
+                "events": [
+                    {
+                        "traceId": trace_id,
+                        "spanId": f"s-{trace_id}",
+                        "service": "payments",
+                        "topic": "payments:refund",
+                        "status": "ok",
+                    }
+                ]
+            }
+        )
+    issues = c.query_fleet({})["issues"]
+    assert len(issues) == 1
+    assert issues[0]["count"] == 3  # merged by fingerprint, not one issue per occurrence
+
+
 def test_heartbeats_drive_health_and_hash_mismatch() -> None:
     c = MeshCollector()
     _register(c, "orders", ["order:create"], descriptor_hash="sha256:aaaa")

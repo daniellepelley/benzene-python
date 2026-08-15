@@ -171,8 +171,10 @@ it — a fresh `apply` starts from an empty catalog and refills from the fleet.
   time window / transports / durations need a real metrics source (CloudWatch, Tempo). The structural
   usage counts derived from traces already drive the usage view; a metrics feed would fill in the
   observability numbers the UI leaves reduced today.
-- **Declared vs. observed (mesh.md §4.2)** — the spec defines liveness (an unobserved declared edge as a
-  decommission candidate) and drift (`contract-drift` for an observed-but-undeclared edge) as signals a
-  collector may layer on the declared graph; this collector doesn't emit either yet.
+- **Surface declared-vs-observed (mesh.md §4.2) in the artifacts** — the collector now emits both
+  signals (`GET /mesh/topic/{topic}` carries `providerActivity`/`consumerActivity`, and an
+  observed-but-undeclared edge files a `contract-drift` issue, merged into `GET /mesh/fleet`'s
+  `issues`), but the mesh-ui artifact projection (`topics.json`, `topology.json`) doesn't render either
+  one yet — that's part of the `mesh-ui.html` visual-update follow-up.
 - **Live-plane enhancements** — `annotations.json` writes and other backend-gated features (mesh-ui.md
   §4) are out of scope for the static floor served here.
