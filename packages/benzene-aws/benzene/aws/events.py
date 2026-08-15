@@ -125,6 +125,10 @@ def s3_record_envelope(record: dict[str, Any], topic: str = DEFAULT_S3_TOPIC) ->
     return {"topic": topic, "headers": {}, "body": encode_body(body)}
 
 
+#: Must match ``benzene.aws.clients.EMBEDDED_HEADERS_KEY`` — the outbound sender's embedding key.
+EMBEDDED_HEADERS_KEY = "_benzeneHeaders"
+
+
 def eventbridge_envelope(
     event: dict[str, Any], default_topic: str = DEFAULT_EVENTBRIDGE_TOPIC
 ) -> dict[str, Any]:
@@ -132,13 +136,35 @@ def eventbridge_envelope(
 
     Unlike the batch sources an EventBridge delivery is a *single* event (no ``Records`` array): the
     Benzene topic is the ``detail-type`` (falling back to ``default_topic`` when absent) and the body
-    is the ``detail`` object, serialized through the shared wire policy. EventBridge has no header
-    channel, so headers are empty.
+    is the ``detail`` object, serialized through the shared wire policy — the reserved
+    ``_benzeneHeaders`` key, when present, is left in the body verbatim (a request mapper's
+    deserialization simply ignores it, same as .NET). EventBridge has no native per-message
+    attributes, so headers are the ``eventbridge-``-prefixed envelope metadata plus any Benzene wire
+    headers lifted from ``_benzeneHeaders`` — embedded headers win on key collision.
     """
     detail = event.get("detail")
     topic = event.get("detail-type") or default_topic
     body = detail if isinstance(detail, str) else encode_body(detail if detail is not None else {})
-    return {"topic": topic, "headers": {}, "body": body}
+
+    headers: dict[str, str] = {}
+    for key, value in (
+        ("eventbridge-id", event.get("id")),
+        ("eventbridge-source", event.get("source")),
+        ("eventbridge-account", event.get("account")),
+        ("eventbridge-region", event.get("region")),
+        ("eventbridge-time", event.get("time")),
+        ("eventbridge-detail-type", event.get("detail-type")),
+    ):
+        if value:
+            headers[key] = str(value)
+    if isinstance(detail, dict):
+        embedded = detail.get(EMBEDDED_HEADERS_KEY)
+        if isinstance(embedded, dict):
+            for key, value in embedded.items():
+                if isinstance(value, str):
+                    headers[key] = value
+
+    return {"topic": topic, "headers": headers, "body": body}
 
 
 def dynamodb_record_envelope(record: dict[str, Any], topic: str | None = None) -> dict[str, Any]:

@@ -83,10 +83,11 @@ handler = to_lambda_handler(app)                            # def handler(event,
 
 All five implement `benzene.core.MessageSender` and use `boto3` (a lazy, optional import). SNS/SQS have
 a native attribute channel, so the Benzene topic rides in the `topic` message attribute and headers as
-attributes. EventBridge/Kinesis have *no* metadata channel, so the sender embeds the whole Benzene
-envelope `{topic, headers, body}` inside the payload it serializes — keeping correlation/trace
-propagation intact. Lambda's invoke Payload *is* the envelope already. A send failure maps to
-`service-unavailable`, never a raise.
+attributes. EventBridge/Kinesis have *no* metadata channel, so the sender leaves the domain payload as
+the wire body and embeds headers *inside* it, under the reserved `_benzeneHeaders` key (mirrors .NET's
+`Benzene.Clients.Aws.EventBridge`) — keeping correlation/trace propagation intact without disturbing
+the payload shape a plain (non-Benzene) consumer of the stream/bus would see. Lambda's invoke Payload
+*is* the envelope already. A send failure maps to `service-unavailable`, never a raise.
 
 Azure Functions and Kubernetes services have no equivalent native "invoke another function directly"
 primitive — the cross-platform way to reach the same synchronous-call outcome is over HTTP or gRPC

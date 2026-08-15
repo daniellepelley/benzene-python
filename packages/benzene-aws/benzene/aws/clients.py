@@ -5,9 +5,13 @@ Three carrying conventions, matching what each service exposes on the wire:
 
 - **SNS / SQS** have a native message-attribute channel, so the Benzene topic and headers ride there
   (the ``topic`` attribute plus one attribute per header) — the same shape the inbound decoders read.
-- **EventBridge / Kinesis** have *no* metadata channel, so the sender embeds the whole Benzene
-  envelope ``{topic, headers, body}`` inside the payload it serializes. This keeps
-  correlation/trace propagation working end to end regardless of the transport.
+- **EventBridge / Kinesis** have *no* metadata channel, so the sender leaves the domain payload as
+  the wire body and embeds headers *inside* it, under the reserved ``_benzeneHeaders`` key (mirrors
+  .NET's ``Benzene.Clients.Aws.EventBridge`` — see ``docs/specification/transport-bindings.md``
+  "EventBridge" for the cross-language contract). The topic travels out-of-band (EventBridge's
+  ``DetailType``; Kinesis has no equivalent, so its topic is a caller-supplied convention, not part
+  of the wire body). This keeps correlation/trace propagation working end to end without disturbing
+  the payload shape a plain (non-Benzene) consumer of the stream/bus would see.
 - **Lambda** (:class:`LambdaMessageSender`) calls another function directly — AWS's own
   request/response primitive, no broker involved — so the envelope travels as the invoke Payload
   itself and the *response* Payload decodes straight back into a :class:`~benzene.results.Result`
@@ -111,15 +115,35 @@ class SqsMessageSender:
         return Result.ok()
 
 
-def _embedded_envelope(
-    topic: str, message: Any, headers: dict[str, str] | None, serialize: Callable[[Any], str]
-) -> str:
-    """Serialize the Benzene envelope for a transport with no metadata channel (EventBridge, Kinesis).
+EMBEDDED_HEADERS_KEY = "_benzeneHeaders"
+"""The reserved key inside a headerless-transport body that carries embedded Benzene wire headers.
 
-    The topic and headers travel *inside* the payload as ``{"topic", "headers", "body"}`` so nothing
-    is lost on a wire that carries only an opaque blob; the body is run through the shared serializer.
+Mirrors .NET's ``OutboundEventBridgeContextConverter.EmbeddedHeadersKey`` /
+``EventBridgeMessageHeadersGetter.EmbeddedHeadersKey`` (wire-contracts §2, transport-bindings.md
+"EventBridge"). The inbound ``eventbridge_envelope`` decoder (``events.py``) lifts it back out.
+"""
+
+
+def _embed_headers(
+    message: Any, headers: dict[str, str] | None, serialize: Callable[[Any], str]
+) -> str:
+    """Serialize ``message`` for a transport with no metadata channel (EventBridge, Kinesis),
+    embedding ``headers`` under :data:`EMBEDDED_HEADERS_KEY` when the serialized payload is a JSON
+    object — matching .NET's ``OutboundEventBridgeContextConverter.BuildDetail``. A non-object
+    payload (or no headers at all) is left exactly as the serializer produced it, so a plain
+    (non-Benzene) consumer of the stream/bus sees the domain payload verbatim.
     """
-    return serialize({"topic": topic, "headers": headers or {}, "body": message})
+    body = serialize(message)
+    if not headers:
+        return body
+    try:
+        parsed = json.loads(body)
+    except (TypeError, ValueError):
+        return body
+    if not isinstance(parsed, dict):
+        return body
+    parsed[EMBEDDED_HEADERS_KEY] = dict(headers)
+    return json.dumps(parsed)
 
 
 class EventBridgeMessageSender:
@@ -163,7 +187,7 @@ class EventBridgeMessageSender:
                         "EventBusName": self._event_bus_name,
                         "Source": self._source,
                         "DetailType": self._detail_type or topic,
-                        "Detail": _embedded_envelope(topic, message, headers, self._serialize),
+                        "Detail": _embed_headers(message, headers, self._serialize),
                     }
                 ],
             )
@@ -214,7 +238,7 @@ class KinesisMessageSender:
             await asyncio.to_thread(
                 self._kinesis().put_record,
                 StreamName=self._stream_name,
-                Data=_embedded_envelope(topic, message, headers, self._serialize),
+                Data=_embed_headers(message, headers, self._serialize),
                 PartitionKey=self._partition_key(topic, headers),
             )
         except Exception as ex:

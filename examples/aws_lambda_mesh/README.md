@@ -118,16 +118,6 @@ See `deploy/main.tf` for the full resource list (modelled closely on TS's `deplo
 
 ## Known first-deploy iteration points
 
-- **`EventBridgeMessageSender` <-> the EventBridge inbound decoder are not a byte-perfect round trip
-  today.** `EventBridgeMessageSender` embeds the *whole* Benzene envelope (`{topic, headers, body}`)
-  into the EventBridge `Detail` (EventBridge has no separate metadata channel); the inbound
-  `eventbridge_envelope` decoder reads the topic from the top-level `detail-type` (correct) but treats
-  the *entire* `detail` object as the body verbatim, so a downstream handler's request dataclass sees
-  the wrapper shape, not the original payload's fields. Every payload here (`Message`) defaults every
-  field to `""`, so this degrades to an empty `order_id` rather than a crash — real end-to-end field
-  propagation over EventBridge needs a framework-level fix to one of the two sides, which is out of
-  scope for this example (see the task's framework-change boundary). SQS and SNS, which carry the topic
-  in a real message-attribute channel, round-trip correctly.
 - **Base runtime** — `deploy/variables.tf`'s `lambda_runtime` defaults to `python3.12`; bump it if your
   account's Lambda console/tooling expects a different minor version.
 - **Cold starts** — this is a demo-proportionate estate (256 MB, 30s timeout); tune `deploy/main.tf`'s
