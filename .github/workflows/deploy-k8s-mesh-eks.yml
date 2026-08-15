@@ -1,0 +1,215 @@
+name: Deploy K8s Mesh Example (EKS)
+
+# Manual-only: deploys examples/k8s_mesh to a real EKS cluster — the AWS leg of the Kubernetes mesh
+# example (deploy-k8s-mesh-kind.yml proves the same story credential-free). Terraform creates the
+# cluster + ECR (examples/k8s_mesh/deploy), the two images are built and pushed, and the UNCHANGED
+# k8s/ manifests are applied via the deploy/eks kustomize overlay, which exposes the Mesh UI through
+# an internet-facing LoadBalancer. Ends by asserting {"discovered":3} and printing the public URLs.
+#
+# Bundles apply/plan/destroy into one dispatch input (this repo's own deploy-mesh.yml convention),
+# rather than .NET's separate deploy/destroy workflow files — kept consistent with how this repo
+# already runs its other credentialed Terraform deploy. Uses the same "test" GitHub Environment
+# credentials and the per-account S3 state bucket .NET's K8sMesh example uses (state key
+# python-k8s-mesh/), so a Python and .NET K8sMesh stack can coexist without clobbering each other's
+# state. NOTE: an EKS control plane bills ~$0.10/hour plus the EC2 nodes and four classic ELBs
+# (mesh + the three services) — run with action=destroy to tear everything down when finished.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do"
+        type: choice
+        options: [apply, plan, destroy]
+        default: apply
+      region:
+        description: "AWS region"
+        type: string
+        default: eu-west-1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-k8s-mesh-eks
+  cancel-in-progress: false
+
+env:
+  PROJECT: benzene-python-k8smesh
+  NAMESPACE: benzene-mesh
+  TF_DIR: examples/k8s_mesh/deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # The AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets live in the "test" GitHub Environment;
+    # a job must declare the environment for its secrets to be exposed.
+    environment: test
+    steps:
+      - uses: actions/checkout@v4
+
+      # The access key ID is stored as a GitHub *variable* (vars.) and the secret access key as a
+      # *secret* (secrets.) in the "test" Environment, so read the key ID from either place (var first,
+      # falling back to a secret of the same name). Fail fast with a clear message if either is empty.
+      - name: Verify AWS credentials are available
+        env:
+          KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+          SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          missing=0
+          [ -z "$KEY_ID" ] && { echo "::error::AWS_ACCESS_KEY_ID is empty (checked both vars and secrets)."; missing=1; }
+          [ -z "$SECRET" ] && { echo "::error::AWS_SECRET_ACCESS_KEY is empty in this job."; missing=1; }
+          if [ "$missing" = "1" ]; then
+            echo "::error::In the 'test' GitHub Environment (Settings -> Environments -> test): set AWS_ACCESS_KEY_ID as a Variable (or Secret) and AWS_SECRET_ACCESS_KEY as a Secret, ensure the deployment-branch policy allows this branch, and that the names match exactly."
+            exit 1
+          fi
+          echo "Both AWS credentials are present."
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      # Remote state lives in the same per-account S3 bucket the AWS mesh example (deploy/mesh) and
+      # .NET's K8sMesh example use, under its own key, so the state survives between (ephemeral) CI
+      # runs. Create the bucket on first use.
+      - name: Terraform init (remote S3 state)
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          REGION: ${{ inputs.region }}
+        run: |
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          STATE_BUCKET="benzene-mesh-tfstate-${ACCOUNT}"
+          if ! aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+            echo "Creating state bucket $STATE_BUCKET"
+            if [ "$REGION" = "us-east-1" ]; then
+              aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$REGION"
+            else
+              aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$REGION" \
+                --create-bucket-configuration LocationConstraint="$REGION"
+            fi
+            aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
+              --versioning-configuration Status=Enabled
+          fi
+          terraform init -input=false \
+            -backend-config="bucket=$STATE_BUCKET" \
+            -backend-config="key=python-k8s-mesh/terraform.tfstate" \
+            -backend-config="region=$REGION"
+
+      # --- plan ---------------------------------------------------------------------------------
+      - name: terraform plan
+        if: inputs.action == 'plan'
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform plan -input=false -var "region=${{ inputs.region }}"
+
+      # --- destroy --------------------------------------------------------------------------------
+      # The internet-facing ELBs are owned by the Kubernetes Services, not by Terraform, so delete the
+      # namespace first (the cloud controller reaps the ELBs) and only then destroy the cluster —
+      # otherwise the ELBs (and their cost) would outlive the stack.
+      - name: Destroy
+        if: inputs.action == 'destroy'
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          if aws eks describe-cluster --name "$PROJECT" --region "${{ inputs.region }}" >/dev/null 2>&1; then
+            aws eks update-kubeconfig --name "$PROJECT" --region "${{ inputs.region }}"
+            kubectl delete namespace "$NAMESPACE" --ignore-not-found --timeout=5m || true
+          fi
+          terraform destroy -input=false -auto-approve -var "region=${{ inputs.region }}"
+
+      # --- apply --------------------------------------------------------------------------------
+      - name: Terraform apply (EKS cluster + ECR)
+        if: inputs.action == 'apply'
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -input=false -auto-approve -var "region=${{ inputs.region }}"
+
+      - name: Build and push images to ECR
+        if: inputs.action == 'apply'
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          SERVICE_REPO="$(terraform output -raw service_image_repository)"
+          MESH_REPO="$(terraform output -raw mesh_image_repository)"
+          aws ecr get-login-password --region "${{ inputs.region }}" \
+            | docker login --username AWS --password-stdin "${SERVICE_REPO%%/*}"
+          docker build -f "$GITHUB_WORKSPACE/examples/k8s_mesh/Dockerfile" -t "$SERVICE_REPO:${GITHUB_SHA::12}" "$GITHUB_WORKSPACE"
+          docker build -f "$GITHUB_WORKSPACE/examples/k8s_mesh/Dockerfile.mesh" -t "$MESH_REPO:${GITHUB_SHA::12}" "$GITHUB_WORKSPACE"
+          docker push "$SERVICE_REPO:${GITHUB_SHA::12}"
+          docker push "$MESH_REPO:${GITHUB_SHA::12}"
+
+      - name: Deploy the manifests (eks overlay)
+        if: inputs.action == 'apply'
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          SERVICE_REPO="$(terraform output -raw service_image_repository)"
+          MESH_REPO="$(terraform output -raw mesh_image_repository)"
+          aws eks update-kubeconfig --name "$(terraform output -raw cluster_name)" --region "${{ inputs.region }}"
+          (cd eks \
+            && kustomize edit set image "benzene-k8smesh-service=$SERVICE_REPO:${GITHUB_SHA::12}" \
+            && kustomize edit set image "benzene-k8smesh-mesh=$MESH_REPO:${GITHUB_SHA::12}")
+          kubectl apply -k eks
+          for d in orders payments shipping mesh; do
+            kubectl -n "$NAMESPACE" rollout status "deploy/$d" --timeout=300s
+          done
+
+      # The LoadBalancer hostname appears on the Service once AWS provisions the ELB, and the DNS
+      # name takes a couple of minutes to start resolving — poll for both before asserting.
+      - name: Wait for the mesh ELB and assert 3 services discovered
+        if: inputs.action == 'apply'
+        run: |
+          echo "Waiting for the mesh Service's LoadBalancer hostname..."
+          HOST=""
+          for i in $(seq 1 30); do
+            HOST="$(kubectl -n "$NAMESPACE" get svc mesh -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
+            [ -n "$HOST" ] && break
+            sleep 10
+          done
+          [ -z "$HOST" ] && { echo "::error::LoadBalancer hostname never appeared on svc/mesh"; exit 1; }
+          echo "ELB: $HOST — waiting for it to answer..."
+          RESP=""
+          for i in $(seq 1 60); do
+            RESP="$(curl -fsS -m 10 -XPOST "http://$HOST/mesh/refresh" 2>/dev/null || true)"
+            [ -n "$RESP" ] && break
+            sleep 10
+          done
+          echo "refresh -> $RESP"
+          echo "$RESP" | grep -q '"discovered":3' \
+            || { echo "::error::expected 3 discovered, got: $RESP"; exit 1; }
+          curl -fsS -m 10 -o /dev/null "http://$HOST/mesh-ui" \
+            || { echo "::error::Mesh UI did not answer at http://$HOST/mesh-ui"; exit 1; }
+          echo "--- manifest.json ---"; curl -fsS "http://$HOST/mesh-ui/manifest.json"
+          echo ""
+          echo "MESH_HOST=$HOST" >> "$GITHUB_ENV"
+
+      # The eks overlay also exposes each benzene-labelled Service through its own internet-facing
+      # LoadBalancer — resolve those hostnames, prove each answers over the public internet, and put
+      # every URL (Mesh UI + services) in the run summary as one list.
+      - name: Print the public URLs
+        if: inputs.action == 'apply'
+        run: |
+          echo "### Public URLs" >> "$GITHUB_STEP_SUMMARY"
+          echo "Mesh UI: http://$MESH_HOST/mesh-ui" >> "$GITHUB_STEP_SUMMARY"
+          for s in orders payments shipping; do
+            HOST=""
+            for i in $(seq 1 30); do
+              HOST="$(kubectl -n "$NAMESPACE" get svc "$s" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
+              [ -n "$HOST" ] && break
+              sleep 10
+            done
+            [ -z "$HOST" ] && { echo "::error::LoadBalancer hostname never appeared on svc/$s"; exit 1; }
+            for i in $(seq 1 60); do
+              curl -fsS -m 10 "http://$HOST/benzene/health" >/dev/null 2>&1 && break
+              [ "$i" = "60" ] && { echo "::error::svc/$s never answered at http://$HOST/benzene/health"; exit 1; }
+              sleep 10
+            done
+            echo "- $s: http://$HOST/benzene/spec" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Dump diagnostics on failure
+        if: ${{ failure() && inputs.action == 'apply' }}
+        run: |
+          kubectl -n "$NAMESPACE" get pods -o wide || true
+          kubectl -n "$NAMESPACE" get svc || true
+          kubectl -n "$NAMESPACE" describe svc mesh || true
+          kubectl -n "$NAMESPACE" logs deploy/mesh --tail=100 || true

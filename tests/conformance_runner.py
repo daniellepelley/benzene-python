@@ -14,6 +14,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from benzene.codegen_client import contract_hash as codegen_contract_hash
+from benzene.codegen_client.document import parse_document
+from benzene.codegen_client.schema_closure import reachable_names
+from benzene.codegen_client.topic_scope import (
+    TopicScopeOptions,
+    UnknownTopicsError,
+    apply_topic_scope,
+)
 from benzene.core import (
     BenzeneMessageApplication,
     MetadataKeys,
@@ -261,6 +269,103 @@ def run_transport_metadata() -> list[str]:
     return failures
 
 
+def run_contract_document_cases() -> list[str]:
+    """contract-document-cases.json: parseCases, topicScopeCases, schemaClosureCases (§§1-5)."""
+    failures: list[str] = []
+    data = _load("contract-document-cases.json")
+    documents = {doc_id: parse_document(raw) for doc_id, raw in data["documents"].items()}
+
+    for case in data.get("parseCases", []):
+        name = case["name"]
+        document = documents[case["documentRef"]]
+
+        if "expectedError" in case:
+            options = case.get("options", {})
+            scope_options = TopicScopeOptions(
+                topics=tuple(options["topics"]) if options.get("topics") else None,
+                include_reserved=bool(options.get("includeReserved", False)),
+            )
+            try:
+                apply_topic_scope(document, scope_options)
+                failures.append(f"parseCases[{name}]: expected UnknownTopicsError, none raised")
+            except UnknownTopicsError as exc:
+                expected = case["expectedError"]
+                if sorted(exc.unknown_topics) != sorted(expected["unknownTopics"]):
+                    failures.append(
+                        f"parseCases[{name}]: unknownTopics {exc.unknown_topics} != {expected['unknownTopics']}"
+                    )
+                if sorted(exc.valid_topics) != sorted(expected["validTopics"]):
+                    failures.append(
+                        f"parseCases[{name}]: validTopics {exc.valid_topics} != {expected['validTopics']}"
+                    )
+            continue
+
+        expected = case["expected"]
+        if "openapi" in expected and document.openapi != expected["openapi"]:
+            failures.append(f"parseCases[{name}]: openapi {document.openapi!r} != {expected['openapi']!r}")
+        for expected_request in expected.get("requests", []):
+            actual = document.find_request(expected_request["topic"])
+            if actual is None:
+                failures.append(f"parseCases[{name}]: request topic {expected_request['topic']!r} not found")
+                continue
+            if "versionPresent" in expected_request and actual.version_present != expected_request["versionPresent"]:
+                failures.append(f"parseCases[{name}]: {actual.topic} versionPresent mismatch")
+            if "version" in expected_request and actual.version != expected_request["version"]:
+                failures.append(f"parseCases[{name}]: {actual.topic} version mismatch")
+            if "reserved" in expected_request and actual.is_reserved() != expected_request["reserved"]:
+                failures.append(f"parseCases[{name}]: {actual.topic} reserved mismatch")
+        for expected_event in expected.get("events", []):
+            actual_event = next((e for e in document.events if e.topic == expected_event["topic"]), None)
+            if actual_event is None:
+                failures.append(f"parseCases[{name}]: event topic {expected_event['topic']!r} not found")
+                continue
+            if "versionPresent" in expected_event and actual_event.version_present != expected_event["versionPresent"]:
+                failures.append(f"parseCases[{name}]: event {actual_event.topic} versionPresent mismatch")
+            if "version" in expected_event and actual_event.version != expected_event["version"]:
+                failures.append(f"parseCases[{name}]: event {actual_event.topic} version mismatch")
+
+    for case in data.get("topicScopeCases", []):
+        name = case["name"]
+        document = documents[case["documentRef"]]
+        options = case.get("options", {})
+        scope_options = TopicScopeOptions(
+            topics=tuple(options["topics"]) if options.get("topics") else None,
+            include_reserved=bool(options.get("includeReserved", False)),
+        )
+        scoped = apply_topic_scope(document, scope_options)
+        actual_topics = set(scoped.topics())
+        expected_topics = set(case["expectedTopics"])
+        if actual_topics != expected_topics:
+            failures.append(f"topicScopeCases[{name}]: {actual_topics} != {expected_topics}")
+
+    for case in data.get("schemaClosureCases", []):
+        name = case["name"]
+        document = documents[case["documentRef"]]
+        request = document.find_request(case["topic"])
+        if request is None:
+            failures.append(f"schemaClosureCases[{name}]: topic {case['topic']!r} not found")
+            continue
+        actual_components = reachable_names(document.schemas, request.request, request.response)
+        expected_components = set(case["expectedComponents"])
+        if actual_components != expected_components:
+            failures.append(f"schemaClosureCases[{name}]: {actual_components} != {expected_components}")
+
+    return failures
+
+
+def run_contract_hash_cases() -> list[str]:
+    """contract-hash-cases.json: exact contractHash values (§6)."""
+    failures: list[str] = []
+    data = _load("contract-hash-cases.json")
+    for case in data["cases"]:
+        name = case["name"]
+        topic_scoped = name == "topic-scoped-projection"
+        got = codegen_contract_hash.compute(case["document"], topic_scoped=topic_scoped)
+        if got != case["expectedHash"]:
+            failures.append(f"contract-hash[{name}]: {got} != {case['expectedHash']}")
+    return failures
+
+
 def run_all() -> list[str]:
     return (
         run_status_vocabulary()
@@ -270,6 +375,8 @@ def run_all() -> list[str]:
         + run_mesh_descriptor()
         + run_mesh_trace()
         + run_mesh_collector()
+        + run_contract_document_cases()
+        + run_contract_hash_cases()
     )
 
 
@@ -282,5 +389,6 @@ if __name__ == "__main__":
         sys.exit(1)
     print(
         "CONFORMANCE PASSED — status vocabulary, HTTP mapping, envelope, transport metadata, "
-        "and mesh (descriptor + trace + collector + issues) cases all green."
+        "mesh (descriptor + trace + collector + issues), contract-document, and contract-hash "
+        "cases all green."
     )

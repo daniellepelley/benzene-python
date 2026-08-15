@@ -1,0 +1,80 @@
+name: Deploy K8s Mesh Example (kind)
+
+# Manual-only: builds the two images, spins up a throwaway kind cluster, deploys examples/k8s_mesh, and
+# asserts the mesh discovers the three benzene-labelled Services. Fully self-contained — no cloud
+# credentials needed, so this is a real end-to-end proof of the Kubernetes discovery story in CI.
+# Mirrors .NET's examples/K8sMesh "Deploy K8s Mesh Example" workflow one-for-one; separate from the
+# EKS leg (deploy-k8s-mesh-eks.yml) for the same reason .NET keeps them apart — no credentials, no
+# Terraform, no destroy path here, so bundling it into the credentialed EKS workflow's
+# apply/plan/destroy dispatch choice (this repo's own deploy-mesh.yml convention) would only add
+# unused inputs to the one leg that needs none of them.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build images (context = repo root)
+        run: |
+          docker build -f examples/k8s_mesh/Dockerfile      -t benzene-k8smesh-service:local .
+          docker build -f examples/k8s_mesh/Dockerfile.mesh -t benzene-k8smesh-mesh:local .
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: benzene
+
+      - name: Load images into kind
+        run: |
+          kind load docker-image benzene-k8smesh-service:local --name benzene
+          kind load docker-image benzene-k8smesh-mesh:local --name benzene
+
+      - name: Deploy
+        run: kubectl apply -k examples/k8s_mesh/k8s/
+
+      - name: Wait for rollout
+        run: |
+          for d in orders payments shipping mesh; do
+            kubectl -n benzene-mesh rollout status "deploy/$d" --timeout=180s
+          done
+
+      - name: Trigger a discovery pass and assert 3 services discovered
+        run: |
+          kubectl -n benzene-mesh port-forward svc/mesh 8080:80 >/dev/null 2>&1 &
+          PF=$!
+          trap 'kill $PF 2>/dev/null || true' EXIT
+          sleep 5
+          RESP=$(curl -fsS -XPOST http://localhost:8080/mesh/refresh)
+          echo "refresh -> $RESP"
+          echo "$RESP" | grep -q '"discovered":3' \
+            || { echo "::error::expected 3 discovered, got: $RESP"; exit 1; }
+          echo "--- manifest.json ---"; curl -fsS http://localhost:8080/mesh-ui/manifest.json
+          echo "--- topics.json ---";   curl -fsS http://localhost:8080/mesh-ui/topics.json
+
+      - name: Exercise the chain (orders -> payments -> shipping over HTTP)
+        run: |
+          kubectl -n benzene-mesh port-forward svc/orders 8081:80 >/dev/null 2>&1 &
+          PF=$!
+          trap 'kill $PF 2>/dev/null || true' EXIT
+          sleep 5
+          RESP=$(curl -fsS -XPOST http://localhost:8081/orders \
+            -H 'content-type: application/json' \
+            -d '{"customerId":"cust-1","sku":"espresso","quantity":2}')
+          echo "orders -> $RESP"
+          echo "$RESP" | grep -q '"status":"created"' \
+            || { echo "::error::order creation failed: $RESP"; exit 1; }
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n benzene-mesh get pods -o wide || true
+          kubectl -n benzene-mesh logs deploy/mesh --tail=100 || true
+          kubectl -n benzene-mesh logs deploy/orders --tail=100 || true
+          kubectl -n benzene-mesh logs deploy/payments --tail=100 || true
+          kubectl -n benzene-mesh logs deploy/shipping --tail=100 || true

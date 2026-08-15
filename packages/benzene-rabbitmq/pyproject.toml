@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-rabbitmq"
-version = "0.0.1"
+version = "0.1.0b1"
 description = "Benzene RabbitMQ transport binding — a self-hosted consumer and a RabbitMQ-publish outbound client."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Typing :: Typed",
 ]
-dependencies = ["benzene-core>=0.0.1"]
+dependencies = ["benzene-core>=0.1.0b1"]
 
 [project.optional-dependencies]
 # Only the default publish/consume clients need the SDK; the binding (decode, consumer loop,

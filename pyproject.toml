@@ -5,12 +5,13 @@
 # whole workspace, including the runnable examples under examples/.
 #
 # Local dev (no build needed — PEP 420 namespace packages resolve straight off sys.path):
+#     pip install rfc8785          # the one third-party dep, needed by benzene-codegen-client
 #     pytest                       # uses the pythonpath below (packages + examples)
 #     python -m tests.conformance_runner
 #
 # Or install the layers editable (what CI does, and what proves the packaging):
 #     pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http \
-#                  -e packages/benzene-testing -e packages/benzene-gcp
+#                  -e packages/benzene-testing -e packages/benzene-gcp -e packages/benzene-codegen-client
 
 [tool.ruff]
 # Lint the whole workspace (packages + runnable examples + tests) with one config.
@@ -31,14 +32,14 @@ ignore = [
 "tests/**" = ["B011"]
 
 [tool.mypy]
-# Type-check the eighteen packages as one PEP 420 namespace. A pragmatic-but-rigorous bar: default checks
+# Type-check the nineteen packages as one PEP 420 namespace. A pragmatic-but-rigorous bar: default checks
 # plus the high-signal flags that catch real bugs (untyped-body checking, return-Any, redundant
 # ignores, strict equality) without requiring exhaustive annotation of every internal helper.
 python_version = "3.10"
 namespace_packages = true
 explicit_package_bases = true
 ignore_missing_imports = true # third-party (grpcio, pydantic, cloud SDKs) ship without stubs
-mypy_path = "packages/benzene-results:packages/benzene-core:packages/benzene-http:packages/benzene-grpc:packages/benzene-mesh:packages/benzene-pydantic:packages/benzene-testing:packages/benzene-gcp:packages/benzene-aws:packages/benzene-azure:packages/benzene-kafka:packages/benzene-resilience:packages/benzene-rabbitmq:packages/benzene-auth:packages/benzene-cache:packages/benzene-otel:packages/benzene-openapi:packages/benzene-mesh-fleet:deploy/mesh"
+mypy_path = "packages/benzene-results:packages/benzene-core:packages/benzene-http:packages/benzene-grpc:packages/benzene-mesh:packages/benzene-pydantic:packages/benzene-testing:packages/benzene-gcp:packages/benzene-aws:packages/benzene-azure:packages/benzene-kafka:packages/benzene-resilience:packages/benzene-rabbitmq:packages/benzene-auth:packages/benzene-cache:packages/benzene-otel:packages/benzene-openapi:packages/benzene-mesh-fleet:packages/benzene-codegen-client:deploy/mesh"
 files = [
     "packages/benzene-results/benzene",
     "packages/benzene-core/benzene",
@@ -58,6 +59,7 @@ files = [
     "packages/benzene-otel/benzene",
     "packages/benzene-openapi/benzene",
     "packages/benzene-mesh-fleet/benzene",
+    "packages/benzene-codegen-client/benzene",
     "deploy/mesh/collector",
     "deploy/mesh/fleet",
 ]
@@ -96,6 +98,7 @@ pythonpath = [
     "packages/benzene-otel",
     "packages/benzene-openapi",
     "packages/benzene-mesh-fleet",
+    "packages/benzene-codegen-client",
     "examples",
     "deploy/mesh",
 ]

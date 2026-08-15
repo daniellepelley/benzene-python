@@ -1,0 +1,4 @@
+# Third-party runtime deps for the k8s_mesh MESH image — same base as the service image, plus the
+# real Kubernetes client the discovery adapter needs (benzene-mesh-fleet's [kubernetes] extra).
+uvicorn>=0.30
+kubernetes>=27.0

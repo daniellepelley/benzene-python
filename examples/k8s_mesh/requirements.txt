@@ -1,0 +1,4 @@
+# Third-party runtime deps for the k8s_mesh domain-service image. The Benzene layers themselves
+# (benzene-results / -core / -http / -mesh) install from workspace source in the Dockerfile
+# pre-publish; once they are on PyPI, add them here and drop the source COPY.
+uvicorn>=0.30

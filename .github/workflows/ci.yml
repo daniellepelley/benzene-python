@@ -62,7 +62,8 @@ jobs:
             -e packages/benzene-cache \
             -e packages/benzene-openapi \
             -e packages/benzene-otel \
-            -e packages/benzene-mesh-fleet
+            -e packages/benzene-mesh-fleet \
+            -e packages/benzene-codegen-client
           pip install pytest
       - name: Conformance (dependency-free runner)
         run: python -m tests.conformance_runner
@@ -71,6 +72,10 @@ jobs:
         # and their dogfooded, in-memory tests run here as a required gate (port-quality-standards
         # §5, Tier 1 — credential-free, no cloud deploy).
         run: pytest -q
+      - name: Regenerated client stays clean (build-integration check, docs/codegen-client.md §Phase 6)
+        run: |
+          python examples/orders_payments_client/generate.py
+          git diff --exit-code -- examples/orders_payments_client/generated
 
   package:
     name: Build & test the distributions (as PyPI would ship them)
@@ -96,7 +101,7 @@ jobs:
             benzene-testing benzene-http 'benzene-grpc[transport]' benzene-mesh benzene-pydantic \
             benzene-gcp benzene-aws benzene-azure benzene-kafka benzene-resilience \
             benzene-rabbitmq benzene-auth benzene-cache benzene-openapi benzene-otel \
-            benzene-mesh-fleet pytest
+            benzene-mesh-fleet benzene-codegen-client pytest
       - name: Conformance + suite against the INSTALLED wheels
         # Override pythonpath to examples only, so `benzene.*` resolves from the installed wheels
         # (site-packages) rather than the packages/ source tree.

@@ -60,6 +60,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-mesh-fleet` | `benzene.mesh_fleet` | service-discovery adapters (AWS/Azure/K8s) + Jaeger/Tempo/X-Ray trace mappers | `benzene-core`, `benzene-mesh` | `Benzene.Mesh.Discovery.*` + `Benzene.Mesh.Fleet.*` |
 | `benzene-pydantic` | `benzene.pydantic` | validate handler requests with pydantic models | `benzene-core`, `pydantic` | `Benzene.FluentValidation` |
 | `benzene-testing` | `benzene.testing` | in-memory test host + fakes (dev/test) | `benzene-core` | `Benzene.Testing` |
+| `benzene-codegen-client` | `benzene.codegen_client` | the `benzene-codegen` CLI — generates a typed client from any service's Contract Document (build-time) | `benzene-core` | `Benzene.CodeGen.Client` |
 
 Adoption levels, bottom to top:
 
@@ -150,26 +151,40 @@ the templates improve you re-run `copier update` inside your project and pull th
 See [`templates/README.md`](templates/README.md) for the full question list, the transport details,
 and the local-install recipe.
 
+## Generate a typed client from a Contract Document
+
+Add `benzene-codegen-client` to get a **typed client for someone else's service** — .NET, Go,
+TypeScript, or Python — from its committed Contract Document, no hand-written DTOs:
+
+```bash
+pip install benzene-codegen-client
+benzene-codegen topic --spec payments.spec.json --topic payments:capture --out payments_client.py
+```
+
+See [`docs/codegen-client.md`](docs/codegen-client.md) for the full guide.
+
 ## Repository layout
 
 A monorepo of independently-publishable distributions:
 
 ```
 packages/
-  benzene-results/   benzene/results/   (Result, Status)
-  benzene-core/      benzene/core/      (pipeline, registry, DI, envelope)
-  benzene-http/      benzene/http/      (ASGI binding, status mapping)
-  benzene-grpc/      benzene/grpc/      (Benzene<->gRPC status mapping)
-  benzene-gcp/       benzene/gcp/       (Cloud Functions host: HTTP + Pub/Sub)
-  benzene-aws/       benzene/aws/       (Lambda host: API Gateway + SQS + SNS)
-  benzene-azure/     benzene/azure/     (Functions host: HTTP + Service Bus + Event Hub)
-  benzene-mesh/      benzene/mesh/      (ServiceDescriptor, benzene:mesh, tracing, feeds)
-  benzene-pydantic/  benzene/pydantic/  (pydantic request validation)
-  benzene-testing/   benzene/testing/   (in-memory test host + fakes)
+  benzene-results/         benzene/results/         (Result, Status)
+  benzene-core/            benzene/core/            (pipeline, registry, DI, envelope)
+  benzene-http/            benzene/http/            (ASGI binding, status mapping)
+  benzene-grpc/            benzene/grpc/            (Benzene<->gRPC status mapping)
+  benzene-gcp/             benzene/gcp/             (Cloud Functions host: HTTP + Pub/Sub)
+  benzene-aws/             benzene/aws/             (Lambda host: API Gateway + SQS + SNS)
+  benzene-azure/           benzene/azure/           (Functions host: HTTP + Service Bus + Event Hub)
+  benzene-mesh/            benzene/mesh/            (ServiceDescriptor, benzene:mesh, tracing, feeds)
+  benzene-pydantic/        benzene/pydantic/        (pydantic request validation)
+  benzene-testing/         benzene/testing/         (in-memory test host + fakes)
+  benzene-codegen-client/  benzene/codegen_client/  (Contract Document -> typed client, benzene-codegen CLI)
 conformance/         language-neutral spec fixtures (shared)
 examples/            runnable multi-transport cloud examples, each dogfood-tested
 tests/               cross-package tests + the dependency-free conformance runner
 docs/                guides, reference, and the package rationale
+examples/            runnable demos, including the codegen-client dogfood example
 ```
 
 ## Developing
@@ -397,14 +412,20 @@ take it from "conformant" to "as capable as .NET" — each is scoped directly ag
     native primitive; they reach the same synchronous-call outcome over HTTP/gRPC instead
     (`HttpMessageSender` / `GrpcMessageSender`), which is why this item is AWS-only.
 
-Every roadmap item (1–29) is now implemented. Sequencing followed the plan: the self-hosted SQS
+Every roadmap item (1–30) is now implemented. Sequencing followed the plan: the self-hosted SQS
 consumer (19) landed alongside the Kubernetes multi-transport story it exists for (see [Getting
 Started: Kubernetes](docs/getting-started-kubernetes.md)); transports (20–22) next, since they were
 the largest, most visible gap and the pattern was already proven by the Kafka/SQS bindings;
 resilience/auth/caching (23–25) closed the sharpest cross-language outlier; then OpenTelemetry,
 OpenAPI, and mesh discovery/fleet (26–28). Each landed as its own independently-installable
 distribution, so a service still pulls in only the layers it uses. Direct Lambda invoke (29) landed
-last, prompted by a direct comparison against AWS's own Lambda-to-Lambda invoke capability.
+next, prompted by a direct comparison against AWS's own Lambda-to-Lambda invoke capability. The
+cross-language client generator (30) landed last, giving a Node/Python/Go/.NET consumer of any
+Benzene service a typed client from its committed Contract Document.
+30. **(done)** `benzene-codegen-client` — generates a typed, topic-scoped client from any Benzene
+    service's Contract Document (`{Service}.spec.json`), conformance-green against
+    `contract-document-cases.json`/`contract-hash-cases.json`. See
+    [`docs/codegen-client.md`](docs/codegen-client.md).
 
 ## Documentation
 

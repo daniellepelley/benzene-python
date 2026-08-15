@@ -69,6 +69,16 @@ doing (a queue or stream is where Benzene earns its keep even as the *only* tran
 HTTP alone doesn't need it) and how `asyncio.gather` safely combines uvicorn with the SQS/Kafka
 consumer loops.
 
+## On Kubernetes: the multi-service mesh estate
+
+[`k8s_mesh/`](k8s_mesh) is a different point in the design space from `k8s_orders` — not a rename or
+an extension of it. Where `k8s_orders` is *one* service reached over three transports, `k8s_mesh` is
+**three chained services plus a mesh service** that discovers them by Kubernetes label, interrogates
+each in-cluster, and serves the live Mesh UI + Fleet plane — the Python counterpart of .NET's
+`examples/K8sMesh`. It deploys two ways from the same manifests: credential-free on a throwaway `kind`
+cluster in CI, or on a real AWS EKS cluster with the Mesh UI on the public internet. See its own
+[README](k8s_mesh/README.md) for the full architecture.
+
 ## Pattern examples
 
 Beyond the host examples, these demonstrate a cross-cutting Benzene *pattern* rather than a transport:
@@ -96,6 +106,16 @@ a natural next addition rather than a limitation:
 Payload **casting** with caster chaining (the .NET `Versioning` example's "Mechanism B") is a natural
 extension of the [`versioning`](versioning) example once a dedicated casting example is warranted — the
 core primitives (`SchemaCasters` + `casting_handler`) already exist in `benzene-core`.
+
+## Consuming another service: `orders_payments_client`
+
+[`orders_payments_client/`](orders_payments_client) dogfoods `benzene-codegen-client` against a
+real, .NET-produced Contract Document (`contracts/payments.spec.json`, copied verbatim from
+`benzene-dotnet`'s `AwsMesh` example) — not a fixture written for this port. `generate.py`
+regenerates the checked-in `generated/payments_capture_client.py` (a topic-scoped client for
+`payments:capture` only); its tests wire the generated client to `FakeMessageSender` and assert the
+send, the typed payload, the embedded contract hash, and that no `benzene:*` reserved topic leaks
+into the output. See [`docs/codegen-client.md`](../docs/codegen-client.md).
 
 ## Running the tests
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benzene-aws"
-version = "0.0.1"
+version = "0.1.0b1"
 description = "Benzene AWS Lambda host — API Gateway, SQS, SNS, S3, EventBridge, DynamoDB Streams, Kinesis and Kafka/MSK bindings plus matching outbound clients."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,7 +37,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Typing :: Typed",
 ]
-dependencies = ["benzene-core>=0.0.1", "benzene-http>=0.0.1"]
+dependencies = ["benzene-core>=0.1.0b1", "benzene-http>=0.1.0b1"]
 
 [project.optional-dependencies]
 # Only needed for the real SNS/SQS outbound clients; inbound bindings + tests need no AWS SDK.

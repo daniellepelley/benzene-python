@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene-codegen-client"
+version = "0.0.1"
+description = "Generates a typed, topic-scoped Python client SDK from a Benzene Contract Document (.spec.json) — no .NET SDK required."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Benzene" }]
+keywords = ["benzene", "codegen", "client", "openapi", "hexagonal", "message-handler"]
+dependencies = ["benzene-core>=0.1.0b1", "rfc8785>=0.1.4"]
+
+[project.scripts]
+benzene-codegen = "benzene.codegen_client.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification/contract-document.md"
+
+# PEP 420 namespace package — see benzene-results/pyproject.toml. This package is a build-time /
+# CLI-only concern (a code generator), not a runtime dependency of a Benzene service — it depends
+# down on benzene-core (for the MessageSender/Result shapes generated code targets) but nothing
+# depends up on it.
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]
+
+# No mypy/pyright config exists anywhere else in this repo (no enforced typecheck baseline) — this
+# generator earns one on its own because its whole job is emitting correctly-typed source, so a
+# self-check that the emitter's own code is type-correct is worth more here than elsewhere. Run with:
+#     mypy --strict -p benzene.codegen_client
+# (equivalently: `mypy --strict packages/benzene-codegen-client/benzene/codegen_client` from the repo
+# root). Scoped to this package only — it does not become a repo-wide gate.
+[tool.mypy]
+strict = true
+python_version = "3.10"
+
