@@ -35,26 +35,43 @@ Each of the six services is **one Lambda**, tagged `benzene=true` for discovery,
   `POST /orders`, the front door of the chain;
 - sends its produced topics through the transport Terraform wires for it (SQS/SNS/EventBridge) via a
   small per-topic outbound router (`service/host.py`'s `TopicRoutingMessageSender`) — a single POST to
-  `/orders` therefore genuinely cascades through the whole estate on a real deploy.
+  `/orders` therefore genuinely cascades through the whole estate on a real deploy;
+- runs `benzene.mesh.trace_middleware` outermost (`service/startup.py`) and wraps that router in
+  `benzene.mesh.with_trace_propagation`, so a downstream hop joins the caller's trace; after each
+  invocation it drains the batch and pushes it to the mesh Lambda over a direct invoke
+  (`benzene.mesh.MeshFeedSender` + `benzene.aws.LambdaMessageSender`, via the `MESH_FUNCTION_NAME` env
+  var Terraform sets) — the collector derives **consumer edges** from those traces, exactly as
+  `examples/k8s_mesh`'s services do over HTTP, just pushed once per invocation rather than on a
+  background loop (a Lambda only runs *during* an invocation; mirrors `deploy/mesh/fleet/service.py`).
 
-The **mesh Lambda** (`mesh/main.py`, **not** tagged for discovery — it never interrogates itself) runs
-on an EventBridge schedule (default every 5 minutes) or an on-demand invoke:
+The **mesh Lambda** (`mesh/main.py`, **not** tagged for discovery — it never interrogates itself)
+answers two invoke shapes on the one handler:
 
-1. **discover** — `benzene.mesh_fleet.AwsLambdaDiscovery` (real `list_functions` + `list_tags`,
-   paginated, filtered by the `benzene` tag);
-2. **interrogate** — one `benzene.mesh.CallableServiceSource` per discovered function
-   (`mesh/discovery_service.py`'s `lambda_service_source`), backed by `benzene.aws.LambdaMessageSender`
-   invoking `benzene:mesh` and `benzene:healthcheck` on each — fed into a real
-   `benzene.mesh.MeshPoller`/`MeshCollector`, the same transport-agnostic core every Benzene mesh uses;
-3. **publish** — the discovered registry (`registry.json`) and the full catalog (`manifest.json`,
-   `topology.json`, `topics.json`, `usage.json`, `asyncapi.json`, `annotations.json`,
-   `services/{name}.json`) to S3 via the new `benzene.mesh.S3ArtifactStore` /
-   `write_artifacts_to_s3` (see "Framework additions" below).
+1. **The EventBridge schedule's constant payload** (default every 5 minutes) or an on-demand invoke —
+   runs the discover → interrogate → publish pass:
+   - **discover** — `benzene.mesh_fleet.AwsLambdaDiscovery` (real `list_functions` + `list_tags`,
+     paginated, filtered by the `benzene` tag);
+   - **interrogate** — one `benzene.mesh.CallableServiceSource` per discovered function
+     (`mesh/discovery_service.py`'s `lambda_service_source`), backed by `benzene.aws.LambdaMessageSender`
+     invoking `benzene:mesh` and `benzene:healthcheck` on each — fed into a real
+     `benzene.mesh.MeshPoller`/`MeshCollector`, the same transport-agnostic core every Benzene mesh uses;
+   - **publish** — the discovered registry (`registry.json`) and the full catalog (`manifest.json`,
+     `topology.json`, `topics.json`, `usage.json`, `asyncapi.json`, `annotations.json`,
+     `services/{name}.json`) to S3 via `benzene.mesh.S3ArtifactStore` / `write_artifacts_to_s3`.
+2. **A direct Lambda invoke carrying a Benzene envelope** — a service Lambda's pushed trace batch
+   (above), handed straight to the collector's reserved-topic registry
+   (`mesh/discovery_service.py`'s `ingest_pushed_feed`) rather than running a full aggregation pass.
+
+Both share one durable collector snapshot in S3 (`benzene.mesh.S3CollectorStore`, `MESH_STATE_KEY` —
+see "Framework additions" below), so consumer edges derived from traces pushed between scheduled
+aggregation runs are already in the catalog the next pass publishes — without it, every topic would
+show a provider but never a consumer, since a fresh in-memory collector each pass would discard
+anything ingested between runs.
 
 ## Framework additions
 
-Two small, additive changes to the framework packages made this example possible — both confirmed-real
-gaps per the project's mesh-aws plan, both covered by their own unit tests:
+Small, additive changes to the framework packages made this example possible — all confirmed-real gaps,
+all covered by their own unit tests:
 
 - **`benzene.mesh_fleet.AwsLambdaDiscovery`** (`packages/benzene-mesh-fleet/.../discovery_adapters.py`)
   — a `Discovery` adapter alongside `AwsCloudMapDiscovery`/`AzureDiscovery`/`KubernetesDiscovery`:
@@ -67,8 +84,17 @@ gaps per the project's mesh-aws plan, both covered by their own unit tests:
   generated_at)` shape, publishing the identical document set as S3 objects under a bucket + prefix
   instead of files. `S3ArtifactStore.write(key, document)` is generic, so the mesh Lambda also uses it to
   publish `registry.json` (the discovered config) alongside the catalog — mirroring TS's
-  `store.publishAsync('registry.json', ...)`. Both are purely additive: the local path
-  (`JsonFileCollectorStore`, plain `write_artifacts`) is untouched.
+  `store.publishAsync('registry.json', ...)`.
+- **`benzene.mesh.S3CollectorStore`** (`packages/benzene-mesh/.../store.py`) — the S3 counterpart of the
+  existing `JsonFileCollectorStore` (EFS-backed, for the Fargate/K8s collectors): one JSON object holds
+  the collector's whole snapshot, loaded on construction and saved after every ingest, same
+  `CollectorStore` protocol. It exists because a Lambda-based mesh has no persistent disk of its own
+  *and* no long-lived process to keep the catalog in memory between the separate, stateless invocations
+  that build it up (a scheduled aggregation pass, and a service Lambda's direct-invoke trace push) — the
+  seam every other Benzene mesh gets for free from a long-running host.
+
+All three are purely additive: the local path (`JsonFileCollectorStore`, plain `write_artifacts`) is
+untouched.
 
 Both are optional-`boto3` (the `[aws]` extras on `benzene-mesh-fleet` and `benzene-mesh`), lazily
 imported, and constructor-injectable — exactly the convention every other AWS binding in this port
@@ -96,11 +122,13 @@ terraform apply
 ```
 
 Terraform provisions: the six tagged service Lambdas + one HTTP API each (API Gateway v2, `$default`
-AWS_PROXY), the mesh Lambda (untagged, no HTTP API — driven by its own EventBridge schedule), the two
-SQS queues + event-source mappings, the SNS topic + subscriptions, the custom EventBridge bus + rules +
-targets, IAM (a shared service execution+messaging role; a mesh role scoped to
-`lambda:ListFunctions`/`lambda:ListTags`/`lambda:InvokeFunction` on the six service ARNs +
-`s3:GetObject`/`PutObject`/`ListBucket` on the artifacts bucket), and the S3 artifacts bucket.
+AWS_PROXY), the mesh Lambda (untagged, no HTTP API — driven by its own EventBridge schedule and by the
+six services' direct-invoke trace pushes), the two SQS queues + event-source mappings, the SNS topic +
+subscriptions, the custom EventBridge bus + rules + targets, IAM (a shared service execution+messaging
+role — SQS/SNS/EventBridge sends, plus `lambda:InvokeFunction` on the mesh Lambda's ARN for pushing
+trace batches; a mesh role scoped to `lambda:ListFunctions`/`lambda:ListTags`/`lambda:InvokeFunction` on
+the six service ARNs + `s3:GetObject`/`PutObject`/`ListBucket` on the artifacts bucket, covering both the
+published catalog and the durable collector snapshot), and the S3 artifacts bucket.
 
 **Static viewer, not a live HTTP surface on the mesh Lambda.** Following TS's precedent exactly: the
 bucket is configured as an **S3 static website** (`aws_s3_bucket_website_configuration` +

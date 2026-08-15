@@ -81,6 +81,7 @@ from .store import (
     CollectorStore,
     JsonFileCollectorStore,
     NullCollectorStore,
+    S3CollectorStore,
 )
 from .trace import (
     InMemoryTraceExporter,
@@ -137,6 +138,7 @@ __all__ = [
     "QueueTraceExporter",
     "REGISTER_TOPIC",
     "S3ArtifactStore",
+    "S3CollectorStore",
     "collector_registry",
     "Schema",
     "ServiceDescriptor",

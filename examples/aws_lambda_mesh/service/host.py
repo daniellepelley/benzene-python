@@ -16,15 +16,18 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from benzene.aws import (
     AwsLambdaApp,
     EventBridgeMessageSender,
+    LambdaMessageSender,
     SnsMessageSender,
     SqsMessageSender,
 )
 from benzene.core import Container, MessageSender, build_application
+from benzene.mesh import MeshFeedSender, QueueTraceExporter, with_trace_propagation
 from benzene.results import Result, Status
 
 from .startup import ServiceStartUp
@@ -70,7 +73,10 @@ class TopicRoutingMessageSender:
 
 
 def _production_sender(service_name: str, env: Mapping[str, str]) -> MessageSender:
-    """Build the real per-topic outbound router from the env vars Terraform sets for this service."""
+    """Build the real per-topic outbound router from the env vars Terraform sets for this service,
+    wrapped so a downstream hop joins the caller's trace (mesh.md §3) — the collector then derives the
+    consumer edge from the ``traceparent`` it carries, exactly as :func:`trace_middleware` on the
+    receiving service reads it back out."""
     senders: dict[str, MessageSender] = {}
     for topic, env_var in _SQS_TARGETS.get(service_name, {}).items():
         senders[topic] = SqsMessageSender(env[env_var])
@@ -78,11 +84,30 @@ def _production_sender(service_name: str, env: Mapping[str, str]) -> MessageSend
         senders[topic] = SnsMessageSender(env[env_var])
     for topic, env_var in _EVENTBRIDGE_TARGETS.get(service_name, {}).items():
         senders[topic] = EventBridgeMessageSender(env[env_var])
-    return TopicRoutingMessageSender(senders)
+    return with_trace_propagation(TopicRoutingMessageSender(senders))
 
 
-def build_service_app(env: Mapping[str, str] | None = None) -> AwsLambdaApp:
-    """Boot ``ServiceStartUp`` for ``SERVICE_NAME`` and specialize it to Lambda."""
+@dataclass
+class ServiceLambda:
+    """A wired service Lambda: the app, its trace exporter, and an optional mesh feed sender —
+    mirrors ``deploy/mesh/fleet/service.py``'s ``FleetService`` (same reason: a Lambda only runs
+    *during* an invocation, so traces are pushed once per invocation rather than on a background loop
+    a long-lived host would use)."""
+
+    app: AwsLambdaApp
+    exporter: QueueTraceExporter
+    feeds: MeshFeedSender | None
+
+
+def build_service(env: Mapping[str, str] | None = None) -> ServiceLambda:
+    """Boot ``ServiceStartUp`` for ``SERVICE_NAME`` and specialize it to Lambda.
+
+    When ``MESH_FUNCTION_NAME`` is set (Terraform wires it on every service Lambda — see
+    ``deploy/main.tf``), the returned :class:`ServiceLambda` also carries a :class:`MeshFeedSender`
+    that pushes trace batches to the mesh Lambda over a direct invoke
+    (:class:`~benzene.aws.LambdaMessageSender`), so :func:`~aws_lambda_mesh.service.main.handler` can
+    drain and push after each invocation.
+    """
     env = os.environ if env is None else env
     service_name = env.get("SERVICE_NAME")
     if not service_name:
@@ -93,5 +118,13 @@ def build_service_app(env: Mapping[str, str] | None = None) -> AwsLambdaApp:
     def use_production_sender(services: Container) -> None:
         services.add_instance(MessageSender, _production_sender(service_name, env))
 
-    definition, _ = build_application(ServiceStartUp(service_name), overrides=[use_production_sender])
-    return AwsLambdaApp.from_definition(definition)
+    definition, scope = build_application(ServiceStartUp(service_name), overrides=[use_production_sender])
+    app = AwsLambdaApp.from_definition(definition)
+    exporter = scope.get_service(QueueTraceExporter)
+
+    feeds: MeshFeedSender | None = None
+    mesh_function_name = env.get("MESH_FUNCTION_NAME")
+    if mesh_function_name:
+        feeds = MeshFeedSender(LambdaMessageSender(mesh_function_name))
+
+    return ServiceLambda(app=app, exporter=exporter, feeds=feeds)

@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 
 from benzene.core import HEALTH_TOPIC, MessageSender
-from benzene.mesh import MESH_TOPIC
+from benzene.mesh import MESH_TOPIC, QueueTraceExporter, parse_traceparent, with_trace_propagation
 from benzene.testing import FakeMessageSender, create_test_host
 
 from aws_lambda_mesh.service.domain import (
@@ -72,6 +72,55 @@ def test_payments_capture_sends_shipping_book_and_payment_captured() -> None:
     topics = [sent.topic for sent in sender.sent]
     assert topics == [SHIPPING_BOOK_TOPIC, PAYMENT_CAPTURED_TOPIC]
     assert all(sent.message.order_id == "order-2" for sent in sender.sent)
+
+
+# --- tracing: the mesh needs a joined trace + a per-invocation event to derive consumer edges --------
+#
+# ServiceStartUp installs trace_middleware outermost and registers a QueueTraceExporter singleton
+# (startup.py); host.py wraps the production outbound sender in with_trace_propagation. This proves
+# that wiring genuinely joins an inbound trace to the outbound hop it causes — the same mechanism the
+# mesh Lambda's collector reads to derive "payments consumes payments:capture" (test_mesh.py proves the
+# collector side; this proves the service side that feeds it).
+
+
+def test_payments_joins_the_inbound_trace_and_forwards_it_downstream() -> None:
+    sender = FakeMessageSender()
+
+    def overrides(services):
+        # Mirrors host.py's production wiring exactly: with_trace_propagation around the real sender.
+        services.add_instance(MessageSender, with_trace_propagation(sender))
+
+    host = create_test_host(ServiceStartUp("payments")).with_services(overrides).build_aws()
+
+    inbound_traceparent = "00-" + "a" * 32 + "-" + "b" * 16 + "-01"
+    response = host.send_sqs(
+        PAYMENTS_CAPTURE_TOPIC, {"orderId": "order-9"}, headers={"traceparent": inbound_traceparent}
+    )
+    assert response.batch_item_failures == []
+
+    # Both downstream sends (SQS shipping:book, EventBridge payment:captured) carry a traceparent
+    # continuing the SAME trace, joined to the span this invocation just ran as.
+    assert len(sender.sent) == 2
+    for sent in sender.sent:
+        parsed = parse_traceparent(sent.headers.get("traceparent"))
+        assert parsed is not None
+        trace_id, parent_span_id = parsed
+        assert trace_id == "a" * 32
+
+    # The invocation itself was recorded, parented on the inbound span — exactly what a pushed trace
+    # batch hands the mesh's collector to derive "payments consumes payments:capture".
+    exporter = host.scope.get_service(QueueTraceExporter)
+    events = exporter.drain()
+    assert len(events) == 1
+    event = events[0]
+    assert event.service == "payments"
+    assert event.topic == PAYMENTS_CAPTURE_TOPIC
+    assert event.trace_id == "a" * 32
+    assert event.parent_span_id == "b" * 16
+    # The span this handler ran as is what the outbound sends above are parented on.
+    for sent in sender.sent:
+        _, parent_span_id = parse_traceparent(sent.headers["traceparent"])
+        assert parent_span_id == event.span_id
 
 
 # --- shipping: SQS ingress -> EventBridge egress, terminal in this direction ------------------------

@@ -18,11 +18,11 @@ import json
 
 from benzene.aws import AwsLambdaApp
 from benzene.core import Container, MessageSender, build_application
-from benzene.mesh import S3ArtifactStore
+from benzene.mesh import S3ArtifactStore, S3CollectorStore
 from benzene.mesh_fleet import ServiceEndpoint
 
-from aws_lambda_mesh.mesh.discovery_service import run_mesh_aggregation
-from aws_lambda_mesh.service.domain import SERVICE_TOPICS
+from aws_lambda_mesh.mesh.discovery_service import ingest_pushed_feed, run_mesh_aggregation
+from aws_lambda_mesh.service.domain import PAYMENTS_CAPTURE_TOPIC, SERVICE_TOPICS
 from aws_lambda_mesh.service.startup import KNOWN_SERVICES, ServiceStartUp
 
 _TAG_METADATA = {"benzene": "true"}
@@ -73,6 +73,28 @@ class _NullSender:
         from benzene.results import Result
 
         return Result.accepted()
+
+
+class _NoSuchKey(Exception):
+    def __init__(self) -> None:
+        super().__init__("NoSuchKey")
+        self.response = {"Error": {"Code": "NoSuchKey"}}
+
+
+class _FakeStateS3Client:
+    """A stand-in ``boto3`` ``s3`` client backing :class:`~benzene.mesh.S3CollectorStore`
+    (``get_object``/``put_object`` only) — the mesh Lambda's durable collector snapshot."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def put_object(self, *, Bucket, Key, Body, ContentType):  # noqa: N803 - boto3 kwarg names
+        self.objects[Key] = Body
+
+    def get_object(self, *, Bucket, Key):  # noqa: N803 - boto3 kwarg names
+        if Key not in self.objects:
+            raise _NoSuchKey()
+        return {"Body": io.BytesIO(self.objects[Key])}
 
 
 def _endpoint(name: str) -> ServiceEndpoint:
@@ -168,3 +190,78 @@ def test_run_mesh_aggregation_empty_mesh_is_zero_not_an_error() -> None:
     assert summary.discovered == 0
     assert s3.puts["registry.json"]["services"] == []
     assert s3.puts["manifest.json"]["services"] == []
+
+
+# --- consumer edges: a pushed trace batch survives to the NEXT aggregation's published catalog -------
+#
+# This is the end-to-end proof for the fix: without a durable collector_store, run_mesh_aggregation
+# built a fresh in-memory MeshCollector every pass, so any trace pushed between scheduled runs (via
+# service Lambdas' MeshFeedSender -> mesh Lambda direct invoke -> ingest_pushed_feed) was discarded
+# before the next aggregation published anything -- every topic showed a provider but never a consumer.
+
+
+def test_a_trace_pushed_between_aggregation_runs_survives_into_the_next_published_catalog() -> None:
+    fake_state = _FakeStateS3Client()
+    collector_store = S3CollectorStore("state-bucket", client=fake_state)
+    endpoints, lambda_client = _fleet()
+
+    # 1. First scheduled pass: discover + interrogate (registers each service as a provider) and
+    #    persist through the same durable store a later trace push will also write through.
+    asyncio.run(
+        run_mesh_aggregation(
+            discovery=_FakeDiscovery(endpoints),
+            store=S3ArtifactStore("catalog-bucket", "mesh", client=_FakeS3Client()),
+            lambda_client=lambda_client,
+            generated_at="2026-08-15T00:00:00+00:00",
+            collector_store=collector_store,
+        )
+    )
+
+    # 2. Between aggregation runs, orders calls payments (payments:capture) -- exactly the trace batch
+    #    a service Lambda's MeshFeedSender pushes after a real invocation (service/host.py). The
+    #    mesh Lambda's handler routes this straight to ingest_pushed_feed (mesh/main.py).
+    push = {
+        "topic": "benzene:mesh:traces",
+        "headers": {},
+        "body": json.dumps(
+            {
+                "events": [
+                    {
+                        "traceId": "t1" * 16,
+                        "spanId": "s1" * 8,
+                        "service": "orders",
+                        "topic": "order:create",
+                        "status": "ok",
+                    },
+                    {
+                        "traceId": "t1" * 16,
+                        "spanId": "s2" * 8,
+                        "parentSpanId": "s1" * 8,
+                        "service": "payments",
+                        "topic": PAYMENTS_CAPTURE_TOPIC,
+                        "status": "ok",
+                    },
+                ]
+            }
+        ),
+    }
+    response = asyncio.run(ingest_pushed_feed(push, collector_store=collector_store))
+    assert response["statusCode"] == "ok"
+
+    # 3. The NEXT scheduled pass re-polls descriptors/health and publishes the merged catalog -- the
+    #    trace pushed in step 2 must still be there.
+    catalog_s3 = _FakeS3Client()
+    asyncio.run(
+        run_mesh_aggregation(
+            discovery=_FakeDiscovery(endpoints),
+            store=S3ArtifactStore("catalog-bucket", "mesh", client=catalog_s3),
+            lambda_client=lambda_client,
+            generated_at="2026-08-15T00:05:00+00:00",
+            collector_store=collector_store,
+        )
+    )
+
+    topics = {t["topic"]: t for t in catalog_s3.puts["mesh/topics.json"]["topics"]}
+    capture = topics[PAYMENTS_CAPTURE_TOPIC]
+    assert [p["service"] for p in capture["producers"]] == ["payments"]
+    assert [c["service"] for c in capture["consumers"]] == ["orders"]

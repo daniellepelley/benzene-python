@@ -189,7 +189,10 @@ resource "aws_iam_role_policy" "mesh" {
 }
 
 # The shared service role's producer permissions: send to both queues (and consume them — the
-# event-source mapping polls with the function's role), publish the SNS topic, and put events on the bus.
+# event-source mapping polls with the function's role), publish the SNS topic, put events on the bus,
+# and push trace batches to the mesh Lambda (a direct invoke — see MESH_FUNCTION_NAME above — so the
+# collector can derive consumer edges; mirrors the mesh role's own invoke permission on the six
+# services, just in the opposite direction).
 data "aws_iam_policy_document" "service_messaging" {
   statement {
     actions   = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
@@ -202,6 +205,10 @@ data "aws_iam_policy_document" "service_messaging" {
   statement {
     actions   = ["events:PutEvents"]
     resources = [aws_cloudwatch_event_bus.bus.arn]
+  }
+  statement {
+    actions   = ["lambda:InvokeFunction"]
+    resources = [aws_lambda_function.mesh.arn]
   }
 }
 
@@ -229,7 +236,10 @@ resource "aws_lambda_function" "service" {
   timeout          = 30
 
   environment {
-    variables = merge({ SERVICE_NAME = each.key }, local.service_env[each.key])
+    variables = merge(
+      { SERVICE_NAME = each.key, MESH_FUNCTION_NAME = aws_lambda_function.mesh.function_name },
+      local.service_env[each.key]
+    )
   }
 
   # Discovery finds services by this tag; the mesh Lambda deliberately does NOT carry it.
@@ -361,10 +371,14 @@ resource "aws_lambda_permission" "service_api" {
 }
 
 # ---------------------------------------------------------------------------------------------------
-# The mesh Lambda (NOT tagged for discovery) + the aggregation schedule. It has no HTTP API: its
-# handler returns a plain summary dict (discover -> aggregate to S3), not an API-Gateway proxy
-# response, so it's driven purely by the EventBridge schedule (or an on-demand invoke). Read its
-# output from the S3 bucket / the static viewer.
+# The mesh Lambda (NOT tagged for discovery) answers two invoke shapes on the one handler:
+#   - the EventBridge schedule's constant payload (or an on-demand invoke with no "topic") -> runs the
+#     discover -> interrogate -> aggregate pass, returning a plain summary dict.
+#   - a direct Lambda invoke carrying a Benzene envelope ({"topic": "benzene:mesh:traces", ...}, pushed
+#     by a service Lambda after each invocation via MESH_FUNCTION_NAME) -> ingested straight into the
+#     persistent collector (MESH_STATE_KEY), so consumer edges derived from those traces are already in
+#     the catalog the next scheduled aggregation pass publishes.
+# It has no HTTP API of its own; read its output from the S3 bucket / the static viewer.
 # ---------------------------------------------------------------------------------------------------
 resource "aws_lambda_function" "mesh" {
   function_name    = "${var.project}-mesh"
@@ -382,6 +396,9 @@ resource "aws_lambda_function" "mesh" {
       MESH_ARTIFACT_BUCKET   = aws_s3_bucket.artifacts.id
       MESH_ARTIFACT_PREFIX   = "mesh"
       MESH_DISCOVERY_TAG_KEY = var.discovery_tag_key
+      # Outside the public mesh/* prefix (aws_s3_bucket_policy.viewer) -- the collector snapshot is
+      # internal aggregator state, not part of the published catalog the viewer reads.
+      MESH_STATE_KEY = "_state/collector.json"
     }
   }
 }

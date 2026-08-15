@@ -14,6 +14,10 @@ On each run it:
 3. **publishes** the discovered registry and the aggregated catalog (manifest/services/topics/topology/
    usage/asyncapi/annotations) to S3 via :class:`~benzene.mesh.S3ArtifactStore`.
 
+Also home to :func:`ingest_pushed_feed`, the receiving half of a service Lambda's direct-invoke trace
+push (``service/host.py``'s :class:`~benzene.mesh.MeshFeedSender`) — ``main.py``'s handler routes to
+it whenever the invoke Payload carries a ``topic``, rather than running a full aggregation pass.
+
 Nothing here is AWS-Lambda-*hosting* concerned (that's ``main.py``): this module is plain async
 Python, driven directly by the tests with a fake discovery + a fake Lambda client, and by ``main.py``
 in deployment with the real ``boto3`` clients.
@@ -26,14 +30,17 @@ from dataclasses import dataclass
 from typing import Any
 
 from benzene.aws import LambdaMessageSender
-from benzene.core import HEALTH_TOPIC
+from benzene.core import HEALTH_TOPIC, BenzeneMessageApplication
 from benzene.mesh import (
     MESH_TOPIC,
     CallableServiceSource,
+    CollectorStore,
     MeshCollector,
     MeshPoller,
+    NullCollectorStore,
     PollError,
     S3ArtifactStore,
+    collector_registry,
     write_artifacts_to_s3,
 )
 from benzene.mesh_fleet import Discovery, ServiceEndpoint
@@ -94,15 +101,23 @@ async def run_mesh_aggregation(
     store: S3ArtifactStore,
     lambda_client: Any | None = None,
     generated_at: str | None = None,
+    collector_store: CollectorStore | None = None,
 ) -> MeshAggregateSummary:
     """Discover -> interrogate -> publish, once. Never raises for one down service — a failed
     interrogation is folded into the collector's catalog as an unreachable/unhealthy service, exactly
     as :class:`~benzene.mesh.MeshPoller` already handles a down :class:`~benzene.mesh.ServiceSource`.
+
+    ``collector_store`` (default :class:`~benzene.mesh.NullCollectorStore`, i.e. in-memory only) backs
+    the collector this pass polls into. Pointed at the same durable store the mesh Lambda's direct-
+    invoke trace handler writes through (:class:`~benzene.mesh.S3CollectorStore` in production), this
+    pass picks up **already-ingested consumer edges** from traces pushed between aggregation runs —
+    fresh descriptor/health data from this poll merges with that carried-over trace history, so the
+    published catalog reflects both.
     """
     endpoints = await discovery.discover()
     sources = [lambda_service_source(e.address, client=lambda_client) for e in endpoints]
 
-    collector = MeshCollector()
+    collector = MeshCollector(store=collector_store or NullCollectorStore())
     await MeshPoller(collector, sources).poll_once()
 
     at = generated_at or _utc_now()
@@ -110,6 +125,20 @@ async def run_mesh_aggregation(
     write_artifacts_to_s3(store, collector, generated_at=at)
 
     return MeshAggregateSummary(discovered=len(endpoints))
+
+
+async def ingest_pushed_feed(event: dict[str, Any], *, collector_store: CollectorStore) -> dict[str, Any]:
+    """Handle a direct Lambda invoke pushing a mesh feed (trace/register/heartbeat/issue) from a
+    service Lambda — the collector's reserved-topic registry (:func:`~benzene.mesh.collector_registry`),
+    backed by the persistent ``collector_store``, answering exactly as any other
+    :class:`~benzene.aws.AwsLambdaApp` answers a direct invoke. The invoke Payload *is* the Benzene
+    envelope (``main.py``'s ``handler`` routes here whenever the event carries a ``topic``), so no
+    event-source classification is needed — this is the receiving half of
+    ``service/host.py``'s :class:`~benzene.mesh.MeshFeedSender`.
+    """
+    collector = MeshCollector(store=collector_store)
+    app = BenzeneMessageApplication(collector_registry(collector))
+    return await app.handle(event)
 
 
 def _utc_now() -> str:

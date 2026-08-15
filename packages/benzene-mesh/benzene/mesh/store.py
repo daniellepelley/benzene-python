@@ -8,6 +8,9 @@ its state through it and restores from it on start.
 The default is :class:`NullCollectorStore` — a no-op, so in-memory usage and every test pay nothing and
 behave exactly as before. The container swaps in :class:`JsonFileCollectorStore`, pointed at a file on
 a mounted volume (EFS), so a redeployed task rehydrates the fleet it already knew.
+:class:`S3CollectorStore` is the same seam for a mesh with no persistent disk at all — a Lambda-based
+aggregator invoked between separate, stateless invocations (``boto3`` is an optional dependency,
+imported lazily, matching every other AWS binding in this port).
 
 The snapshot is a plain JSON-able ``dict`` (see :meth:`MeshCollector.snapshot`); a store only has to
 move that dict to and from durable bytes.
@@ -47,6 +50,63 @@ class NullCollectorStore:
 
     def save(self, snapshot: dict[str, Any]) -> None:
         return None
+
+
+class S3CollectorStore:
+    """A snapshot in S3 as one JSON object — the durable store for a collector with no local disk of
+    its own (a Lambda-based mesh aggregator, mirroring :class:`~benzene.mesh.S3ArtifactStore`'s reason
+    for existing).
+
+    Unlike :class:`JsonFileCollectorStore`'s atomic rename, S3 ``PutObject`` already replaces the
+    object as a single atomic operation, so a reader never sees a partially written snapshot. ``load``
+    is forgiving in the same spirit: a missing object (first boot) or one that fails to parse as JSON
+    is treated as "nothing to restore" rather than raising, so a broken snapshot can never stop the
+    aggregator from running — it just starts the catalog fresh and refills on the next pass.
+
+    ``boto3`` is an optional dependency, imported lazily, matching every other AWS binding in this
+    port; construct with an injected ``client`` to run with no AWS SDK present.
+    """
+
+    def __init__(self, bucket: str, key: str = "collector.json", *, client: Any | None = None) -> None:
+        self._bucket = bucket
+        self._key = key
+        self._client = client
+
+    def _s3(self) -> Any:
+        if self._client is None:
+            import boto3  # lazy: optional [aws] dependency
+
+            self._client = boto3.client("s3")
+        return self._client
+
+    def load(self) -> dict[str, Any] | None:
+        try:
+            response = self._s3().get_object(Bucket=self._bucket, Key=self._key)
+        except Exception as exc:  # noqa: BLE001 - any "not found"/access error means "nothing to restore"
+            if _is_not_found(exc):
+                return None
+            raise
+        try:
+            snapshot = json.loads(response["Body"].read())
+        except (ValueError, TypeError):
+            return None  # a truncated/corrupt snapshot: start clean rather than fail to boot
+        return snapshot if isinstance(snapshot, dict) else None
+
+    def save(self, snapshot: dict[str, Any]) -> None:
+        self._s3().put_object(
+            Bucket=self._bucket,
+            Key=self._key,
+            Body=json.dumps(snapshot, separators=(",", ":")).encode("utf-8"),
+            ContentType="application/json",
+        )
+
+
+def _is_not_found(exc: Exception) -> bool:
+    """True for boto3's ``NoSuchKey``/404 on a missing object; re-raise anything else."""
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return False
+    return str(response.get("Error", {}).get("Code", "")) in ("NoSuchKey", "404")
 
 
 class JsonFileCollectorStore:

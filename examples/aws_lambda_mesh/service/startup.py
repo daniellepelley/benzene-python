@@ -32,7 +32,13 @@ from benzene.core import (
     health_interception,
 )
 from benzene.http import HttpRouter, StandardPaths
-from benzene.mesh import ServiceDescriptor, ServiceInfo, mesh_interception
+from benzene.mesh import (
+    QueueTraceExporter,
+    ServiceDescriptor,
+    ServiceInfo,
+    mesh_interception,
+    trace_middleware,
+)
 
 from .domain import (
     ORDER_CREATE_TOPIC,
@@ -72,7 +78,9 @@ class ServiceStartUp(BenzeneStartUp):
         self._service_name = service_name
 
     def configure_services(self, services: Container, config: Mapping[str, str]) -> None:
-        pass  # no shared singletons needed — every handler closes over its own sender
+        # A singleton so the host (build_service, host.py) can drain the same exporter instance
+        # trace_middleware (below) writes into — every handler otherwise closes over its own sender.
+        services.add_instance(QueueTraceExporter, QueueTraceExporter())
 
     def configure(self, services: Scope, config: Mapping[str, str]) -> AppDefinition:
         name = self._service_name
@@ -123,7 +131,15 @@ class ServiceStartUp(BenzeneStartUp):
             health=checks,
             spec=ServiceSpec.derive(registry, service=name),
         )
-        middleware = [mesh_interception(descriptor), health_interception(checks)]
+        exporter = services.get_service(QueueTraceExporter)
+        middleware = [
+            # Outermost, so it times the whole invocation including routing (mesh.md §3) — the host
+            # (build_service, host.py) drains this same exporter instance and pushes the batch to the
+            # mesh Lambda after each invocation, so the collector can derive consumer edges.
+            trace_middleware(exporter, service=name, instance_id=name),
+            mesh_interception(descriptor),
+            health_interception(checks),
+        ]
         return AppDefinition(
             registry=registry, router=router, middleware=middleware, standard_paths=standard
         )

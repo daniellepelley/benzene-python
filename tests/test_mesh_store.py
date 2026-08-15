@@ -11,6 +11,7 @@ from benzene.mesh import (
     JsonFileCollectorStore,
     MeshCollector,
     NullCollectorStore,
+    S3CollectorStore,
 )
 
 # --- the store implementations ---------------------------------------------------------------
@@ -62,6 +63,110 @@ def test_json_file_store_ignores_a_non_object_snapshot(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
     assert JsonFileCollectorStore(path).load() is None
+
+
+class _NoSuchKey(Exception):
+    """A stand-in for boto3's ``ClientError`` on a missing object (``response['Error']['Code']``)."""
+
+    def __init__(self) -> None:
+        super().__init__("NoSuchKey")
+        self.response = {"Error": {"Code": "NoSuchKey"}}
+
+
+class _FakeBody:
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+
+class _FakeS3Client:
+    """A stand-in for a boto3 ``s3`` client (``get_object``/``put_object`` only)."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def put_object(self, *, Bucket, Key, Body, ContentType):  # noqa: N803 - boto3 kwarg names
+        self.objects[Key] = Body
+
+    def get_object(self, *, Bucket, Key):  # noqa: N803 - boto3 kwarg names
+        if Key not in self.objects:
+            raise _NoSuchKey()
+        return {"Body": _FakeBody(self.objects[Key])}
+
+
+def test_s3_store_first_load_with_no_object_is_a_first_boot_not_an_error() -> None:
+    store = S3CollectorStore("bucket", client=_FakeS3Client())
+    assert store.load() is None
+    assert isinstance(store, CollectorStore)
+
+
+def test_s3_store_round_trips() -> None:
+    store = S3CollectorStore("bucket", client=_FakeS3Client())
+    store.save({"version": 1, "services": ["orders"]})
+    assert store.load() == {"version": 1, "services": ["orders"]}
+
+
+def test_s3_store_replaces_previous_snapshot() -> None:
+    store = S3CollectorStore("bucket", client=_FakeS3Client())
+    store.save({"version": 1, "n": 1})
+    store.save({"version": 1, "n": 2})
+    assert store.load() == {"version": 1, "n": 2}
+
+
+def test_s3_store_uses_the_given_key() -> None:
+    fake = _FakeS3Client()
+    store = S3CollectorStore("bucket", "mesh/_state/collector.json", client=fake)
+    store.save({"version": 1})
+    assert "mesh/_state/collector.json" in fake.objects
+
+
+def test_s3_store_defaults_the_key_to_collectorjson_at_the_bucket_root() -> None:
+    fake = _FakeS3Client()
+    S3CollectorStore("bucket", client=fake).save({"version": 1})
+    assert "collector.json" in fake.objects
+
+
+def test_s3_store_tolerates_a_corrupt_object() -> None:
+    fake = _FakeS3Client()
+    fake.objects["collector.json"] = b"{ this is not json"
+    store = S3CollectorStore("bucket", client=fake)
+    # A truncated/corrupt snapshot must not crash the aggregator — treat it as a first boot.
+    assert store.load() is None
+
+
+def test_s3_store_ignores_a_non_object_snapshot() -> None:
+    fake = _FakeS3Client()
+    fake.objects["collector.json"] = json.dumps([1, 2, 3]).encode("utf-8")
+    assert S3CollectorStore("bucket", client=fake).load() is None
+
+
+def test_s3_store_reraises_an_error_that_is_not_a_missing_object() -> None:
+    class _Forbidden(Exception):
+        def __init__(self) -> None:
+            super().__init__("AccessDenied")
+            self.response = {"Error": {"Code": "AccessDenied"}}
+
+    class _ForbiddenClient(_FakeS3Client):
+        def get_object(self, *, Bucket, Key):  # noqa: N803 - boto3 kwarg names
+            raise _Forbidden()
+
+    store = S3CollectorStore("bucket", client=_ForbiddenClient())
+    with pytest.raises(Exception, match="AccessDenied"):
+        store.load()
+
+
+def test_collector_rehydrates_from_an_s3_store_on_construction() -> None:
+    fake = _FakeS3Client()
+    store = S3CollectorStore("bucket", client=fake)
+    first = MeshCollector(store=store)
+    first.ingest_register({"service": "orders", "topics": [{"id": "order:create"}]})
+
+    # A brand-new collector pointed at the same S3 object comes up already knowing the fleet —
+    # exactly the seam a stateless Lambda invocation needs between separate invocations.
+    second = MeshCollector(store=S3CollectorStore("bucket", client=fake))
+    assert "orders" in {s["service"] for s in second.query_fleet({})["services"]}
 
 
 # --- the collector wired to a store ----------------------------------------------------------
