@@ -1,0 +1,151 @@
+# Deploy examples/aws_lambda_mesh to a real AWS account — six chained Cloud Service Lambdas
+# (SQS/SNS/EventBridge) plus the discovering mesh Lambda, driven by deploy/main.tf and the two zip
+# builders (deploy/build_service.sh, deploy/build_mesh.sh).
+#
+# Bundles apply/plan/destroy into one dispatch input (this repo's own deploy-mesh.yml /
+# deploy-k8s-mesh-eks.yml convention), rather than separate deploy/destroy workflow files. Credentials
+# come from the "test" GitHub Environment (the access key id is an environment *variable*, the secret
+# an environment *secret* — same as this repo's other credentialed Terraform deploys). State lives in
+# the same per-account S3 bucket the other Terraform deploys here use, under its own key
+# (aws-lambda-mesh/), so it survives between ephemeral CI runs without clobbering the other stacks'
+# state.
+
+name: Deploy AWS Lambda Mesh Example
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do"
+        type: choice
+        options: [apply, plan, destroy]
+        default: apply
+      region:
+        description: "AWS region"
+        type: string
+        default: eu-west-1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-aws-lambda-mesh
+  cancel-in-progress: false
+
+env:
+  TF_DIR: examples/aws_lambda_mesh/deploy
+  TF_IN_AUTOMATION: "1"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # The AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets live in the "test" GitHub Environment; a
+    # job must declare the environment for its secrets to be exposed.
+    environment: test
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ inputs.region }}
+      AWS_DEFAULT_REGION: ${{ inputs.region }}
+
+    steps:
+      - name: Check the AWS credentials arrived from the test environment
+        run: |
+          missing=0
+          [ -n "${AWS_ACCESS_KEY_ID}" ] || { echo "::error::vars.AWS_ACCESS_KEY_ID is empty — run Benzene's 'Sync Test Environment' into this repo first."; missing=1; }
+          [ -n "${AWS_SECRET_ACCESS_KEY}" ] || { echo "::error::secrets.AWS_SECRET_ACCESS_KEY is empty — run Benzene's 'Sync Test Environment' into this repo first."; missing=1; }
+          exit "${missing}"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the service + mesh Lambda zips
+        run: |
+          examples/aws_lambda_mesh/deploy/build_service.sh
+          examples/aws_lambda_mesh/deploy/build_mesh.sh
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5" # >= 1.10 for S3-native state locking (no DynamoDB table)
+          terraform_wrapper: false
+
+      - name: Who am I (fail early if the creds are wrong)
+        run: aws sts get-caller-identity
+
+      - name: Ensure the Terraform state bucket exists
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          bucket="benzene-mesh-tfstate-${account}-${AWS_REGION}"
+          if aws s3api head-bucket --bucket "${bucket}" 2>/dev/null; then
+            echo "state bucket ${bucket} already exists"
+          else
+            echo "creating state bucket ${bucket}"
+            if [ "${AWS_REGION}" = "us-east-1" ]; then
+              aws s3api create-bucket --bucket "${bucket}" --region "${AWS_REGION}"
+            else
+              aws s3api create-bucket --bucket "${bucket}" --region "${AWS_REGION}" \
+                --create-bucket-configuration LocationConstraint="${AWS_REGION}"
+            fi
+            aws s3api put-bucket-versioning --bucket "${bucket}" \
+              --versioning-configuration Status=Enabled
+            aws s3api put-public-access-block --bucket "${bucket}" \
+              --public-access-block-configuration \
+              BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+          fi
+          echo "TFSTATE_BUCKET=${bucket}" >> "$GITHUB_ENV"
+
+      - name: Point Terraform at the S3 backend (CI only; committed config stays backend-less)
+        run: |
+          cat > "${TF_DIR}/backend_override.tf" <<'EOF'
+          terraform {
+            backend "s3" {}
+          }
+          EOF
+
+      - name: terraform init
+        run: |
+          terraform -chdir="${TF_DIR}" init -input=false \
+            -backend-config="bucket=${TFSTATE_BUCKET}" \
+            -backend-config="key=aws-lambda-mesh/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="use_lockfile=true"
+
+      # --- plan ---------------------------------------------------------------------------------
+      - name: terraform plan
+        if: inputs.action == 'plan'
+        run: terraform -chdir="${TF_DIR}" plan -input=false -var="region=${AWS_REGION}"
+
+      # --- apply --------------------------------------------------------------------------------
+      - name: terraform apply
+        if: inputs.action == 'apply'
+        run: terraform -chdir="${TF_DIR}" apply -input=false -auto-approve -var="region=${AWS_REGION}"
+
+      - name: Trigger one aggregation pass and report the endpoints
+        if: inputs.action == 'apply'
+        run: |
+          set -euo pipefail
+          mesh_function="$(terraform -chdir="${TF_DIR}" output -raw mesh_function_name)"
+          aws lambda invoke --function-name "${mesh_function}" --payload '{}' --cli-binary-format raw-in-base64-out /tmp/mesh-invoke.json >/dev/null
+          {
+            echo "## Benzene AWS Lambda mesh deployed"
+            echo
+            echo "- **Mesh UI:** $(terraform -chdir="${TF_DIR}" output -raw mesh_ui_url)"
+            echo "- **Artifact bucket:** $(terraform -chdir="${TF_DIR}" output -raw artifact_bucket)"
+            echo "- **First aggregation pass:** $(cat /tmp/mesh-invoke.json)"
+            echo
+            echo "Service URLs:"
+            terraform -chdir="${TF_DIR}" output -json service_urls \
+              | python3 -c 'import json,sys; [print(f"- **{k}:** {v}") for k,v in json.load(sys.stdin).items()]'
+            echo
+            echo "POST {orders url}/orders to kick off the orders -> payments -> shipping cascade."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- destroy ------------------------------------------------------------------------------
+      - name: terraform destroy
+        if: inputs.action == 'destroy'
+        run: terraform -chdir="${TF_DIR}" destroy -input=false -auto-approve -var="region=${AWS_REGION}"

@@ -1,0 +1,6 @@
+# Runtime dependencies for deploying the mesh Lambda (deploy/build_mesh.sh): discovery (AwsLambdaDiscovery),
+# interrogation (LambdaMessageSender), and the S3 catalog publisher (S3ArtifactStore).
+# (In this monorepo the benzene-* packages resolve locally; on a real deploy they come from PyPI.)
+benzene-aws[boto3]
+benzene-mesh[aws]
+benzene-mesh-fleet[aws]

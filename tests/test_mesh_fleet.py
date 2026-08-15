@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from benzene.mesh import TraceEvent
 from benzene.mesh_fleet import (
     AwsCloudMapDiscovery,
+    AwsLambdaDiscovery,
     JaegerTraceMapper,
     KubernetesDiscovery,
     ServiceEndpoint,
@@ -121,6 +122,76 @@ def test_aws_cloud_map_discovery_maps_instances_to_endpoints():
         )
     ]
     assert fake.filters == [{"Name": "NAMESPACE_ID", "Values": ["ns-mesh12345"]}]
+
+
+class _FakeLambdaClient:
+    """A stand-in for a boto3 ``lambda`` client (only ``list_functions`` + ``list_tags``, paginated)."""
+
+    def __init__(self, pages: list[list[dict[str, object]]], tags: dict[str, dict[str, str]]) -> None:
+        self._pages = pages
+        self._tags = tags
+        self.tag_calls: list[str] = []
+
+    def list_functions(self, **kwargs):
+        marker = kwargs.get("Marker")
+        index = 0 if marker is None else int(marker)
+        page = self._pages[index]
+        next_index = index + 1
+        result: dict[str, object] = {"Functions": page}
+        if next_index < len(self._pages):
+            result["NextMarker"] = str(next_index)
+        return result
+
+    def list_tags(self, *, Resource):  # noqa: N803 - boto3 kwarg name
+        self.tag_calls.append(Resource)
+        return {"Tags": self._tags.get(Resource, {})}
+
+
+def test_aws_lambda_discovery_filters_by_tag_and_paginates():
+    pages = [
+        [
+            {"FunctionName": "orders", "FunctionArn": "arn:orders", "Runtime": "python3.12"},
+            {"FunctionName": "untagged", "FunctionArn": "arn:untagged", "Runtime": "python3.12"},
+        ],
+        [{"FunctionName": "payments", "FunctionArn": "arn:payments", "Runtime": "python3.12"}],
+    ]
+    tags = {
+        "arn:orders": {"benzene": "true", "team": "checkout"},
+        "arn:untagged": {"other": "tag"},
+        "arn:payments": {"benzene": "true"},
+    }
+    fake = _FakeLambdaClient(pages, tags)
+    discovery = AwsLambdaDiscovery(client=fake)
+
+    endpoints = run(discovery.discover())
+
+    assert endpoints == [
+        ServiceEndpoint(
+            name="orders",
+            address="orders",
+            metadata={
+                "benzene": "true",
+                "team": "checkout",
+                "arn": "arn:orders",
+                "runtime": "python3.12",
+            },
+        ),
+        ServiceEndpoint(
+            name="payments",
+            address="payments",
+            metadata={"benzene": "true", "arn": "arn:payments", "runtime": "python3.12"},
+        ),
+    ]
+    # the untagged function's tags were still read (client-side filtering) but it never appears
+    assert fake.tag_calls == ["arn:orders", "arn:untagged", "arn:payments"]
+
+
+def test_aws_lambda_discovery_custom_tag_key_and_empty_page_is_empty_list():
+    fake = _FakeLambdaClient([[{"FunctionName": "orders", "FunctionArn": "arn:orders"}]], {"arn:orders": {}})
+    assert run(AwsLambdaDiscovery(tag_key="team", client=fake).discover()) == []
+
+    empty = _FakeLambdaClient([[]], {})
+    assert run(AwsLambdaDiscovery(client=empty).discover()) == []
 
 
 class _FakeCoreV1Api:

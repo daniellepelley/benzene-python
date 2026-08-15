@@ -2,10 +2,10 @@
 
 Each adapter reads a cloud registry and projects it into the common
 :class:`~benzene.mesh_fleet.discovery.ServiceEndpoint` shape, so a mesh poller or router treats an
-AWS Cloud Map namespace, an Azure resource group, and a Kubernetes namespace identically. Every SDK
-is an **optional dependency imported lazily** and the underlying client is **injectable**, so the
-adapters — and their tests — construct and run with no cloud SDK installed: pass a fake client and
-the ``import`` never happens.
+AWS Cloud Map namespace, a fleet of tagged AWS Lambda functions, an Azure resource group, and a
+Kubernetes namespace identically. Every SDK is an **optional dependency imported lazily** and the
+underlying client is **injectable**, so the adapters — and their tests — construct and run with no
+cloud SDK installed: pass a fake client and the ``import`` never happens.
 
 Two invariants hold across all three (per the :class:`~benzene.mesh_fleet.discovery.Discovery`
 contract): an empty registry is an empty list rather than an error, and a discovered service with no
@@ -68,6 +68,58 @@ class AwsCloudMapDiscovery:
                     address = f"{address}:{port}"
                 metadata = _str_metadata({**attributes, "instanceId": instance.get("Id")})
                 endpoints.append(ServiceEndpoint(name=name, address=address, metadata=metadata))
+        return endpoints
+
+
+class AwsLambdaDiscovery:
+    """Discovers benzene-tagged AWS Lambda functions (Benzene.Mesh.Discovery.Aws — the Lambda variant).
+
+    Uses the ``lambda`` API: paginates ``list_functions`` across the account/region and, for each
+    function, reads its tags via ``list_tags`` (keyed by the function ARN — Lambda has no server-side
+    tag filter on ``list_functions``, so the filtering happens here). A function carrying
+    ``tag_key`` — only its *presence* is checked, not its value, matching the Terraform discovery-tag
+    convention shared with the .NET/TypeScript ports (``discovery_tag_key``, default ``"benzene"``) —
+    becomes a :class:`ServiceEndpoint`.
+
+    Unlike the network-addressed adapters (Cloud Map, Kubernetes), a Lambda function has no HTTP
+    endpoint of its own, so ``address`` is the **function name** — exactly what
+    :class:`~benzene.aws.LambdaMessageSender` (and a later direct-invoke interrogation) need to reach
+    it. The function ARN and its full tag set ride along as metadata. ``boto3`` is the optional
+    ``[aws]`` extra, imported lazily; inject ``client`` to run against a fake with no SDK present.
+    """
+
+    def __init__(self, *, tag_key: str = "benzene", client: Any | None = None) -> None:
+        self._tag_key = tag_key
+        self._client = client
+
+    def _lambda(self) -> Any:
+        if self._client is None:
+            import boto3  # lazy: optional [aws] dependency
+
+            self._client = boto3.client("lambda")
+        return self._client
+
+    async def discover(self) -> list[ServiceEndpoint]:
+        client = self._lambda()
+        endpoints: list[ServiceEndpoint] = []
+        marker: str | None = None
+        while True:
+            page = client.list_functions(**({"Marker": marker} if marker else {}))
+            for function in page.get("Functions", []):
+                name = function.get("FunctionName")
+                arn = function.get("FunctionArn")
+                if not name or not arn:
+                    continue
+                tags = client.list_tags(Resource=arn).get("Tags", {})
+                if self._tag_key not in tags:
+                    continue
+                metadata = _str_metadata(
+                    {**tags, "arn": arn, "runtime": function.get("Runtime")}
+                )
+                endpoints.append(ServiceEndpoint(name=name, address=name, metadata=metadata))
+            marker = page.get("NextMarker")
+            if not marker:
+                break
         return endpoints
 
 
