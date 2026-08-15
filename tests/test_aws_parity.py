@@ -71,13 +71,62 @@ def test_eventbridge_decoder_topic_from_detail_type_body_is_detail() -> None:
     event = {"detail-type": "orders.created", "source": "shop", "detail": {"id": "o1"}}
     envelope = eventbridge_envelope(event)
     assert envelope["topic"] == "orders.created"
-    assert envelope["headers"] == {}
+    assert envelope["headers"] == {
+        "eventbridge-source": "shop",
+        "eventbridge-detail-type": "orders.created",
+    }
     assert json.loads(envelope["body"]) == {"id": "o1"}
 
 
 def test_eventbridge_decoder_falls_back_to_default_topic() -> None:
     envelope = eventbridge_envelope({"detail": {"x": 1}}, default_topic="bus:event")
     assert envelope["topic"] == "bus:event"
+
+
+def test_eventbridge_decoder_lifts_embedded_headers_and_they_win_over_envelope_metadata() -> None:
+    event = {
+        "id": "evt-1",
+        "detail-type": "orders.created",
+        "source": "shop",
+        "account": "123456789012",
+        "region": "eu-west-2",
+        "time": "2024-01-01T00:00:00Z",
+        "detail": {"id": "o1", "_benzeneHeaders": {"traceparent": "tp", "eventbridge-source": "override"}},
+    }
+    envelope = eventbridge_envelope(event)
+    assert envelope["headers"] == {
+        "eventbridge-id": "evt-1",
+        "eventbridge-source": "override",  # embedded header wins over the envelope's own "shop"
+        "eventbridge-account": "123456789012",
+        "eventbridge-region": "eu-west-2",
+        "eventbridge-time": "2024-01-01T00:00:00Z",
+        "eventbridge-detail-type": "orders.created",
+        "traceparent": "tp",
+    }
+    # The reserved key stays in the body verbatim — a request mapper's deserialization ignores it.
+    assert json.loads(envelope["body"]) == {
+        "id": "o1",
+        "_benzeneHeaders": {"traceparent": "tp", "eventbridge-source": "override"},
+    }
+
+
+def test_eventbridge_sender_then_decoder_round_trips_the_domain_body_and_headers() -> None:
+    """The sender's Detail is exactly what a real EventBridge delivery's ``detail`` would carry."""
+    fake = _FakeEvents()
+    asyncio.run(
+        EventBridgeMessageSender("bus", source="shop", client=fake).send_message(
+            "orders:created", {"id": "o1", "total": 42}, headers={"traceparent": "tp"}
+        )
+    )
+    entry = fake.calls[0]["Entries"][0]
+    event = {"detail-type": entry["DetailType"], "source": "shop", "detail": json.loads(entry["Detail"])}
+
+    envelope = eventbridge_envelope(event)
+
+    assert envelope["topic"] == "orders:created"
+    assert envelope["headers"]["traceparent"] == "tp"
+    assert json.loads(envelope["body"])["id"] == "o1"
+    assert json.loads(envelope["body"])["total"] == 42
 
 
 def test_dynamodb_decoder_derives_topic_from_eventname_and_carries_the_projection() -> None:
@@ -234,7 +283,7 @@ class _FakeKinesis:
         return {"SequenceNumber": "1"}
 
 
-def test_eventbridge_sender_embeds_topic_headers_and_body_in_the_detail() -> None:
+def test_eventbridge_sender_leaves_the_body_verbatim_and_embeds_headers_under_the_reserved_key() -> None:
     fake = _FakeEvents()
     result = asyncio.run(
         EventBridgeMessageSender("bus", source="shop", client=fake).send_message(
@@ -247,10 +296,16 @@ def test_eventbridge_sender_embeds_topic_headers_and_body_in_the_detail() -> Non
     assert entry["Source"] == "shop"
     assert entry["DetailType"] == "orders:created"  # topic round-trips as the DetailType
     assert json.loads(entry["Detail"]) == {
-        "topic": "orders:created",
-        "headers": {"traceparent": "tp"},
-        "body": {"id": "1"},
+        "id": "1",
+        "_benzeneHeaders": {"traceparent": "tp"},
     }
+
+
+def test_eventbridge_sender_with_no_headers_leaves_the_body_untouched() -> None:
+    fake = _FakeEvents()
+    asyncio.run(EventBridgeMessageSender("bus", client=fake).send_message("orders:created", {"id": "1"}))
+    entry = fake.calls[0]["Entries"][0]
+    assert json.loads(entry["Detail"]) == {"id": "1"}
 
 
 def test_eventbridge_sender_maps_a_put_failure_to_service_unavailable() -> None:
@@ -275,9 +330,8 @@ def test_kinesis_sender_embeds_the_envelope_and_keys_the_shard() -> None:
     assert call["StreamName"] == "stream"
     assert call["PartitionKey"] == "cust-9"  # taken from the configured header
     assert json.loads(call["Data"]) == {
-        "topic": "orders:created",
-        "headers": {"partition-key": "cust-9"},
-        "body": {"id": "1"},
+        "id": "1",
+        "_benzeneHeaders": {"partition-key": "cust-9"},
     }
 
 

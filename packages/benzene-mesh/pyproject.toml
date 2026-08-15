@@ -25,6 +25,10 @@ classifiers = [
 ]
 dependencies = ["benzene-core>=0.1.0b1"]
 
+[project.optional-dependencies]
+# Only needed for S3ArtifactStore (publishing the mesh-ui artifacts to S3); everything else needs no AWS SDK.
+aws = ["boto3>=1.28"]
+
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"
 Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"

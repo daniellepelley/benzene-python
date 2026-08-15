@@ -4,8 +4,9 @@ Two adjacent capabilities the mesh needs once it spans a real fleet, both of whi
 had the model for and only needed the adapters:
 
 * **Discovery** (:class:`Discovery`) answers *which services are in the mesh* by reading a cloud
-  registry — AWS Cloud Map (:class:`AwsCloudMapDiscovery`), Azure (:class:`AzureDiscovery`), or
-  Kubernetes (:class:`KubernetesDiscovery`) — into a flat list of :class:`ServiceEndpoint`\\ s, with
+  registry — AWS Cloud Map (:class:`AwsCloudMapDiscovery`), tagged AWS Lambda functions
+  (:class:`AwsLambdaDiscovery`), Azure (:class:`AzureDiscovery`), or Kubernetes
+  (:class:`KubernetesDiscovery`) — into a flat list of :class:`ServiceEndpoint`\\ s, with
   :class:`StaticDiscovery` as the SDK-free default and test double. A mesh :class:`~benzene.mesh.MeshPoller`
   already knows how to *read* a service once it has the address; discovery is the seam that supplies
   the addresses instead of a hand-written list.
@@ -27,6 +28,7 @@ from __future__ import annotations
 from .discovery import Discovery, ServiceEndpoint, StaticDiscovery
 from .discovery_adapters import (
     AwsCloudMapDiscovery,
+    AwsLambdaDiscovery,
     AzureDiscovery,
     KubernetesDiscovery,
 )
@@ -39,6 +41,7 @@ from .mappers import (
 
 __all__ = [
     "AwsCloudMapDiscovery",
+    "AwsLambdaDiscovery",
     "AzureDiscovery",
     "Discovery",
     "JaegerTraceMapper",

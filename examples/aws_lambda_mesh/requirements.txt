@@ -1,0 +1,5 @@
+# Runtime dependencies for deploying a service Lambda (orders/payments/shipping/inventory/
+# notifications/analytics — one shared zip, see deploy/build_service.sh).
+# (In this monorepo the benzene-* packages resolve locally; on a real deploy they come from PyPI.)
+benzene-aws[boto3]
+benzene-mesh

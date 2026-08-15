@@ -8,7 +8,8 @@ schemas and a content hash), **answers the reserved ``benzene:mesh`` topic** wit
 (:class:`MeshFeedSender`).
 
 Everything here is optional and additive — install it to join the mesh, leave it out and the rest of
-your service is unchanged. Depends only on ``benzene-core``.
+your service is unchanged. Depends only on ``benzene-core``; the S3 artifact publisher
+(:class:`S3ArtifactStore`) additionally needs the optional ``[aws]`` extra (``boto3``), imported lazily.
 
     pip install benzene-mesh
 
@@ -74,6 +75,7 @@ from .profile import (
     RequirementCheck,
     evaluate_cloud_service_profile,
 )
+from .s3_artifacts import S3ArtifactStore, write_artifacts_to_s3
 from .schema import Schema, json_schema
 from .store import (
     CollectorStore,
@@ -134,6 +136,7 @@ __all__ = [
     "QUERY_TRACE_TOPIC",
     "QueueTraceExporter",
     "REGISTER_TOPIC",
+    "S3ArtifactStore",
     "collector_registry",
     "Schema",
     "ServiceDescriptor",
@@ -155,4 +158,5 @@ __all__ = [
     "parse_traceparent",
     "trace_middleware",
     "write_artifacts",
+    "write_artifacts_to_s3",
 ]
