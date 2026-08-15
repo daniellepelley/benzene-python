@@ -35,6 +35,10 @@ what the registries can't know (identity and placement); an `OutboundRegistry` (
 service declares it sends. As of the 2026-08 mesh.md revision, this alone is what puts an edge in the
 mesh's producer/consumer graph — the graph exists before a single message has flowed (mesh.md §4).
 
+A service that registers a handler for a topic is that topic's **consumer** (`topics`), not its
+provider; a service that declares it in `produces` is that topic's **provider** — standard pub/sub
+terminology (Kafka/SQS/SNS/EventBridge: the receiver is the "consumer").
+
 ```python
 from benzene.core import Registry
 from benzene.mesh import OutboundRegistry, ServiceDescriptor, ServiceInfo
@@ -42,14 +46,14 @@ from benzene.mesh import OutboundRegistry, ServiceDescriptor, ServiceInfo
 outbound = OutboundRegistry().register("payments:capture", request_type=CapturePayment)
 
 descriptor = ServiceDescriptor.derive(
-    registry,                                    # a benzene.core Registry — what this service provides
+    registry,                                    # a benzene.core Registry — what this service consumes
     ServiceInfo(
         service="orders",                        # the only required field
         service_version="1.4.2",
         instance_id="orders-7f9c",
         placement={"cloud": "aws", "region": "eu-west-1"},
     ),
-    outbound,                                     # what this service consumes (omit for none)
+    outbound,                                     # what this service produces (omit for none)
 )
 
 payload = descriptor.to_payload()                # the ServiceDescriptor wire payload (a dict)
@@ -77,20 +81,20 @@ ServiceInfo(
 
 ### `ServiceDescriptor`
 
-- `ServiceDescriptor.derive(registry, info, consumes=None)` — project a `Registry` + `ServiceInfo` +
+- `ServiceDescriptor.derive(registry, info, produces=None)` — project a `Registry` + `ServiceInfo` +
   optional `OutboundRegistry` (or any iterable of `OutboundDefinition`) into a descriptor. One
-  `TopicDescriptor` per registered/consumed topic, **sorted by `(id, version)`** so the output is
+  `TopicDescriptor` per registered/produced topic, **sorted by `(id, version)`** so the output is
   deterministic (the hash depends on it). Each topic's schemas come from the handler's or outbound
-  registration's declared `request_type` / `response_type`. Omitting `consumes` yields an empty
-  `consumes` list — a service that genuinely calls nothing, not a degraded/unknown state.
+  registration's declared `request_type` / `response_type`. Omitting `produces` yields an empty
+  `produces` list — a service that genuinely calls nothing, not a degraded/unknown state.
 - `descriptor.to_payload()` — the full wire payload, including `descriptorHash`. Fields are emitted in a
   fixed order and camelCase: `service`, `serviceVersion`, `runtime`, `binding`, `instanceId`,
-  `placement`, `topics`, `consumes`, `degraded`, `profile`, `descriptorHash`. Absent optional fields are
-  omitted; `topics` and `consumes` are always present (possibly `[]`).
+  `placement`, `topics`, `produces`, `degraded`, `profile`, `descriptorHash`. Absent optional fields are
+  omitted; `topics` and `produces` are always present (possibly `[]`).
 - `descriptor.descriptor_hash()` — `"sha256:" + hex(sha256(canonical-json))` over the **contract**. The
   canonical form sorts keys lexicographically with no insignificant whitespace, and **excludes**
   `instanceId`, `degraded`, `profile`, and `descriptorHash` itself. So two instances of the same build
-  hash identically, but the hash changes when the service version, placement, topic set, consumed-topic
+  hash identically, but the hash changes when the service version, placement, topic set, produced-topic
   set, or a schema changes. It detects this service's own redeploys and is **never compared across
   ports**.
 
@@ -99,7 +103,7 @@ ServiceInfo(
 Declares which topics a service **may send** (mesh.md §2.3) — the outbound counterpart to
 `benzene.core.Registry`'s inbound handler discovery: an explicit `(topic, version, request_type,
 response_type)` record, with no handler, since nothing here receives. This is what makes
-`ServiceDescriptor.consumes` a **hard-coded contract** rather than an inference — a port must not
+`ServiceDescriptor.produces` a **hard-coded contract** rather than an inference — a port must not
 attempt to derive it by scanning call sites or any other form of static analysis.
 
 ```python
@@ -461,10 +465,10 @@ models — `benzene:mesh:query:fleet` / `:service` / `:topic` / `:trace`. The ca
 mesh.md §§4–6, pinned by `mesh-collector-cases.json`):
 
 - **The producer/consumer graph is built from the latest registered `ServiceDescriptor` alone**:
-  `topics` gives provider edges, `consumes` gives consumer edges; re-registration **replaces** both
-  wholesale. Trace parentage is **never** used to admit an edge into this graph — it feeds a queried
-  topic's `invocations` / `errors` / `statusCounts` for the edges the descriptor already declared
-  (mesh.md §4).
+  `topics` gives consumer edges (a handler registration is that topic's consumer), `produces` gives
+  provider edges; re-registration **replaces** both wholesale. Trace parentage is **never** used to
+  admit an edge into this graph — it feeds a queried topic's `invocations` / `errors` / `statusCounts`
+  for the edges the descriptor already declared (mesh.md §4).
 - **Declared vs. observed** (mesh.md §4.2) — `query_topic`'s `providerActivity` / `consumerActivity`
   maps every declared name to `{"lastObservedAt": "..."}` when a matching trace has been seen, else
   `{}` — an entry present with no timestamp is a **decommission candidate**, never removed from
@@ -537,8 +541,9 @@ The projection honours the contract's **"must not invent fields, degrade when ab
 descriptor/spec feed it derives the estate (health mapped to healthy/unhealthy/unreachable,
 contract-drift + `previousSpecHash` history), the functional map (topics with **declared**
 consumers/producers, `benzene:*` flagged `reserved`, **request/response schemas, version,
-`schemaMismatch`** when two providers disagree, **`changes[]`** when a provider re-registers a topic
-with a new schema, and **`removedTopics`** for a topic no longer provided), per-service **spec +
+`schemaMismatch`** when two consumers (handlers) disagree — schema authority stays with the handler
+registration — **`changes[]`** when a consumer re-registers a topic with a new schema, and
+**`removedTopics`** for a topic no longer consumed), per-service **spec +
 per-check health**, and an **AsyncAPI 3.0** export of the domain topics; the topology's client→server
 edges come from that same declared graph, and the trace feed layers each edge's **error rate** plus
 **usage** (exercise counts per topic/service/status) on top. `annotations.json` is an honest empty
@@ -573,12 +578,12 @@ collector.query_fleet({})
   `urllib` on a worker thread. `CallableServiceSource(name, spec=, health=)` backs a source with two
   async callables — for tests or a bespoke transport (e.g. a Lambda invoke).
 - `poll_once()` sweeps all sources concurrently and returns a `PollResult` per source; a down service is
-  a failed result, never a broken sweep. `MeshPoller._poll` forwards a polled spec's `consumes` into the
-  collector exactly like `topics`, so a source whose spec document *carries* `consumes` gives the
-  collector consumer edges too (mesh.md §4). `HttpServiceSource`'s `{prefix}/spec` is answered by
+  a failed result, never a broken sweep. `MeshPoller._poll` forwards a polled spec's `produces` into the
+  collector exactly like `topics`, so a source whose spec document *carries* `produces` gives the
+  collector provider edges too (mesh.md §4). `HttpServiceSource`'s `{prefix}/spec` is answered by
   `benzene.core.ServiceSpec` (the Cloud Service Profile surface, `{"service", "topics"}` — no
-  `consumes` field today), so a fleet polled purely over HTTP gets provider edges from the pull and no
-  consumer edges from it; a `CallableServiceSource` whose `spec` callable instead returns a full
+  `produces` field today), so a fleet polled purely over HTTP gets consumer edges from the pull and no
+  provider edges from it; a `CallableServiceSource` whose `spec` callable instead returns a full
   `ServiceDescriptor.to_payload()` (as the AWS Lambda mesh example's `benzene:mesh`-topic source does)
   gets both. Traces still feed invocation/error stats, never graph membership, and every source composes
   with a push feed in one collector.

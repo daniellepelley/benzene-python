@@ -19,8 +19,8 @@ directory ships it as a container (`collector/`) and the Terraform to run it on 
   group — in the account's **default VPC**.
 - **The fleet** (`deploy_fleet=true`, the default): three Lambdas (`orders` → `inventory` →
   `notifications`, all from one zip, env-selected) each behind an HTTP API Gateway, plus their IAM role.
-  The collector is pointed at their URLs automatically; each service registers what it consumes (so the
-  collector's consumer edges exist with zero traffic) and calls the next with trace propagation,
+  The collector is pointed at their URLs automatically; each service registers what it produces (so the
+  collector's provider edges exist with zero traffic) and calls the next with trace propagation,
   pushing traces back to feed those edges' invocation/error stats.
 
 Roughly the cost of one small Fargate task + an ALB while it runs (the Lambdas + HTTP APIs are
@@ -105,8 +105,8 @@ curl "$MESH/mesh/fleet"         # the polled fleet: orders, inventory, notificat
 # Drive an order through the fleet to generate cross-service traces, then read the edges back:
 ORDERS=$(terraform output -json fleet_urls | python -c 'import json,sys;print(json.load(sys.stdin)["orders"])')
 curl -X POST "$ORDERS/orders" -d '{"sku":"ABC"}'
-curl "$MESH/mesh/topic/inventory:reserve"   # providers: [inventory], consumers: [orders]
-curl "$MESH/mesh/topic/notify:send"         # providers: [notifications], consumers: [inventory]
+curl "$MESH/mesh/topic/inventory:reserve"   # providers: [orders], consumers: [inventory]
+curl "$MESH/mesh/topic/notify:send"         # providers: [inventory], consumers: [notifications]
 ```
 
 Open the dashboard in a browser: `terraform output -raw mesh_ui_url` (i.e. `$MESH/mesh-ui/`).
@@ -138,7 +138,7 @@ Set `MESH_ARTIFACTS_DIR` (Terraform sets it automatically) to enable it; unset d
   `pollIntervalSeconds`. Any pollable Benzene service works — a Lambda behind API Gateway, another
   Fargate service, anything exposing `/benzene/spec` + `/benzene/health`.
 - **Push (the declared graph, then real stats):** a service's `POST <MESH>/mesh/register` carries its
-  full `ServiceDescriptor` — `topics` *and* `consumes` — so its consumer edges exist the moment it
+  full `ServiceDescriptor` — `topics` *and* `produces` — so its provider edges exist the moment it
   registers, with zero traffic (mesh.md §2.3/§4). `POST <MESH>/mesh/traces` then feeds invocation/error
   stats for those declared edges; it never adds or removes an edge itself. Point each service's
   `MeshFeedSender` (or an HTTP `MessageSender`) at these routes — `deploy/mesh/fleet/service.py` does

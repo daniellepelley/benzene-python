@@ -10,7 +10,7 @@ reads from:
 - **Typed descriptors** — each service is registered from a *typed* :class:`~benzene.core.Registry`
   (``request_type`` / ``response_type`` per topic) plus an :class:`~benzene.mesh.OutboundRegistry`
   declaring what it calls, so :meth:`ServiceDescriptor.derive` carries real request/response schemas,
-  versions, and consumer edges into ``topics.json``/``topology.json`` and ``services/{name}.json`` —
+  versions, and provider edges into ``topics.json``/``topology.json`` and ``services/{name}.json`` —
   before a single order is placed (mesh.md §4).
 - **Heartbeats** — each service beats with named health checks, so ``services/{name}.json`` renders
   per-check health, not just an aggregate.
@@ -211,7 +211,7 @@ def build_demo_mesh(collector: MeshCollector | None = None) -> DashboardMesh:
         "inventory": {"database": {"status": "healthy"}, "warehouse-feed": {"status": "healthy"}},
         "notifications": {"smtp": {"status": "healthy"}},
     }
-    # What each service calls (mesh.md §2.3) — this alone is what puts consumer edges in the graph.
+    # What each service calls (mesh.md §2.3) — this alone is what puts provider edges in the graph.
     outbound: dict[str, OutboundRegistry] = {
         "orders": OutboundRegistry().register(RESERVE_STOCK),
         "inventory": OutboundRegistry().register(SEND_NOTIFICATION),

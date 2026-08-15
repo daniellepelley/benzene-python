@@ -12,14 +12,14 @@ A collector is an ordinary Benzene service. It builds a live catalog of your fle
 
 - **Push** — services POST their `register` / `heartbeat` / `traces` / `issues` feeds to the collector
   (via [`MeshFeedSender`](../reference/mesh.md#collector-feeds)). A service's `register` carries its
-  full `ServiceDescriptor` — `topics` (what it provides) *and* `consumes` (what it calls) — and that
+  full `ServiceDescriptor` — `topics` (what it consumes) *and* `produces` (what it calls) — and that
   descriptor alone is what puts an edge in the **call graph**: the producer/consumer graph is declared,
   never inferred from a trace (mesh.md §4). Traces feed a queried topic's invocation/error stats for the
   edges already declared, not graph membership.
 - **Pull** — the collector reaches out to a configured fleet on a timer
   ([`MeshPoller`](../reference/mesh.md#the-poller--meshpoller-pull-aggregator)) and reads each service's
   well-known `/benzene/spec` + `/benzene/health`. Pull covers identity, topics, and health; a service
-  needs no egress wiring to appear, just to be pollable. Whether pull also gives consumer edges depends
+  needs no egress wiring to appear, just to be pollable. Whether pull also gives provider edges depends
   on what `/benzene/spec` serves — see [step 1](#pull-poll-a-fleets-well-known-surfaces).
 
 The two feeds compose in one collector. From the catalog it derives the fleet view and publishes the
@@ -40,12 +40,12 @@ page every Benzene port vendors) fetches by relative path and renders. No UI con
 
 `MeshPoller` folds each source's spec + health into the collector. `HttpServiceSource` GET-polls
 `{prefix}/spec` and `{prefix}/health` (default prefix `/benzene`); a source that is down is a failed
-`PollResult`, never a broken sweep. `MeshPoller` forwards a polled spec's `consumes` into the collector
+`PollResult`, never a broken sweep. `MeshPoller` forwards a polled spec's `produces` into the collector
 exactly like `topics` — but the default `/benzene/spec` surface (`benzene.core.ServiceSpec`, the Cloud
-Service Profile document) has no `consumes` field, so a plain HTTP-polled fleet gets provider edges from
-the pull and no consumer edges from it. A source whose spec instead serves a full
+Service Profile document) has no `produces` field, so a plain HTTP-polled fleet gets consumer edges from
+the pull and no provider edges from it. A source whose spec instead serves a full
 `ServiceDescriptor.to_payload()` (e.g. a `CallableServiceSource` wrapping a reserved-topic invoke, as
-the AWS Lambda mesh example does) gives the pull consumer edges too.
+the AWS Lambda mesh example does) gives the pull provider edges too.
 
 ```python
 # poll.py
@@ -71,7 +71,7 @@ asyncio.run(main())
 
 ### Push: register the declared graph, then feed it real stats
 
-A service's `register` push is a full `ServiceDescriptor` — `topics` *and* `consumes` — so it declares
+A service's `register` push is a full `ServiceDescriptor` — `topics` *and* `produces` — so it declares
 its provider *and* consumer edges the instant it registers, with zero traffic (mesh.md §2.3/§4). The
 collector is itself a Benzene service — `collector_registry` wires the ingest topics onto a registry —
 so you can drive it in-process:
@@ -83,14 +83,14 @@ from benzene.mesh import MeshCollector, collector_registry
 collector = MeshCollector()
 app = BenzeneMessageApplication(collector_registry(collector))
 
-# What orders' MeshFeedSender.register(descriptor) sends over the wire — orders declares it consumes
+# What orders' MeshFeedSender.register(descriptor) sends over the wire — orders declares it produces
 # inventory:reserve, so the edge exists before a single call is made:
 await app.handle({
     "topic": "benzene:mesh:register",
     "headers": {},
-    "body": '{"service": "orders", "topics": [], "consumes": [{"id": "inventory:reserve"}]}',
+    "body": '{"service": "orders", "topics": [], "produces": [{"id": "inventory:reserve"}]}',
 })
-# The collector already knows orders is a consumer of inventory:reserve.
+# The collector already knows orders is a provider of inventory:reserve.
 
 # The trace feed then adds invocation/error stats for that same declared edge — it never adds or
 # removes the edge itself:
@@ -130,8 +130,8 @@ artifact carries:
 | Artifact | What it is |
 |---|---|
 | `manifest.json` | The estate: one entry per service with `name`, `status` (`healthy` / `unhealthy` / `unreachable`), `contractDrift`, and its `specUrl` / `healthUrl` links (from `sources`). |
-| `topics.json` | The functional map: each topic's declared `producers` / `consumers`, `version`, request/response/message schemas, `reserved` flag for `benzene:*`, `schemaMismatch` (two providers declaring different contracts), and `changes` (a provider re-registered a topic with a new schema). Plus `removedTopics` — topics once declared, now provided by no one. |
-| `topology.json` | The declared call graph: client→server `edges` from each service's `consumes`, each with `errorRate` from the matching traces. |
+| `topics.json` | The functional map: each topic's declared `producers` / `consumers`, `version`, request/response/message schemas, `reserved` flag for `benzene:*`, `schemaMismatch` (two consumers/handlers declaring different contracts — schema authority stays with the handler registration), and `changes` (a consumer re-registered a topic with a new schema). Plus `removedTopics` — topics once declared, now consumed by no one. |
+| `topology.json` | The declared call graph: client→server `edges` from each topic's declared providers (`produces`, the sender) to its consumers (`topics`, the handler), each with `errorRate` from the matching traces. |
 | `usage.json` | Exercise counts per `(topic, service, status)` derived from traces. |
 | `services/{name}.json` | Per service: `specJson`, `specHash` / `previousSpecHash`, `contractDrift`, and `health` (`isHealthy` + per-check `healthChecks`). |
 | `asyncapi.json` | An AsyncAPI 3.0 export of the domain (non-reserved) topics — the UI's download / Studio deep-link. |
@@ -200,7 +200,7 @@ open  http://localhost:8080/mesh-ui/        # the Benzene Mesh UI
 
 The host's HTTP surface: the **push** feeds are POSTs (`/mesh/register`, `/mesh/heartbeat`,
 `/mesh/traces`, `/mesh/issues`) — point each service's `MeshFeedSender` (over an HTTP `MessageSender`)
-at `POST <host>/mesh/register` to declare the call graph (its `consumes`) and at `POST <host>/mesh/traces`
+at `POST <host>/mesh/register` to declare the call graph (its `produces`) and at `POST <host>/mesh/traces`
 to feed that graph's invocation/error stats — and the **query** read models are GETs (`/mesh/fleet`,
 `/mesh/service/{service}`, `/mesh/topic/{topic}`, `/mesh/trace/{traceId}`). Setting
 `MESH_ARTIFACTS_DIR` is what enables `/mesh-ui/`; leave it unset to run the API alone.
@@ -215,8 +215,8 @@ to feed that graph's invocation/error stats — and the **query** read models ar
   inspect `poll_once()`'s results for the `error`. Check each `baseUrl` actually serves
   `/benzene/spec` + `/benzene/health` (the `prefix` is configurable per source).
 - **Topology edges are missing.** The call graph is **declared**, not derived from a trace — an edge
-  needs the calling service to register with `consumes` naming the topic (via `ServiceDescriptor.derive(
-  ..., consumes=outbound_registry)` on push, or a polled spec that carries `consumes`). Confirm the
+  needs the calling service to register with `produces` naming the topic (via `ServiceDescriptor.derive(
+  ..., produces=outbound_registry)` on push, or a polled spec that carries `produces`). Confirm the
   calling service actually declares that outbound registration; `errorRate` on an edge that does exist
   still needs `trace_middleware` enabled and `traceparent` propagated (`with_trace_propagation`) so the
   matching traces reach the collector.

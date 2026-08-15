@@ -1,15 +1,19 @@
 """Outbound registration — the concept a service uses to declare which topics it *may send*
 (mesh.md §2.3), mirroring :class:`benzene.core.Registry`'s inbound handler discovery exactly: an
 explicit list of ``(topic, version, request type, response type)`` records, with no handler, since
-nothing here receives. This is what makes :attr:`~benzene.mesh.ServiceDescriptor.consumes` a
+nothing here receives. This is what makes :attr:`~benzene.mesh.ServiceDescriptor.produces` a
 **hard-coded contract** rather than an inference — reliable for the identical reason the inbound
 registry already makes ``topics`` reliable. A port MUST NOT attempt to infer this by scanning call
 sites or any other form of static analysis; explicit registration is the only conforming path
 (mesh.md §2.3).
 
+A service that registers a handler is that topic's *consumer* (``topics``); a service registered
+here is that topic's *provider* (``produces``) — standard pub/sub terminology, the receiver is the
+"consumer".
+
 A registered outbound record needs no destination address, queue name, or topic ARN — those are
 transport/deployment configuration, orthogonal to the *contract* this registers. A service can
-declare it consumes ``payments:capture`` while its actual SQS queue URL is injected at deploy time;
+declare it produces ``payments:capture`` while its actual SQS queue URL is injected at deploy time;
 the descriptor doesn't change between environments, only the wiring does.
 """
 

@@ -11,10 +11,11 @@ Derivation rules that are normative (mesh.md §4):
 - ``service`` is required on register, heartbeat, and issues → ``bad-request`` when missing; a traces
   or issues batch of any size (including empty) is accepted.
 - Re-registration **replaces** a service's registration wholesale — a redeploy that drops a topic
-  drops its provider edge, and one that drops a ``consumes`` entry drops its consumer edge the same way.
+  drops its consumer edge, and one that drops a ``produces`` entry drops its provider edge the same way.
 - **The producer/consumer graph is built from the latest registered descriptor alone**: ``topics`` gives
-  provider edges, ``consumes`` gives consumer edges. Trace parentage MUST NOT be used to admit an edge
-  into this graph — it feeds invocation counts and status stats only.
+  consumer edges (a handler registration is that topic's consumer), ``produces`` gives provider edges.
+  Trace parentage MUST NOT be used to admit an edge into this graph — it feeds invocation counts and
+  status stats only.
 - **Declared vs. observed** (mesh.md §4.2): a trace never changes the graph, but it *is* the only signal
   for two collector-derived read models layered on top of it — **liveness** (has a declared edge ever
   been exercised, so an unexercised one is a decommission *candidate*, never a fact) and **drift** (a
@@ -42,7 +43,7 @@ from .issues import issue_fingerprint
 from .store import CollectorStore, NullCollectorStore
 
 # Bumped when the snapshot shape changes incompatibly; an older/newer snapshot is ignored on load.
-_SNAPSHOT_VERSION = 2
+_SNAPSHOT_VERSION = 3
 
 # Query topics (the collector's read models — one collector's shapes, pinned by the fixtures).
 QUERY_FLEET_TOPIC = "benzene:mesh:query:fleet"
@@ -85,8 +86,8 @@ class _Service:
     has_descriptor: bool = False
     descriptor_hash: str | None = None
     previous_descriptor_hash: str | None = None  # the hash before the last contract change (drift)
-    provided: list[str] = field(default_factory=list)  # topic ids this service currently provides
-    consumed: list[str] = field(default_factory=list)  # topic ids this service currently consumes
+    consumed: list[str] = field(default_factory=list)  # topic ids this service currently consumes (topics)
+    produced: list[str] = field(default_factory=list)  # topic ids this service currently produces (produces)
     # Per-topic contract detail from the descriptor/spec feed: id -> {version, requestSchema, responseSchema}.
     topic_specs: dict[str, dict[str, Any]] = field(default_factory=dict)
     # The topic_specs from the register before the current one, for per-topic schema-change detection.
@@ -118,9 +119,9 @@ class MeshCollector:
     def __init__(self, *, store: CollectorStore | None = None) -> None:
         self._services: dict[str, _Service] = {}
         self._topics: set[str] = set()  # every topic ever seen (registered or traced); grows only
-        self._ever_provided: set[str] = (
+        self._ever_consumed: set[str] = (
             set()
-        )  # topics some service ever declared (for removed-topic detection)
+        )  # topics some service ever declared as a handler (for removed-topic detection)
         self._events: list[_Event] = []
         # span id -> the service that emitted it. Used only for the §4.2 observed-signal (liveness,
         # drift) below — NEVER for graph membership (`_providers_of`/`_consumers_of` are declared-only).
@@ -141,18 +142,18 @@ class MeshCollector:
             record.previous_descriptor_hash = record.descriptor_hash
         # Re-registration replaces wholesale: drop this service's old provider/consumer edges + specs first.
         topics = [t for t in body.get("topics", []) if isinstance(t, dict) and "id" in t]
-        record.provided = [str(t["id"]) for t in topics]
-        consumes = [t for t in body.get("consumes", []) if isinstance(t, dict) and "id" in t]
-        record.consumed = [str(t["id"]) for t in consumes]
+        record.consumed = [str(t["id"]) for t in topics]
+        produces = [t for t in body.get("produces", []) if isinstance(t, dict) and "id" in t]
+        record.produced = [str(t["id"]) for t in produces]
         # Keep the prior contracts so the artifact writer can flag which topics changed schema.
         record.previous_topic_specs = record.topic_specs
         record.topic_specs = {str(t["id"]): _topic_spec(t) for t in topics}
         record.has_descriptor = True
         record.descriptor_hash = new_hash
-        self._topics.update(record.provided)
         self._topics.update(record.consumed)
-        self._ever_provided.update(
-            record.provided
+        self._topics.update(record.produced)
+        self._ever_consumed.update(
+            record.consumed
         )  # remember it was declared, even if later dropped
         return self._persisted({"accepted": 1})
 
@@ -185,21 +186,21 @@ class MeshCollector:
             self._span_owner[event.span_id] = event.service
             self._topics.add(event.topic)
             callee = self._service(event.service)  # a traced service becomes known (possibly anonymous)
-            self._flag_drift_if_undeclared(callee, event.topic, callee.provided, event.trace_id)
+            self._flag_drift_if_undeclared(callee, event.topic, callee.consumed, event.trace_id)
             parent = event.parent_span_id
             caller_name = self._span_owner.get(parent) if parent else None
             if caller_name and caller_name != event.service:
                 caller = self._services.get(caller_name)
-                if caller is not None:  # only a registered caller has a `consumes` to diverge from
-                    self._flag_drift_if_undeclared(caller, event.topic, caller.consumed, event.trace_id)
+                if caller is not None:  # only a registered caller has a `produces` to diverge from
+                    self._flag_drift_if_undeclared(caller, event.topic, caller.produced, event.trace_id)
         return self._persisted({"accepted": len(events)})
 
     def _flag_drift_if_undeclared(
         self, record: _Service, topic: str, declared: list[str], trace_id: str
     ) -> None:
         """File a ``contract-drift`` issue the first time a trace observes ``record`` on a topic it
-        hasn't declared — either as a provider (``topic`` not in its ``topics``) or as a consumer
-        (``topic`` not in its ``consumes``), mesh.md §4.2's "Undeclared" signal. A service that has
+        hasn't declared — either as a consumer (``topic`` not in its ``topics``) or as a provider
+        (``topic`` not in its ``produces``), mesh.md §4.2's "Undeclared" signal. A service that has
         never registered a descriptor has no declared contract to diverge from, so it is never flagged.
         """
         if not record.has_descriptor or topic in declared:
@@ -273,8 +274,8 @@ class MeshCollector:
                     "hasDescriptor": record.has_descriptor,
                     "descriptorHash": record.descriptor_hash,
                     "previousDescriptorHash": record.previous_descriptor_hash,
-                    "provided": record.provided,
                     "consumed": record.consumed,
+                    "produced": record.produced,
                     "topicSpecs": copy.deepcopy(record.topic_specs),
                     "previousTopicSpecs": copy.deepcopy(record.previous_topic_specs),
                     "reportedIssues": record.reported_issues,
@@ -291,7 +292,7 @@ class MeshCollector:
                 for record in self._services.values()
             ],
             "topics": sorted(self._topics),
-            "everProvided": sorted(self._ever_provided),
+            "everConsumed": sorted(self._ever_consumed),
             "events": [
                 {
                     "traceId": event.trace_id,
@@ -324,8 +325,8 @@ class MeshCollector:
                 has_descriptor=bool(entry.get("hasDescriptor", False)),
                 descriptor_hash=entry.get("descriptorHash"),
                 previous_descriptor_hash=entry.get("previousDescriptorHash"),
-                provided=list(entry.get("provided", [])),
                 consumed=list(entry.get("consumed", [])),
+                produced=list(entry.get("produced", [])),
                 topic_specs=copy.deepcopy(entry.get("topicSpecs", {})),
                 previous_topic_specs=copy.deepcopy(entry.get("previousTopicSpecs", {})),
                 reported_issues=bool(entry.get("reportedIssues", False)),
@@ -340,7 +341,7 @@ class MeshCollector:
             )
             self._services[record.name] = record
         self._topics = set(snapshot.get("topics", []))
-        self._ever_provided = set(snapshot.get("everProvided", []))
+        self._ever_consumed = set(snapshot.get("everConsumed", []))
         self._events = [
             _Event(
                 trace_id=str(raw.get("traceId", "")),
@@ -368,10 +369,13 @@ class MeshCollector:
     # --- queries ---------------------------------------------------------------------------
     def query_fleet(self, _body: dict[str, Any]) -> dict[str, Any]:
         services = [self._fleet_service_entry(record) for record in self._services.values()]
+        # The fleet summary shows one role per topic for brevity (full provider/consumer detail is
+        # `query_topic`'s job): consumers (handler registrations), since that's the side essentially
+        # every registered service populates, unlike the rarer outbound `produces` declaration.
         topics = [
             {
                 "topic": topic,
-                "providers": self._providers_of(topic),
+                "consumers": self._consumers_of(topic),
                 "invocations": self._invocations_on(topic),
             }
             for topic in sorted(self._topics)
@@ -420,10 +424,13 @@ class MeshCollector:
             response["statusCounts"] = dict(Counter(event.status for event in events))
         # mesh.md §4.2: per declared edge, report last-observed-at (or its absence) rather than
         # collapsing liveness to a boolean — an absent entry is a decommission *candidate*, not a fact.
+        # Providers are the `produces` (outbound/caller) role now, so their observed signal is who was
+        # traced as the *caller*; consumers are the `topics` (handler) role, observed as who was traced
+        # actually *handling* the topic.
         if providers:
-            response["providerActivity"] = self._edge_activity(self._observed_providers(topic), providers)
+            response["providerActivity"] = self._edge_activity(self._observed_callers(topic), providers)
         if consumers:
-            response["consumerActivity"] = self._edge_activity(self._observed_consumers(topic), consumers)
+            response["consumerActivity"] = self._edge_activity(self._observed_handlers(topic), consumers)
         return response
 
     def query_trace(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -445,23 +452,27 @@ class MeshCollector:
         return record
 
     def _providers_of(self, topic: str) -> list[str]:
-        return sorted(name for name, record in self._services.items() if topic in record.provided)
+        # A provider is a service that declared it PRODUCES this topic (§2.3 outbound registration) —
+        # the sender/caller role under the 2026-08 role inversion.
+        return sorted(name for name, record in self._services.items() if topic in record.produced)
 
     def _consumers_of(self, topic: str) -> list[str]:
+        # A consumer is a service that registered a HANDLER for this topic (`topics`, the inbound
+        # registry) — the receiver role under the 2026-08 role inversion.
         return sorted(name for name, record in self._services.items() if topic in record.consumed)
 
-    def _observed_providers(self, topic: str) -> dict[str, str | None]:
+    def _observed_handlers(self, topic: str) -> dict[str, str | None]:
         """{service: last-observed-at or None} for every service traced handling ``topic`` — the §4.2
-        observed signal for provider liveness (never used to admit a provider edge into the graph)."""
+        observed signal for *consumer* (handler) liveness (never used to admit an edge into the graph)."""
         observed: dict[str, str | None] = {}
         for event in self._events:
             if event.topic == topic:
                 self._note_observed(observed, event.service, event.started_at)
         return observed
 
-    def _observed_consumers(self, topic: str) -> dict[str, str | None]:
+    def _observed_callers(self, topic: str) -> dict[str, str | None]:
         """{service: last-observed-at or None} for every service whose span parented a traced call to
-        ``topic`` by a different service — the §4.2 observed signal for consumer liveness."""
+        ``topic`` by a different service — the §4.2 observed signal for *provider* (sender) liveness."""
         observed: dict[str, str | None] = {}
         for event in self._events:
             if event.topic != topic or not event.parent_span_id:
@@ -525,7 +536,7 @@ class MeshCollector:
     def _fleet_service_entry(self, record: _Service) -> dict[str, Any]:
         entry: dict[str, Any] = {
             "service": record.name,
-            "topics": len(record.provided),
+            "topics": len(record.consumed),
             "health": self._health(record),
             "missingFeeds": self._missing_feeds(record),
         }

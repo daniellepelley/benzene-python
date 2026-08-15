@@ -125,8 +125,8 @@ def build_fleet(collector: MeshCollector | None = None) -> Fleet:
     order_registry = Registry().register(PLACE_ORDER, place)
     orders, order_traces = _service("orders", order_registry)
 
-    # Register each service's descriptor — including what it consumes — with the collector (what a
-    # service does on startup; this alone is what puts consumer edges in the graph, mesh.md §2.3/§4).
+    # Register each service's descriptor — including what it produces — with the collector (what a
+    # service does on startup; this alone is what puts provider edges in the graph, mesh.md §2.3/§4).
     outbound: dict[str, OutboundRegistry] = {
         "orders": OutboundRegistry().register(RESERVE_STOCK),
         "inventory": OutboundRegistry().register(SEND_NOTIFICATION),

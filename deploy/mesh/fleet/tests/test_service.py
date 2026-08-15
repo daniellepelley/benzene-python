@@ -92,8 +92,8 @@ def test_traces_are_pushed_to_the_collector_after_an_invocation() -> None:
     assert len(pushed) == 1 and len(pushed[0]) == 1  # one invocation -> one trace event pushed
 
 
-def test_register_declares_the_next_hop_as_a_consumer_at_startup() -> None:
-    # The mesh's consumer edge must exist the moment a service registers — with zero traffic — not
+def test_register_declares_the_next_hop_as_a_provider_at_startup() -> None:
+    # The mesh's provider edge must exist the moment a service registers — with zero traffic — not
     # wait on (or come from) a trace (mesh.md §2.3/§4). Injecting `feeds` (like `next_sender` above)
     # is what makes this observable without a real COLLECTOR_URL/network call.
     registered: list = []
@@ -111,10 +111,10 @@ def test_register_declares_the_next_hop_as_a_consumer_at_startup() -> None:
     assert len(registered) == 1
     payload = registered[0].to_payload()
     assert payload["service"] == "orders"
-    assert [t["id"] for t in payload["consumes"]] == ["inventory:reserve"]
+    assert [t["id"] for t in payload["produces"]] == ["inventory:reserve"]
 
 
-def test_register_declares_no_consumers_for_a_terminal_service() -> None:
+def test_register_declares_no_producers_for_a_terminal_service() -> None:
     registered: list = []
 
     class _Feeds:
@@ -124,7 +124,7 @@ def test_register_declares_no_consumers_for_a_terminal_service() -> None:
 
     build_service(ServiceConfig("notifications", "notify:send", "/notifications"), feeds=_Feeds())  # type: ignore[arg-type]
 
-    assert registered[0].to_payload()["consumes"] == []
+    assert registered[0].to_payload()["produces"] == []
 
 
 def test_no_collector_configured_means_no_push() -> None:

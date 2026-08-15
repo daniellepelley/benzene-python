@@ -197,10 +197,10 @@ def run_mesh_descriptor() -> list[str]:
         )
         if other.descriptor_hash() == h:
             failures.append("mesh-descriptor: hash not sensitive to the topic set")
-    if hash_spec.get("sensitiveToConsumes"):
-        other = ServiceDescriptor.derive(register_canonical(Registry()), info)  # no consumes at all
+    if hash_spec.get("sensitiveToProduces"):
+        other = ServiceDescriptor.derive(register_canonical(Registry()), info)  # no produces at all
         if other.descriptor_hash() == h:
-            failures.append("mesh-descriptor: hash not sensitive to the consumed-topic set")
+            failures.append("mesh-descriptor: hash not sensitive to the produced-topic set")
     return failures
 
 

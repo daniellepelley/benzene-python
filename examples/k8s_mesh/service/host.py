@@ -34,7 +34,7 @@ from .reporting import MeshReporter
 from .startup import ServiceStartUp
 
 # What each service calls downstream (mesh.md §2.3) — orders -> payments -> shipping (terminal). This
-# is what puts consumer edges in the mesh's graph; nothing here is derived from tracing a live call.
+# is what puts provider edges in the mesh's graph; nothing here is derived from tracing a live call.
 _OUTBOUND_TOPICS: dict[str, tuple[str, ...]] = {
     "orders": (PAYMENT_TAKE_TOPIC,),
     "payments": (SHIPMENT_BOOK_TOPIC,),

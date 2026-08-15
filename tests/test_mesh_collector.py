@@ -44,40 +44,40 @@ def _register(
     service: str,
     topics: list[str],
     descriptor_hash: str | None = None,
-    consumes: list[str] | None = None,
+    produces: list[str] | None = None,
 ) -> None:
     body: dict = {"service": service, "topics": [{"id": t} for t in topics]}
-    if consumes is not None:
-        body["consumes"] = [{"id": t} for t in consumes]
+    if produces is not None:
+        body["produces"] = [{"id": t} for t in produces]
     if descriptor_hash:
         body["descriptorHash"] = descriptor_hash
     c.ingest_register(body)
 
 
-def test_reregistration_replaces_provider_edges() -> None:
+def test_reregistration_replaces_consumer_edges() -> None:
     c = MeshCollector()
     _register(c, "orders", ["order:create"])
     _register(c, "orders", ["order:cancel"])  # replaces wholesale
-    # order:create is still a known topic, but orders no longer provides it
-    assert c.query_topic({"topic": "order:create"})["providers"] == []
-    assert c.query_topic({"topic": "order:cancel"})["providers"] == ["orders"]
+    # order:create is still a known topic, but orders no longer handles (consumes) it
+    assert c.query_topic({"topic": "order:create"})["consumers"] == []
+    assert c.query_topic({"topic": "order:cancel"})["consumers"] == ["orders"]
 
 
-def test_consumer_edges_are_declared_not_trace_derived() -> None:
+def test_provider_edges_are_declared_not_trace_derived() -> None:
     c = MeshCollector()
     _register(c, "payments", ["payments:capture"])
-    _register(c, "orders", ["order:create"], consumes=["payments:capture"])
+    _register(c, "orders", ["order:create"], produces=["payments:capture"])
     topic = c.query_topic({"topic": "payments:capture"})
-    assert topic["providers"] == ["payments"]
-    assert topic["consumers"] == ["orders"]  # declared, not derived from any trace
+    assert topic["providers"] == ["orders"]  # declared, not derived from any trace
+    assert topic["consumers"] == ["payments"]
     assert topic["invocations"] == 0
 
-    # Re-registering without `consumes` drops the consumer edge wholesale, like `topics` does.
+    # Re-registering without `produces` drops the provider edge wholesale, like `topics` does.
     _register(c, "orders", ["order:create"])
-    assert c.query_topic({"topic": "payments:capture"})["consumers"] == []
+    assert c.query_topic({"topic": "payments:capture"})["providers"] == []
 
 
-def test_trace_parentage_does_not_admit_a_consumer_edge() -> None:
+def test_trace_parentage_does_not_admit_a_provider_edge() -> None:
     c = MeshCollector()
     _register(c, "greeter", ["greet"])
     c.ingest_traces(
@@ -102,8 +102,8 @@ def test_trace_parentage_does_not_admit_a_consumer_edge() -> None:
         }
     )
     topic = c.query_topic({"topic": "greet"})
-    assert topic["providers"] == ["greeter"]
-    assert topic["consumers"] == []  # trace parentage feeds stats, not graph membership
+    assert topic["providers"] == []  # trace parentage feeds stats, not graph membership
+    assert topic["consumers"] == ["greeter"]
     assert topic["invocations"] == 1
 
 
@@ -113,17 +113,17 @@ def test_trace_parentage_does_not_admit_a_consumer_edge() -> None:
 def test_a_declared_edge_with_no_trace_is_unobserved_not_removed() -> None:
     c = MeshCollector()
     _register(c, "payments", ["payments:capture"])
-    _register(c, "orders", ["order:create"], consumes=["payments:capture"])
+    _register(c, "orders", ["order:create"], produces=["payments:capture"])
     topic = c.query_topic({"topic": "payments:capture"})
-    assert topic["consumers"] == ["orders"]  # still declared — unobserved is a candidate, not a fact
-    assert topic["consumerActivity"] == {"orders": {}}  # no lastObservedAt: never traced
-    assert topic["providerActivity"] == {"payments": {}}
+    assert topic["providers"] == ["orders"]  # still declared — unobserved is a candidate, not a fact
+    assert topic["providerActivity"] == {"orders": {}}  # no lastObservedAt: never traced
+    assert topic["consumerActivity"] == {"payments": {}}
 
 
 def test_a_declared_edge_is_observed_once_a_matching_trace_arrives() -> None:
     c = MeshCollector()
     _register(c, "payments", ["payments:capture"])
-    _register(c, "orders", ["order:create"], consumes=["payments:capture"])
+    _register(c, "orders", ["order:create"], produces=["payments:capture"])
     c.ingest_traces(
         {
             "events": [
@@ -147,13 +147,13 @@ def test_a_declared_edge_is_observed_once_a_matching_trace_arrives() -> None:
         }
     )
     topic = c.query_topic({"topic": "payments:capture"})
-    assert topic["consumerActivity"] == {"orders": {"lastObservedAt": "2026-08-15T09:00:00Z"}}
-    assert topic["providerActivity"] == {"payments": {"lastObservedAt": "2026-08-15T09:00:00Z"}}
+    assert topic["providerActivity"] == {"orders": {"lastObservedAt": "2026-08-15T09:00:00Z"}}
+    assert topic["consumerActivity"] == {"payments": {"lastObservedAt": "2026-08-15T09:00:00Z"}}
 
 
-def test_an_undeclared_provider_edge_files_a_contract_drift_issue() -> None:
+def test_an_undeclared_consumer_edge_files_a_contract_drift_issue() -> None:
     c = MeshCollector()
-    _register(c, "payments", ["payments:capture"])  # does NOT provide payments:refund
+    _register(c, "payments", ["payments:capture"])  # does NOT handle (consume) payments:refund
     c.ingest_traces(
         {
             "events": [
@@ -175,10 +175,10 @@ def test_an_undeclared_provider_edge_files_a_contract_drift_issue() -> None:
     assert issues[0]["topic"] == "payments:refund"
 
 
-def test_an_undeclared_consumer_edge_files_a_contract_drift_issue() -> None:
+def test_an_undeclared_provider_edge_files_a_contract_drift_issue() -> None:
     c = MeshCollector()
     _register(c, "payments", ["payments:capture"])
-    _register(c, "orders", ["order:create"])  # does NOT declare consumes=[payments:capture]
+    _register(c, "orders", ["order:create"])  # does NOT declare produces=[payments:capture]
     c.ingest_traces(
         {
             "events": [

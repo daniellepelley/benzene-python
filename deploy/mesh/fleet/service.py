@@ -8,8 +8,8 @@ reports traces. Each service:
   topics, health only; ``ServiceSpec`` has no ``consumes`` field),
 - runs ``trace_middleware`` and, when ``NEXT_URL`` is set, calls the next service through a
   ``with_trace_propagation``-wrapped HTTP sender (so the ``traceparent`` crosses the hop), and
-- when ``COLLECTOR_URL`` is set, **pushes** its ``ServiceDescriptor`` — ``consumes=[NEXT_TOPIC]`` when
-  there's a next hop — once at startup, so the collector's consumer edge exists before a single request
+- when ``COLLECTOR_URL`` is set, **pushes** its ``ServiceDescriptor`` — ``produces=[NEXT_TOPIC]`` when
+  there's a next hop — once at startup, so the collector's provider edge exists before a single request
   is served (mesh.md §4), then pushes each trace batch after every invocation to feed that edge's
   invocation/error stats (best-effort — a collector hiccup never fails the request).
 
@@ -155,7 +155,7 @@ def build_service(
             )
         )
     if feeds is not None:
-        # What this service consumes (mesh.md §2.3) — the collector's consumer edge exists from this
+        # What this service produces (mesh.md §2.3) — the collector's provider edge exists from this
         # one call, with zero traffic; it does not wait on (or come from) a trace.
         outbound = OutboundRegistry()
         if config.next_topic:

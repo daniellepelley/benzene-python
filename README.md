@@ -283,7 +283,8 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 8. **(done)** The mesh **collector** — `MeshCollector`, an ordinary Benzene service that ingests the
    register/heartbeat/traces/issues feeds and answers `benzene:mesh:query:*` (fleet/service/topic/trace),
    building the producer/consumer graph from each service's registered `ServiceDescriptor` alone
-   (`topics` + `consumes`, mesh.md §4 — never from trace parentage), with traces instead feeding a
+   (`topics` gives consumer edges, `produces` gives provider edges, mesh.md §4 — never from trace
+   parentage), with traces instead feeding a
    declared edge's invocation/error stats, plus per-instance health + hash-drift and `missingFeeds`,
    plus the optional issue feed (delta-merge by fingerprint). Conformance-green against
    `mesh-collector-cases` **and** `mesh-issue-cases`.

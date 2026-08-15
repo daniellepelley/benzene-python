@@ -54,8 +54,8 @@ outbound = with_correlation_id(              # inject x-correlation-id ONCE (sta
   retrying); pass a `backoff` hook to sleep between attempts.
 - **`with_trace_propagation`** forwards the trace of the *current* invocation (set by
   `trace_middleware`), so the callee joins the same trace and the mesh collector can attribute
-  invocation/error stats to the consumer edge this service already declares via
-  `ServiceDescriptor`'s `consumes` (mesh.md §2.3/§4) — the trace never creates the edge itself.
+  invocation/error stats to the provider edge this service already declares via
+  `ServiceDescriptor`'s `produces` (mesh.md §2.3/§4) — the trace never creates the edge itself.
 
 ## 3. Inject it through the composition root
 

@@ -46,7 +46,7 @@ from .domain import (
     ORDER_PLACED_TOPIC,
     PAYMENT_CAPTURED_TOPIC,
     PAYMENTS_CAPTURE_TOPIC,
-    SERVICE_CONSUMES,
+    SERVICE_PRODUCES,
     SHIPMENT_DISPATCHED_TOPIC,
     SHIPPING_BOOK_TOPIC,
     health_checks,
@@ -126,7 +126,7 @@ class ServiceStartUp(BenzeneStartUp):
 
         checks = health_checks(name)
         outbound = OutboundRegistry()
-        for topic in SERVICE_CONSUMES[name]:
+        for topic in SERVICE_PRODUCES[name]:
             outbound.register(topic)
         descriptor = ServiceDescriptor.derive(registry, ServiceInfo(service=name), outbound)
         standard = StandardPaths(

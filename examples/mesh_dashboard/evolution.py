@@ -10,14 +10,16 @@ The scenario is a single moment during an ``orders`` redeploy:
 - **schema-changed** — ``orders`` re-registers ``orders:place`` with a new request contract (a
   ``coupon`` field was added). ``topics.json`` flags the topic ``changes: [{"kind": "schema-changed"}]``
   and ``services/orders.json`` carries both ``specHash`` and ``previousSpecHash``.
-- **removedTopics** — the new ``orders`` descriptor no longer provides ``orders:cancel`` (it moved
-  elsewhere). No one provides it now, so it drops off the functional map into ``topics.removedTopics``.
+- **removedTopics** — the new ``orders`` descriptor no longer consumes (handles) ``orders:cancel`` (it
+  moved elsewhere). No one consumes it now, so it drops off the functional map into
+  ``topics.removedTopics``.
 - **contractDrift** — one old ``orders`` instance (``orders-1``) is still running the *previous*
   descriptor and heartbeats its old hash, while the redeployed ``orders-2`` beats the new one. The
   hash mismatch marks the service as drifted in ``manifest.json`` and ``services/orders.json`` until
   the last old task is replaced.
-- **schemaMismatch** — two services provide ``inventory:reserve`` with *different* request contracts
-  (a legacy service was never migrated). ``topics.json`` marks that topic ``schemaMismatch: true``.
+- **schemaMismatch** — two services consume (handle) ``inventory:reserve`` with *different* request
+  contracts (a legacy service was never migrated). ``topics.json`` marks that topic
+  ``schemaMismatch: true``.
 
 Point the canonical ``mesh-ui.html`` at :func:`write_evolution_artifacts`'s output to see each signal
 rendered.
@@ -89,7 +91,7 @@ def build_evolving_mesh() -> MeshCollector:
     """A collector caught mid-rollout, exhibiting all four contract-evolution signals."""
     collector = MeshCollector()
 
-    # 1. orders v1: provides orders:place (v1 contract) and orders:cancel. One instance beats it.
+    # 1. orders v1: consumes (handles) orders:place (v1 contract) and orders:cancel. One instance beats it.
     orders_v1 = _descriptor("orders", {"orders:place": PlaceOrderV1, "orders:cancel": CancelOrder})
     collector.ingest_register(orders_v1.to_payload())
     collector.ingest_heartbeat(
@@ -116,7 +118,7 @@ def build_evolving_mesh() -> MeshCollector:
         ).to_payload()
     )
 
-    # 3. Two providers of inventory:reserve with different request contracts — a schema mismatch the
+    # 3. Two consumers of inventory:reserve with different request contracts — a schema mismatch the
     #    UI flags until the legacy service is migrated.
     inventory = _descriptor("inventory", {"inventory:reserve": ReserveStock})
     collector.ingest_register(inventory.to_payload())

@@ -67,7 +67,7 @@ def register_canonical(registry: Registry) -> Registry:
 
 def register_canonical_outbound(outbound: OutboundRegistry) -> OutboundRegistry:
     """Register the one canonical outbound topic (``conformance:log``, no handler anywhere) —
-    what ``ServiceDescriptor.consumes`` derives from in the descriptor fixture (mesh.md §2.3)."""
+    what ``ServiceDescriptor.produces`` derives from in the descriptor fixture (mesh.md §2.3)."""
     return outbound.register("conformance:log", request_type=LogRequest)
 
 

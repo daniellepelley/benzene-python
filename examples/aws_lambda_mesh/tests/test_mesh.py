@@ -281,8 +281,8 @@ def test_a_trace_pushed_between_aggregation_runs_survives_into_the_next_publishe
 
     topics = {t["topic"]: t for t in catalog_s3.puts["mesh/topics.json"]["topics"]}
     capture = topics[PAYMENTS_CAPTURE_TOPIC]
-    assert [p["service"] for p in capture["producers"]] == ["payments"]
-    assert [c["service"] for c in capture["consumers"]] == ["orders"]
+    assert [p["service"] for p in capture["producers"]] == ["orders"]
+    assert [c["service"] for c in capture["consumers"]] == ["payments"]
     # Drained objects are gone -- the next pass won't re-count them.
     assert fake_traces.objects == {}
 
@@ -363,6 +363,6 @@ def test_two_fanned_out_pushes_both_survive_into_the_same_pass_no_lost_update() 
 
     topics = {t["topic"]: t for t in catalog_s3.puts["mesh/topics.json"]["topics"]}
     placed = topics["order:placed"]
-    assert [c["service"] for c in placed["consumers"]] == ["orders"]
+    assert [p["service"] for p in placed["producers"]] == ["orders"]
     usage_by_service = {e["service"] for e in catalog_s3.puts["mesh/usage.json"]["entries"]}
     assert {"inventory", "notifications"} <= usage_by_service

@@ -38,7 +38,7 @@ The derived descriptor carries one topic entry per registered topic — for the 
 from the handler's declared types, and a `descriptorHash` over the contract. If this service also
 *calls* another topic (e.g. `payments:capture`), declare that too — pass an `OutboundRegistry` as
 `derive`'s third argument (`ServiceDescriptor.derive(registry, info, outbound)`) — so the mesh's
-consumer edge exists the moment this service registers, with zero traffic
+provider edge exists the moment this service registers, with zero traffic
 ([reference](../reference/mesh.md#outboundregistry)):
 
 ```python
