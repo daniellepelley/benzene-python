@@ -6,14 +6,32 @@ JSON from ``MESH_ARTIFACT_DIR``); everything else is delegated to the inner app 
 ``/benzene/invoke`` collector surface and ``/mesh/refresh`` stay untouched. Mirrors
 ``deploy/mesh/collector/static.py``'s ``StaticUiApp``, kept local to this example (it wraps a plain
 ASGI callable, not anything specific to the Fargate collector's own wiring).
+
+The served page has ``data-manifest-url``/``data-fleet-url`` stamped onto its ``<html>`` root, pointing
+at this mount's own absolute artifact/collector paths (``/mesh-ui/manifest.json``, ``/benzene/invoke``)
+— mirrors .NET's ``MeshUiPage.GetHtml(manifestUrl, envelopeUrl)`` / ``UseMeshUi("/mesh-ui",
+"manifest.json", "/benzene/invoke")``. .NET's own default of the *bare* filename ``"manifest.json"``
+only resolves correctly there because its artifacts are served at the site **root**, not nested under
+``/mesh-ui/`` as they are here; nesting them (deliberately, so they can't collide with this app's own
+``/benzene/*``/``/mesh/*`` routes) means the page's default relative fetch — resolved against
+``document.baseURI``, i.e. the page's own URL, ``/mesh-ui`` with no trailing slash — lands on
+``/manifest.json`` instead of ``/mesh-ui/manifest.json`` and 404s. Stamping the absolute path sidesteps
+that entirely, regardless of whether the page was reached with or without a trailing slash.
 """
 
 from __future__ import annotations
 
+from html import escape
 from pathlib import Path
 from typing import Any
 
 _MOUNT = "/mesh-ui"
+_COLLECTOR_ENVELOPE_PATH = "/benzene/invoke"
+
+
+def _inject_urls(html: str, manifest_url: str, fleet_url: str) -> str:
+    attrs = f' data-manifest-url="{escape(manifest_url)}" data-fleet-url="{escape(fleet_url)}"'
+    return html.replace('<html lang="en">', f'<html lang="en"{attrs}>', 1)
 
 
 class MeshUiApp:
@@ -21,14 +39,18 @@ class MeshUiApp:
 
     def __init__(self, inner: Any, *, ui_html: Path, artifacts_dir: Path) -> None:
         self._inner = inner
-        self._ui_html = Path(ui_html)
         self._artifacts_dir = Path(artifacts_dir).resolve()
+        self._html = _inject_urls(
+            Path(ui_html).read_text(encoding="utf-8"),
+            manifest_url=f"{_MOUNT}/manifest.json",
+            fleet_url=_COLLECTOR_ENVELOPE_PATH,
+        ).encode("utf-8")
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope.get("type") == "http":
             path = scope.get("path", "/")
             if path in (_MOUNT, _MOUNT + "/", _MOUNT + "/index.html"):
-                await self._send_file(send, self._ui_html, "text/html; charset=utf-8")
+                await self._send(send, 200, "text/html; charset=utf-8", self._html)
                 return
             if path.startswith(_MOUNT + "/"):
                 await self._serve_artifact(send, path[len(_MOUNT) + 1 :])
