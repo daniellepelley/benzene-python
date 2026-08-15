@@ -1,0 +1,27 @@
+# The k8s_mesh MESH image — Kubernetes discovery + aggregation + the Mesh UI + the live collector.
+# Build from the REPO ROOT (the context needs packages/ and examples/):
+#   docker build -f examples/k8s_mesh/Dockerfile.mesh -t benzene-k8smesh-mesh:local .
+#
+# Pre-publish, the Benzene layers install from workspace source; once they are on PyPI, replace the
+# source COPY + install with `pip install benzene-http benzene-mesh benzene-mesh-fleet[kubernetes]`
+# and just COPY examples/k8s_mesh.
+FROM python:3.12-slim
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PORT=8080
+
+COPY packages/benzene-results packages/benzene-results
+COPY packages/benzene-core packages/benzene-core
+COPY packages/benzene-http packages/benzene-http
+COPY packages/benzene-mesh packages/benzene-mesh
+COPY packages/benzene-mesh-fleet packages/benzene-mesh-fleet
+COPY examples/k8s_mesh/requirements-mesh.txt requirements-mesh.txt
+RUN pip install --no-cache-dir \
+      ./packages/benzene-results ./packages/benzene-core ./packages/benzene-http \
+      ./packages/benzene-mesh ./packages/benzene-mesh-fleet \
+ && pip install --no-cache-dir -r requirements-mesh.txt
+
+COPY examples/k8s_mesh k8s_mesh
+
+EXPOSE 8080
+# MESH_NAMESPACE and MESH_ARTIFACT_DIR are supplied at run time (see k8s/mesh.yaml).
+CMD ["python", "-m", "k8s_mesh.mesh.main"]

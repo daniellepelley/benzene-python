@@ -371,3 +371,8 @@ simplicity of a single image/Deployment is worth more than that independence.
 - **The cloud hosts** — [AWS Lambda](getting-started-aws.md) and
   [Azure Functions](getting-started-azure.md) run the same domain behind a managed event source
   instead of a self-hosted poller.
+- **A multi-service mesh, self-discovered on the cluster** — [`examples/k8s_mesh`](../examples/k8s_mesh)
+  is a different point in this design space: three chained services plus a mesh service that discovers
+  them by Kubernetes label, interrogates each in-cluster, and serves the live Mesh UI. It deploys the
+  same way this guide does (`kind` in CI, or a real EKS cluster) but is not built from this guide's
+  `orders_domain` — see its own README for the architecture.
