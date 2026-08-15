@@ -130,7 +130,9 @@ jobs:
         run: |
           set -euo pipefail
           mesh_function="$(terraform -chdir="${TF_DIR}" output -raw mesh_function_name)"
-          aws lambda invoke --function-name "${mesh_function}" --payload '{}' --cli-binary-format raw-in-base64-out /tmp/mesh-invoke.json >/dev/null
+          echo "Invoking ${mesh_function} for the first aggregation pass..."
+          aws lambda invoke --function-name "${mesh_function}" --payload '{}' --cli-binary-format raw-in-base64-out /tmp/mesh-invoke.json
+          echo "invoke -> $(cat /tmp/mesh-invoke.json)"
           {
             echo "## Benzene AWS Lambda mesh deployed"
             echo
@@ -143,7 +145,7 @@ jobs:
               | python3 -c 'import json,sys; [print(f"- **{k}:** {v}") for k,v in json.load(sys.stdin).items()]'
             echo
             echo "POST {orders url}/orders to kick off the orders -> payments -> shipping cascade."
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # --- destroy ------------------------------------------------------------------------------
       - name: terraform destroy

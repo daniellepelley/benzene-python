@@ -188,7 +188,7 @@ jobs:
               || echo "- (fleet not deployed)"
             echo
             echo "The collector polls the fleet every 30s; give it a poll interval before reading \`/mesh/fleet\`."
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # --- destroy ------------------------------------------------------------------------------
       - name: terraform destroy
