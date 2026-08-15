@@ -16,6 +16,7 @@ from benzene.mesh import CallableServiceSource, MeshCollector
 from benzene.mesh_fleet.discovery import ServiceEndpoint
 
 from k8s_mesh.mesh.discovery_service import MeshDiscoveryService
+from k8s_mesh.mesh.static import MeshUiApp
 
 
 class _FakeDiscovery:
@@ -93,3 +94,59 @@ def test_empty_mesh_is_zero_not_an_error() -> None:
     service = MeshDiscoveryService(collector, _FakeDiscovery([]))
 
     assert asyncio.run(_run(service)) == 0
+
+
+async def _serve(app: MeshUiApp, path: str) -> tuple[int, str, bytes]:
+    events: list[dict] = []
+
+    async def receive() -> dict:
+        return {"type": "http.disconnect"}
+
+    async def send(event: dict) -> None:
+        events.append(event)
+
+    await app({"type": "http", "path": path, "method": "GET"}, receive, send)
+    status = events[0]["status"]
+    content_type = next(v for k, v in events[0]["headers"] if k == b"content-type").decode()
+    body = events[1]["body"]
+    return status, content_type, body
+
+
+def test_ui_page_carries_the_mount_s_own_absolute_manifest_and_fleet_urls(tmp_path) -> None:
+    """Regression: the page's default *relative* ``manifest.json`` fetch resolves against
+    ``document.baseURI`` — the page's own URL. Reached at the bare mount (``/mesh-ui``, no trailing
+    slash, exactly what .NET's k8s Ingress/Service and this repo's own README both point at), that
+    resolves to ``/manifest.json`` at the site root — but this mount serves artifacts nested under
+    ``/mesh-ui/`` (deliberately, to avoid colliding with ``/benzene/*``/``/mesh/*``), so the unstamped
+    page 404s. Stamping the absolute URLs sidesteps ``document.baseURI`` entirely.
+    """
+    ui_html = tmp_path / "mesh-ui.html"
+    ui_html.write_text('<!doctype html><html lang="en"><body>mesh-ui</body></html>')
+    app = MeshUiApp(inner=None, ui_html=ui_html, artifacts_dir=tmp_path)
+
+    status, content_type, body = asyncio.run(_serve(app, "/mesh-ui"))
+
+    assert status == 200
+    assert content_type.startswith("text/html")
+    html = body.decode()
+    assert 'data-manifest-url="/mesh-ui/manifest.json"' in html
+    assert 'data-fleet-url="/benzene/invoke"' in html
+
+
+def test_ui_page_s_stamped_manifest_url_actually_resolves(tmp_path) -> None:
+    """End-to-end proof, not just a string assertion: the URL stamped onto the page is the exact path
+    this same app serves the artifact at."""
+    ui_html = tmp_path / "mesh-ui.html"
+    ui_html.write_text('<html lang="en"></html>')
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "manifest.json").write_text(json.dumps({"services": []}))
+    app = MeshUiApp(inner=None, ui_html=ui_html, artifacts_dir=artifacts_dir)
+
+    _, _, page_body = asyncio.run(_serve(app, "/mesh-ui"))
+    manifest_url = page_body.decode().split('data-manifest-url="')[1].split('"')[0]
+
+    status, content_type, body = asyncio.run(_serve(app, manifest_url))
+    assert status == 200
+    assert content_type == "application/json"
+    assert json.loads(body) == {"services": []}
