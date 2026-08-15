@@ -1,0 +1,224 @@
+# Deploy examples/azure_functions_mesh to a real Azure subscription — six chained Cloud Service
+# Function Apps (Service Bus/Event Hub/Event Grid) plus the discovering mesh Function App, driven by
+# deploy/main.tf and the two zip builders (deploy/build_service.sh, deploy/build_mesh.sh).
+#
+# Bundles apply/plan/destroy into one dispatch input (this repo's own deploy-mesh.yml /
+# deploy-k8s-mesh-eks.yml / deploy-aws-lambda-mesh.yml convention), rather than separate deploy/destroy
+# workflow files. A destroy run tears down exactly what an apply run created — same remote azurerm
+# state, same resource group/storage-account inputs — so a teardown is one dispatch away, never a
+# separate workflow to remember.
+#
+# Needs an Azure service principal in the "test" GitHub Environment: AZURE_CREDENTIALS (the azure/login
+# JSON) with rights to create the resource group, storage, App Service plan, Function Apps, messaging
+# namespaces, and to assign roles (Owner or User Access Administrator on the subscription/RG).
+
+name: Deploy Azure Functions Mesh Example
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do. 'apply' provisions/updates the stack and publishes code; 'plan' shows the diff with no changes; 'destroy' tears down everything this workflow created (pass the SAME storage_account you deployed with — remote state lives under <storage_account>tfstate)."
+        type: choice
+        options: [apply, plan, destroy]
+        default: apply
+      location:
+        description: "Azure region"
+        type: string
+        default: westeurope
+      storage_account:
+        description: "Storage account for the Functions runtime + mesh catalog (globally unique, lowercase alphanumeric, <=24 chars). The remote state uses <name>tfstate, so this MUST differ from other examples' value."
+        type: string
+        default: benzenepyfnmesh
+      delete_resource_group:
+        description: "destroy only: also delete the resource group (benzene-py-fnmesh-rg) itself, including the Terraform state storage account — a full cleanup with nothing left behind. Leave off to keep the RG (and state) around for a follow-up apply."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-azure-functions-mesh
+  cancel-in-progress: false
+
+env:
+  TF_DIR: examples/azure_functions_mesh/deploy
+  RG: benzene-py-fnmesh-rg
+  PROJECT: benzene-py-fnmesh
+  TF_IN_AUTOMATION: "1"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # The AZURE_CREDENTIALS secret lives in the "test" GitHub Environment; a job must declare the
+    # environment for its secrets to be exposed.
+    environment: test
+
+    steps:
+      - name: Check the Azure credentials arrived from the test environment
+        run: |
+          if [ -z "${{ secrets.AZURE_CREDENTIALS }}" ]; then
+            echo "::error::secrets.AZURE_CREDENTIALS is empty — run Benzene's 'Sync Test Environment' into this repo first."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Terraform's provider is set to resource_provider_registrations = "none", so register the
+      # handful of resource providers this stack needs up front (idempotent; safe to re-run).
+      - name: Register required Azure resource providers
+        if: inputs.action != 'destroy'
+        run: |
+          for rp in Microsoft.Storage Microsoft.Web Microsoft.ManagedIdentity Microsoft.EventHub Microsoft.ServiceBus Microsoft.EventGrid; do
+            az provider register --namespace "$rp"
+          done
+
+      - name: Build the service + mesh Function App zips
+        if: inputs.action != 'destroy'
+        run: |
+          examples/azure_functions_mesh/deploy/build_service.sh
+          examples/azure_functions_mesh/deploy/build_mesh.sh
+
+      - uses: hashicorp/setup-terraform@v3
+
+      # Remote state in a per-subscription storage account, created on first use (idempotent). The RG is
+      # created here to hold the state storage account; Terraform reads it as a data source. Skipped on
+      # destroy — a destroy targets a stack that (if it exists) already created both.
+      - name: Terraform init (remote azurerm state)
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          LOCATION: ${{ inputs.location }}
+          STATE_SA: ${{ inputs.storage_account }}tfstate
+        run: |
+          az group create -n "$RG" -l "$LOCATION" >/dev/null
+
+          # The state storage account name is GLOBALLY unique, so a create can legitimately fail
+          # because the name is already taken (most commonly by re-running with the same input twice —
+          # that's fine, it's idempotent). Require the account to actually exist in THIS resource group
+          # before proceeding, otherwise fail here with an actionable message rather than letting
+          # `terraform init` surface it downstream as an opaque 404 ResourceNotFound.
+          az storage account create -n "$STATE_SA" -g "$RG" -l "$LOCATION" --sku Standard_LRS >/dev/null 2>&1 || true
+          if ! az storage account show -g "$RG" -n "$STATE_SA" >/dev/null 2>&1; then
+            echo "::error::Remote-state storage account '$STATE_SA' is not available in resource group '$RG'."
+            echo "::error::Storage-account names are globally unique - '$STATE_SA' is most likely already taken elsewhere."
+            echo "::error::Re-run this workflow with a different, globally-unique 'storage_account' value."
+            exit 1
+          fi
+          az storage container create -n tfstate --account-name "$STATE_SA" --auth-mode login >/dev/null 2>&1 || true
+          terraform init -input=false \
+            -backend-config="resource_group_name=$RG" \
+            -backend-config="storage_account_name=$STATE_SA" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=azure-functions-mesh.tfstate"
+
+      # --- plan ---------------------------------------------------------------------------------
+      - name: terraform plan
+        if: inputs.action == 'plan'
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform plan -input=false \
+            -var "location=${{ inputs.location }}" \
+            -var "project=$PROJECT" \
+            -var "resource_group=$RG" \
+            -var "storage_account=${{ inputs.storage_account }}"
+
+      # --- apply (provision, then publish, then wire Event Grid) ---------------------------------
+      - name: Terraform apply (provision infrastructure)
+        if: inputs.action == 'apply'
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform apply -input=false -auto-approve \
+            -var "location=${{ inputs.location }}" \
+            -var "project=$PROJECT" \
+            -var "resource_group=$RG" \
+            -var "storage_account=${{ inputs.storage_account }}"
+
+      # Zip-deploy each of the seven apps, then force a cold start so Oryx's remote build has actually
+      # produced a running worker (a fresh app can otherwise answer 202/500 to the very first request
+      # while the build finishes) before the Event Grid wiring step depends on the consumer apps being up.
+      - name: Publish Function App code (Oryx remote build via zip deploy)
+        if: inputs.action == 'apply'
+        run: |
+          set -uo pipefail
+          declare -A ZIPS=( [orders]=service [payments]=service [shipping]=service [inventory]=service [notifications]=service [analytics]=service [mesh]=mesh )
+          for svc in "${!ZIPS[@]}"; do
+            zipfile="examples/azure_functions_mesh/deploy/build/${ZIPS[$svc]}.zip"
+            echo "::group::zip deploy ${PROJECT}-${svc}"
+            az functionapp deployment source config-zip -g "$RG" -n "${PROJECT}-${svc}" --src "$zipfile" --timeout 600
+            echo "::endgroup::"
+          done
+
+      - name: Warm every app (forces the worker + Oryx build to finish before the next apply reads it)
+        if: inputs.action == 'apply'
+        run: |
+          for svc in orders payments shipping inventory notifications analytics; do
+            echo "warming ${PROJECT}-${svc}"
+            for attempt in 1 2 3 4 5 6; do
+              if curl -sS -o /dev/null --max-time 120 -w '%{http_code}' "https://${PROJECT}-${svc}.azurewebsites.net/benzene/health" | grep -qE '^(200|503)$'; then
+                break
+              fi
+              sleep $(( attempt * 15 ))
+            done
+          done
+
+      # Now that the consumer Functions exist and are warm, wire the Event Grid subscriptions onto
+      # their webhook endpoints (see main.tf's comment on why webhook, not azure_function_endpoint).
+      - name: Terraform apply (wire Event Grid subscriptions)
+        if: inputs.action == 'apply'
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform apply -input=false -auto-approve \
+            -var "location=${{ inputs.location }}" \
+            -var "project=$PROJECT" \
+            -var "resource_group=$RG" \
+            -var "storage_account=${{ inputs.storage_account }}" \
+            -var "wire_eventgrid_subscriptions=true"
+
+      - name: Show URLs
+        if: inputs.action == 'apply'
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          {
+            echo "## Benzene Azure Functions mesh deployed"
+            echo
+            echo "- **Mesh UI:** $(terraform output -raw mesh_ui_url)"
+            echo "- **Mesh Function App:** $(terraform output -raw mesh_function_app_name) (Timer-only — no on-demand HTTP invoke; wait for the schedule, or trigger it from the Azure Portal)"
+            echo
+            echo "Service URLs:"
+            terraform output -json service_urls | python3 -c 'import json,sys; [print(f"- **{k}:** {v}") for k,v in json.load(sys.stdin).items()]'
+            echo
+            echo "POST {orders url}/orders to kick off the orders -> payments -> shipping cascade."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- destroy ------------------------------------------------------------------------------
+      # wire_eventgrid_subscriptions stays at its default false — that keeps the live function-key
+      # data source (data.azurerm_function_app_host_keys) out of the destroy plan, which would
+      # otherwise fail reading it off an app already mid-teardown. The subscriptions still get
+      # destroyed (they're already recorded in state from the apply's second pass).
+      - name: terraform destroy
+        if: inputs.action == 'destroy'
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform destroy -input=false -auto-approve \
+            -var "location=${{ inputs.location }}" \
+            -var "project=$PROJECT" \
+            -var "resource_group=$RG" \
+            -var "storage_account=${{ inputs.storage_account }}"
+
+      - name: Delete the resource group too (removes the Terraform state account with it)
+        if: inputs.action == 'destroy'
+        run: |
+          if [ "${{ inputs.delete_resource_group }}" = "true" ]; then
+            az group delete -n "$RG" --yes --no-wait
+          else
+            echo "delete_resource_group is false — leaving '$RG' (and its Terraform state) in place."
+          fi

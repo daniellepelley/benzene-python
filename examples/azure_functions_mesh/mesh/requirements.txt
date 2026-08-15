@@ -1,0 +1,11 @@
+# Runtime dependencies for deploying the mesh Function App (deploy/build_mesh.sh): discovery
+# (AzureDiscovery), interrogation (plain HTTPS — no extra SDK), and the Blob catalog publisher
+# (BlobArtifactStore).
+# (In this monorepo the benzene-* packages resolve locally; on a real deploy they come from PyPI.)
+# NOTE: benzene-mesh-fleet's own [azure] extra only pulls azure-identity (AzureDiscovery also needs
+# azure-mgmt-resource for the ARM ResourceManagementClient) — listed explicitly here rather than
+# widening that extra, which is out of scope for this example (see README "Framework additions").
+azure-functions
+azure-mgmt-resource
+benzene-mesh-fleet[azure]
+benzene-mesh[azure]

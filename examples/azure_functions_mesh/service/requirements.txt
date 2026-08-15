@@ -1,0 +1,5 @@
+# Runtime dependencies for deploying a service Function App (orders/payments/shipping/inventory/
+# notifications/analytics — one shared zip; SERVICE_NAME picks the domain, see host.py + function_app.py).
+# (In this monorepo the benzene-* packages resolve locally; on a real deploy they come from PyPI.)
+azure-functions
+benzene-azure[servicebus,eventhub,eventgrid]

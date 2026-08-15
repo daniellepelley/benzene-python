@@ -5,6 +5,8 @@ failure to ``service-unavailable`` (never raising for a domain outcome). The Azu
 dependencies, imported lazily inside the methods, so the module (and its tests) load with no SDK:
 
 * :class:`ServiceBusMessageSender` — topic + headers on ``application_properties`` (a native channel).
+* :class:`EventHubMessageSender` — topic + headers on ``properties`` (a native channel — the producer
+  side of :func:`~benzene.azure.decode_event_hub_event`'s ``properties``/``application_properties`` read).
 * :class:`QueueStorageMessageSender` — a Storage Queue has *no* attribute channel, so topic + headers
   are embedded in the payload as a Benzene envelope (mirrors ``Benzene.Clients.Azure`` QueueStorage).
 * :class:`EventGridMessageSender` — publishes an Event Grid event (native schema by default, or
@@ -72,6 +74,62 @@ class ServiceBusMessageSender:
             await asyncio.to_thread(
                 self._get_sender().send_messages, self._make_message(topic, message, headers)
             )
+        except Exception as ex:
+            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+        return Result.ok()
+
+
+class EventHubMessageSender:
+    """Sends to an Event Hub, Benzene topic carried in the event's ``properties`` (a native channel).
+
+    The producer counterpart of :func:`~benzene.azure.decode_event_hub_event`, which reads the topic
+    from an event's ``properties``/``application_properties`` — the same convention
+    :class:`ServiceBusMessageSender` uses for Service Bus. ``producer`` (an
+    ``azure.eventhub.EventHubProducerClient``) may be injected for testing; otherwise a client is
+    created lazily from ``connection_string`` + ``eventhub_name``. The whole build-batch-and-send
+    sequence runs in one :func:`asyncio.to_thread` hop, mirroring the other senders' single blocking
+    call.
+    """
+
+    def __init__(
+        self,
+        connection_string: str | None = None,
+        eventhub_name: str | None = None,
+        producer: Any | None = None,
+        serializer: Callable[[Any], str] | None = None,
+    ) -> None:
+        self._connection_string = connection_string
+        self._eventhub_name = eventhub_name
+        self._producer = producer
+        self._serialize = serializer or encode_body
+
+    def _get_producer(self) -> Any:
+        if self._producer is None:
+            from azure.eventhub import EventHubProducerClient  # lazy: optional dependency
+
+            self._producer = EventHubProducerClient.from_connection_string(
+                conn_str=self._connection_string, eventhub_name=self._eventhub_name
+            )
+        return self._producer
+
+    def _send_sync(self, topic: str, message: Any, headers: dict[str, str] | None) -> None:
+        from azure.eventhub import EventData  # lazy: optional dependency
+
+        properties = {str(k): str(v) for k, v in (headers or {}).items()}
+        properties[TOPIC_PROPERTY] = topic
+        event = EventData(self._serialize(message))
+        event.properties = properties
+
+        producer = self._get_producer()
+        batch = producer.create_batch()
+        batch.add(event)
+        producer.send_batch(batch)
+
+    async def send_message(
+        self, topic: str, message: Any, headers: dict[str, str] | None = None
+    ) -> Result:
+        try:
+            await asyncio.to_thread(self._send_sync, topic, message, headers)
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()

@@ -28,6 +28,9 @@ dependencies = ["benzene-core>=0.1.0b1"]
 [project.optional-dependencies]
 # Only needed for S3ArtifactStore (publishing the mesh-ui artifacts to S3); everything else needs no AWS SDK.
 aws = ["boto3>=1.28"]
+# Only needed for BlobArtifactStore (publishing the mesh-ui artifacts to Azure Blob Storage); everything
+# else needs no Azure SDK.
+azure = ["azure-storage-blob>=12.0", "azure-identity>=1.15"]
 
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"

@@ -9,7 +9,9 @@ schemas and a content hash), **answers the reserved ``benzene:mesh`` topic** wit
 
 Everything here is optional and additive — install it to join the mesh, leave it out and the rest of
 your service is unchanged. Depends only on ``benzene-core``; the S3 artifact publisher
-(:class:`S3ArtifactStore`) additionally needs the optional ``[aws]`` extra (``boto3``), imported lazily.
+(:class:`S3ArtifactStore`) additionally needs the optional ``[aws]`` extra (``boto3``), and the Blob
+artifact publisher (:class:`BlobArtifactStore`) the optional ``[azure]`` extra
+(``azure-storage-blob`` + ``azure-identity``) — both imported lazily.
 
     pip install benzene-mesh
 
@@ -20,6 +22,7 @@ Mirrors .NET's ``Benzene.Mesh``. Contributes the ``benzene.mesh`` subpackage to 
 from __future__ import annotations
 
 from .artifacts import build_artifacts, write_artifacts
+from .blob_artifacts import BlobArtifactStore, write_artifacts_to_blob
 from .collector import (
     QUERY_FLEET_TOPIC,
     QUERY_SERVICE_TOPIC,
@@ -101,6 +104,7 @@ from .trace import (
 
 __all__ = [
     "CLASSIFICATIONS",
+    "BlobArtifactStore",
     "CallableServiceSource",
     "HttpServiceSource",
     "MeshPoller",
@@ -166,5 +170,6 @@ __all__ = [
     "parse_traceparent",
     "trace_middleware",
     "write_artifacts",
+    "write_artifacts_to_blob",
     "write_artifacts_to_s3",
 ]

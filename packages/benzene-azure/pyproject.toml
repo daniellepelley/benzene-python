@@ -39,6 +39,7 @@ dependencies = ["benzene-core>=0.1.0b1", "benzene-http>=0.1.0b1"]
 [project.optional-dependencies]
 # Only needed for the real outbound clients; inbound bindings + the test host need no Azure SDK.
 servicebus = ["azure-servicebus>=7.0"]
+eventhub = ["azure-eventhub>=5.0"]
 storage = ["azure-storage-queue>=12.0"]
 eventgrid = ["azure-eventgrid>=4.0"]
 
