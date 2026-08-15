@@ -8,18 +8,25 @@ and ``deploy/build_service.sh``), differing only in the ``SERVICE_NAME`` (and ou
 After each invocation, drains the trace exporter and pushes the batch to the mesh Lambda (when
 ``MESH_FUNCTION_NAME`` is set) — best-effort, mirrors ``deploy/mesh/fleet/service.py``'s
 ``lambda_handler_for`` exactly (a Lambda only runs *during* an invocation, so this pushes once per
-invocation rather than on a background loop a long-lived host would use).
+invocation rather than on a background loop a long-lived host would use). A push never raises
+(:class:`~benzene.aws.LambdaMessageSender` catches its own exceptions and returns a failed
+:class:`~benzene.results.Result` instead — see ``clients.py``), so a genuine failure (e.g. IAM denied,
+wrong ``MESH_FUNCTION_NAME``) is logged rather than silently discarded: check this Lambda's CloudWatch
+logs for a "trace push failed" warning before assuming a missing consumer edge means no traffic has
+flowed yet.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import logging
 from typing import Any
 
 from benzene.aws import to_lambda_handler
 
 from .host import ServiceLambda, build_service
+
+logger = logging.getLogger(__name__)
 
 
 def lambda_handler_for(service: ServiceLambda):
@@ -31,8 +38,17 @@ def lambda_handler_for(service: ServiceLambda):
         if service.feeds is not None:
             events = service.exporter.drain()
             if events:
-                with contextlib.suppress(Exception):  # best-effort: never fails the request
-                    asyncio.run(service.feeds.publish_traces(events))
+                try:
+                    push = asyncio.run(service.feeds.publish_traces(events))
+                except Exception:  # noqa: BLE001 - best-effort: never fails the request
+                    logger.warning("trace push to the mesh Lambda raised", exc_info=True)
+                else:
+                    if not push.is_successful:
+                        logger.warning(
+                            "trace push to the mesh Lambda failed: %s (%s)",
+                            push.status,
+                            "; ".join(push.errors) or "no detail",
+                        )
         return result
 
     return handler
