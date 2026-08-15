@@ -114,7 +114,12 @@ surface) would need a whole extra API Gateway + `BenzeneHttpApp` + static-asset 
 otherwise never needs one; the static site gives the identical UI for a fraction of the moving parts.
 
 See `deploy/main.tf` for the full resource list (modelled closely on TS's `deploy/main.tf`) and
-`.github/workflows/deploy-aws-lambda-mesh.yml` for the apply/plan/destroy dispatch.
+`.github/workflows/deploy-aws-lambda-mesh.yml` for the apply/plan/destroy dispatch. To tear the stack
+down without switching that dropdown, run
+[`Destroy AWS Lambda Mesh Example`](../../.github/workflows/destroy-aws-lambda-mesh.yml) instead —
+**Actions → Destroy AWS Lambda Mesh Example → Run workflow** with the defaults is enough, no typed
+confirmation phrase needed. It shares the deploy workflow's S3 state, so it tears down anything that
+workflow created; if nothing was ever deployed in the target account/region, it's a no-op.
 
 ## Known first-deploy iteration points
 
@@ -148,3 +153,4 @@ proving discover -> interrogate -> collector -> S3 catalog end to end, with no c
 | `deploy/` | Terraform (modelled on TS's `deploy/main.tf`) + `build_service.sh`/`build_mesh.sh` (the two Lambda zips) |
 | `tests/` | in-memory, dogfooded tests (`create_test_host` for the six services; a fake `Discovery` + fake `boto3` Lambda client for the mesh) |
 | `../../.github/workflows/deploy-aws-lambda-mesh.yml` | apply / plan / destroy, dispatched |
+| `../../.github/workflows/destroy-aws-lambda-mesh.yml` | one-click teardown — no dropdown, no confirmation phrase |
