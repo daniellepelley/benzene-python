@@ -101,6 +101,7 @@ documents the same reasoning for the outbound side.
 | `deploy/eks/` | kustomize overlay over `k8s/`: ECR images (set by the workflow) + a LoadBalancer mesh Service |
 | `../../.github/workflows/deploy-k8s-mesh-kind.yml` | build images → kind → deploy → assert 3 discovered |
 | `../../.github/workflows/deploy-k8s-mesh-eks.yml` | terraform apply → push images to ECR → deploy → assert 3 discovered → print the public URLs |
+| `../../.github/workflows/destroy-k8s-mesh-eks.yml` | one-click teardown of the EKS stack — no dropdown, no confirmation phrase |
 | `tests/` | in-memory, dogfooded tests (`create_test_host` for the services; a fake `Discovery` + `CallableServiceSource` for the mesh) |
 
 ## Run it in CI (no credentials)
@@ -160,8 +161,13 @@ it can pull and a route in.
 **Costs & teardown:** an EKS control plane bills ~$0.10/hour plus two `t3.small` nodes and four
 classic ELBs (mesh + the three services, one per LoadBalancer Service). Re-run the workflow with
 `action: destroy` to tear it all down (it deletes the namespace first so Kubernetes releases the
-ELBs, then `terraform destroy`). Note the services are exposed **unauthenticated** — fine for this
-throwaway demo, not a pattern to copy for real workloads.
+ELBs, then `terraform destroy`) — or, for a one-click teardown that needs no dropdown switch, run
+[`Destroy K8s Mesh Example (EKS)`](../../.github/workflows/destroy-k8s-mesh-eks.yml)
+(**Actions → Destroy K8s Mesh Example (EKS) → Run workflow** with the defaults; no typed
+confirmation phrase needed). It shares the same S3 state as the deploy workflow, so it tears down
+anything that workflow created; if nothing was ever deployed in the target account, it's a no-op.
+Note the services are exposed **unauthenticated** — fine for this throwaway demo, not a pattern to
+copy for real workloads.
 
 To deploy from a laptop instead of CI, run the same four steps by hand: `terraform apply` in
 `deploy/`, push the images to the ECR repositories it outputs, `aws eks update-kubeconfig`, then

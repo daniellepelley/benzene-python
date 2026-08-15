@@ -1,0 +1,87 @@
+name: Destroy K8s Mesh Example (EKS)
+
+# One-click teardown counterpart to deploy-k8s-mesh-eks.yml. That workflow already bundles
+# apply/plan/destroy into one dispatch input (this repo's own deploy-mesh.yml convention), but
+# tearing the EKS stack down means remembering to flip that dropdown to `destroy`. This workflow
+# only ever destroys — running it with the defaults is enough, no typed confirmation phrase needed.
+# Same "test" Environment credentials and the same per-account S3 state (key python-k8s-mesh/) as
+# deploy-k8s-mesh-eks.yml, so it tears down anything that workflow created.
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "AWS region"
+        type: string
+        default: eu-west-1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-k8s-mesh-eks
+  cancel-in-progress: false
+
+env:
+  PROJECT: benzene-python-k8smesh
+  NAMESPACE: benzene-mesh
+  TF_DIR: examples/k8s_mesh/deploy
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify AWS credentials are available
+        env:
+          KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+          SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          missing=0
+          [ -z "$KEY_ID" ] && { echo "::error::AWS_ACCESS_KEY_ID is empty (checked both vars and secrets)."; missing=1; }
+          [ -z "$SECRET" ] && { echo "::error::AWS_SECRET_ACCESS_KEY is empty in this job."; missing=1; }
+          if [ "$missing" = "1" ]; then
+            echo "::error::In the 'test' GitHub Environment (Settings -> Environments -> test): set AWS_ACCESS_KEY_ID as a Variable (or Secret) and AWS_SECRET_ACCESS_KEY as a Secret, ensure the deployment-branch policy allows this branch, and that the names match exactly."
+            exit 1
+          fi
+          echo "Both AWS credentials are present."
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init (remote S3 state)
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          REGION: ${{ inputs.region }}
+        run: |
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          STATE_BUCKET="benzene-mesh-tfstate-${ACCOUNT}"
+          if ! aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+            echo "::notice::State bucket $STATE_BUCKET doesn't exist — nothing was ever deployed in this account, nothing to destroy."
+            echo "SKIP_DESTROY=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          terraform init -input=false \
+            -backend-config="bucket=$STATE_BUCKET" \
+            -backend-config="key=python-k8s-mesh/terraform.tfstate" \
+            -backend-config="region=$REGION"
+
+      # The internet-facing ELBs are owned by the Kubernetes Services, not by Terraform, so delete the
+      # namespace first (the cloud controller reaps the ELBs) and only then destroy the cluster —
+      # otherwise the ELBs (and their cost) would outlive the stack.
+      - name: Destroy
+        if: env.SKIP_DESTROY != '1'
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          if aws eks describe-cluster --name "$PROJECT" --region "${{ inputs.region }}" >/dev/null 2>&1; then
+            aws eks update-kubeconfig --name "$PROJECT" --region "${{ inputs.region }}"
+            kubectl delete namespace "$NAMESPACE" --ignore-not-found --timeout=5m || true
+          fi
+          terraform destroy -input=false -auto-approve -var "region=${{ inputs.region }}"
