@@ -52,7 +52,7 @@ jobs:
           sleep 5
           RESP=$(curl -fsS -XPOST http://localhost:8080/mesh/refresh)
           echo "refresh -> $RESP"
-          echo "$RESP" | grep -q '"discovered":3' \
+          echo "$RESP" | grep -Eq '"discovered":\s*3' \
             || { echo "::error::expected 3 discovered, got: $RESP"; exit 1; }
           echo "--- manifest.json ---"; curl -fsS http://localhost:8080/mesh-ui/manifest.json
           echo "--- topics.json ---";   curl -fsS http://localhost:8080/mesh-ui/topics.json

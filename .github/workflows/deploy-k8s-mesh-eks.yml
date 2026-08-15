@@ -174,7 +174,7 @@ jobs:
             sleep 10
           done
           echo "refresh -> $RESP"
-          echo "$RESP" | grep -q '"discovered":3' \
+          echo "$RESP" | grep -Eq '"discovered":\s*3' \
             || { echo "::error::expected 3 discovered, got: $RESP"; exit 1; }
           curl -fsS -m 10 -o /dev/null "http://$HOST/mesh-ui" \
             || { echo "::error::Mesh UI did not answer at http://$HOST/mesh-ui"; exit 1; }
