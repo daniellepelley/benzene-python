@@ -54,6 +54,13 @@ later run can tear the stack down.
 - The run's summary prints the mesh URL and fleet URLs when it finishes.
 - `destroy` removes everything it created (state is durable in S3).
 
+To tear the stack down without switching that dropdown, use
+[`Destroy Mesh (AWS)`](../../.github/workflows/destroy-mesh.yml) instead — **Actions → Destroy Mesh
+(AWS) → Run workflow** with the defaults is enough; it needs no typed confirmation phrase, unlike some
+teams' destroy pipelines. It shares the same S3 state as Deploy Mesh (AWS), so it can tear down
+anything that workflow created. Match its `deploy_fleet` input to however the stack was last deployed
+(default `true`). If nothing was ever deployed in the target account/region, it's a no-op.
+
 The rest of this file is the same flow by hand.
 
 ## Deploy (by hand)

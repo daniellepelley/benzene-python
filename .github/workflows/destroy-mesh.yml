@@ -1,0 +1,108 @@
+# Tear down the Benzene mesh in AWS — a dedicated, one-click counterpart to Deploy Mesh (AWS).
+#
+# Unlike some teams' destroy pipelines, this one asks for no typed confirmation phrase: running the
+# workflow *is* the confirmation, same as Deploy Mesh (AWS)'s own `action=destroy` option already
+# works. This workflow exists so tearing the mesh down doesn't require remembering to flip that
+# dropdown — "Run workflow" with the defaults is enough.
+#
+# Credentials come from the `test` environment, the same as Deploy Mesh (AWS) — see that workflow's
+# header for details. State lives in the same S3 bucket/key that workflow provisions, so this can
+# destroy anything it created.
+
+name: Destroy Mesh (AWS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "AWS region"
+        type: string
+        default: eu-west-1
+      deploy_fleet:
+        description: "Fleet was deployed alongside the collector (match how it was deployed)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-mesh
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    environment: test
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ inputs.region }}
+      AWS_DEFAULT_REGION: ${{ inputs.region }}
+      TF_DIR: deploy/mesh/terraform
+      TF_IN_AUTOMATION: "1"
+
+    steps:
+      - name: Check the AWS credentials arrived from the test environment
+        run: |
+          missing=0
+          [ -n "${AWS_ACCESS_KEY_ID}" ] || { echo "::error::vars.AWS_ACCESS_KEY_ID is empty — run Benzene's 'Sync Test Environment' into this repo first."; missing=1; }
+          [ -n "${AWS_SECRET_ACCESS_KEY}" ] || { echo "::error::secrets.AWS_SECRET_ACCESS_KEY is empty — run Benzene's 'Sync Test Environment' into this repo first."; missing=1; }
+          exit "${missing}"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the fleet Lambda zip
+        # Terraform's fleet Lambda resource hashes this file (filebase64sha256) even on a pure
+        # destroy, so it must exist in this run regardless of whether the fleet is being torn down.
+        run: deploy/mesh/fleet/build.sh   # -> deploy/mesh/build/fleet.zip (Terraform's var.fleet_zip default)
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"     # >= 1.10 for S3-native state locking (no DynamoDB table)
+          terraform_wrapper: false
+
+      - name: Who am I (fail early if the creds are wrong)
+        run: aws sts get-caller-identity
+
+      - name: Locate the Terraform state bucket
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          bucket="benzene-mesh-tfstate-${account}-${AWS_REGION}"
+          if ! aws s3api head-bucket --bucket "${bucket}" 2>/dev/null; then
+            echo "::notice::State bucket ${bucket} doesn't exist — nothing was ever deployed in this account/region, nothing to destroy."
+            echo "SKIP_DESTROY=1" >> "$GITHUB_ENV"
+          fi
+          echo "TFSTATE_BUCKET=${bucket}" >> "$GITHUB_ENV"
+
+      - name: Point Terraform at the S3 backend (CI only; committed config stays backend-less)
+        if: env.SKIP_DESTROY != '1'
+        run: |
+          cat > "${TF_DIR}/backend_override.tf" <<'EOF'
+          terraform {
+            backend "s3" {}
+          }
+          EOF
+
+      - name: terraform init
+        if: env.SKIP_DESTROY != '1'
+        run: |
+          terraform -chdir="${TF_DIR}" init -input=false \
+            -backend-config="bucket=${TFSTATE_BUCKET}" \
+            -backend-config="key=mesh/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="use_lockfile=true"
+
+      - name: terraform destroy
+        if: env.SKIP_DESTROY != '1'
+        run: |
+          terraform -chdir="${TF_DIR}" destroy -input=false -auto-approve \
+            -var="region=${AWS_REGION}" \
+            -var="deploy_fleet=${{ inputs.deploy_fleet }}" \
+            -var="collector_image=placeholder"
