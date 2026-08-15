@@ -1,0 +1,78 @@
+name: mesh-ui-drift-check
+
+# The mesh UI pages (mesh-ui.html — the estate view — and mesh-spec-ui.html — the service-spec viewer)
+# are a BUILD OUTPUT of the cross-language `benzene-ui` repo, vendored here VERBATIM. Consumers are not
+# JavaScript projects, so they commit the built artifact rather than run a Node toolchain to produce it —
+# the same trade the conformance fixtures make. A committed copy can drift from its source in silence,
+# which is exactly how a service page once shipped a white screen. This job keeps every vendored copy
+# honest: it fetches the canonical build outputs from benzene-ui and fails if any committed copy differs.
+#
+# It is DISCOVERY-BASED on purpose: it finds every large vendored HTML page in the repo and asserts each
+# one byte-matches one of the two canonical files. A new example or package that vendors another copy is
+# covered automatically — no path list here to fall out of date.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 6 * * 1'   # weekly, catches drift introduced on the benzene-ui side
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch canonical mesh UI from benzene-ui
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/daniellepelley/benzene-ui.git /tmp/benzene-ui
+          git -C /tmp/benzene-ui sparse-checkout set build
+          test -f /tmp/benzene-ui/build/mesh-ui.html
+          test -f /tmp/benzene-ui/build/mesh-spec-ui.html
+          echo "canonical mesh-ui.html      $(wc -c < /tmp/benzene-ui/build/mesh-ui.html) bytes"
+          echo "canonical mesh-spec-ui.html $(wc -c < /tmp/benzene-ui/build/mesh-spec-ui.html) bytes"
+
+      - name: Assert every vendored copy matches canonical
+        run: |
+          set -euo pipefail
+          canon_ui=/tmp/benzene-ui/build/mesh-ui.html
+          canon_spec=/tmp/benzene-ui/build/mesh-spec-ui.html
+          fail=0
+          found=0
+          # A vendored copy is a large HTML page carrying the page's opening tag (the exact string the
+          # host rewrites to inject its endpoints — it always survives the build verbatim). Small,
+          # hand-written HTML (e.g. a language-native lightweight view) stays well under this size.
+          while IFS= read -r f; do
+            sz=$(wc -c < "$f")
+            [ "$sz" -gt 100000 ] || continue
+            found=$((found+1))
+            if cmp -s "$canon_ui" "$f" || cmp -s "$canon_spec" "$f"; then
+              echo "ok:      $f"
+            else
+              echo "::error file=$f::mesh UI copy has drifted from benzene-ui canonical"
+              echo "drifted: $f ($sz bytes)"
+              fail=1
+            fi
+          done < <(grep -rlF '<html lang="en">' --include='*.html' . \
+                     | grep -vE '/(node_modules|\.git|bin|obj|dist|target|__pycache__|\.mesh-[a-z-]+)/' \
+                     | sort)
+
+          if [ "$found" -eq 0 ]; then
+            echo "::warning::no vendored mesh UI copies found — did a path move out from under this check?"
+          fi
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "A vendored mesh UI page has drifted from benzene-ui's build output."
+            echo "Re-vendor from a fresh benzene-ui build (npm run build in benzene-ui):"
+            echo "  cp <benzene-ui>/build/mesh-ui.html      <each vendored mesh-ui.html / estate-view index.html>"
+            echo "  cp <benzene-ui>/build/mesh-spec-ui.html <each vendored mesh-spec-ui.html / spec-ui.html>"
+            echo "The mesh UI is a build output of benzene-ui; never hand-edit a vendored copy."
+            exit 1
+          fi
+          echo ""
+          echo "All $found vendored mesh UI copies match benzene-ui canonical."
