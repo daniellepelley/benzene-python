@@ -43,6 +43,22 @@ SERVICE_TOPICS: dict[str, tuple[str, ...]] = {
     "analytics": (PAYMENT_CAPTURED_TOPIC, SHIPMENT_DISPATCHED_TOPIC),
 }
 
+#: Every topic a service *sends* (mirrors the ``sender.send_message`` calls below), keyed by service
+#: name — what ``startup.py`` declares on each service's :class:`~benzene.core.ServiceSpec`, so the
+#: ``/benzene/spec`` document the mesh pulls carries this estate's provider edges (mesh.md §2.3)
+#: rather than showing every topic with consumers and no producer. Same shape and role as
+#: ``examples/aws_lambda_mesh``'s ``SERVICE_PRODUCES`` (which declares it via an
+#: :class:`~benzene.mesh.OutboundRegistry`, because that example pushes a descriptor; this one is
+#: pull-only and needs no ``benzene.mesh`` dependency to say the same thing).
+SERVICE_PRODUCES: dict[str, tuple[str, ...]] = {
+    "orders": (PAYMENT_TAKE_TOPIC, ORDER_PLACED_TOPIC),
+    "payments": (SHIPMENT_BOOK_TOPIC, PAYMENT_CAPTURED_TOPIC),
+    "shipping": (SHIPMENT_DISPATCHED_TOPIC,),
+    "inventory": (),
+    "notifications": (),
+    "analytics": (),
+}
+
 
 # --- payloads (each just an order id — enough to route, chain, and observe) -----------------------
 

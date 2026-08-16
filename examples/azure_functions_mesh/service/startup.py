@@ -33,6 +33,7 @@ from .domain import (
     ORDER_PLACED_TOPIC,
     PAYMENT_CAPTURED_TOPIC,
     PAYMENT_TAKE_TOPIC,
+    SERVICE_PRODUCES,
     SHIPMENT_BOOK_TOPIC,
     SHIPMENT_DISPATCHED_TOPIC,
     health_checks,
@@ -114,6 +115,10 @@ class ServiceStartUp(BenzeneStartUp):
             # pull-based interrogation surface (HttpServiceSource GETs /benzene/spec + /benzene/health,
             # exactly as examples/k8s_mesh's mesh does).
             health=checks,
-            spec=ServiceSpec.derive(registry, service=name),
+            # The registry gives the topics this service *consumes* (a handler registration is a
+            # consumer, mesh.md §2.3); SERVICE_PRODUCES declares what it *sends*, so the pulled spec
+            # document carries this estate's provider edges too. Declared, never inferred from the
+            # send call sites (mesh.md §2.3) — domain.py's map is the one place they're written down.
+            spec=ServiceSpec.derive(registry, service=name, produces=SERVICE_PRODUCES[name]),
         )
         return AppDefinition(registry=registry, router=router, standard_paths=standard)

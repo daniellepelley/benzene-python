@@ -5,7 +5,8 @@ the environment decides its identity, the topic it serves, the sibling it calls 
 reports traces. Each service:
 
 - exposes ``/benzene/spec`` + ``/benzene/health`` (so the mesh collector can **poll** it — identity,
-  topics, health only; ``ServiceSpec`` has no ``consumes`` field),
+  topics, health; this fleet declares its outbound side on the pushed descriptor below rather than on
+  the polled spec, which ``ServiceSpec.derive(..., produces=...)`` can equally carry),
 - runs ``trace_middleware`` and, when ``NEXT_URL`` is set, calls the next service through a
   ``with_trace_propagation``-wrapped HTTP sender (so the ``traceparent`` crosses the hop), and
 - when ``COLLECTOR_URL`` is set, **pushes** its ``ServiceDescriptor`` — ``produces=[NEXT_TOPIC]`` when

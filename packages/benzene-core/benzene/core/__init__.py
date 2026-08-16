@@ -74,7 +74,16 @@ from .registry import (
 )
 from .router import message_router
 from .schema import Schema, json_schema
-from .spec import SPEC_TOPIC, ServiceSpec, SpecSource, TopicSpec, spec_interception
+from .spec import (
+    SPEC_TOPIC,
+    OutboundTopic,
+    ProducesSource,
+    ServiceSpec,
+    SpecSource,
+    SupportsOutboundDefinitions,
+    TopicSpec,
+    spec_interception,
+)
 from .startup import AppDefinition, BenzeneStartUp, application_from, build_application
 
 __all__ = [
@@ -117,8 +126,11 @@ __all__ = [
     "Schema",
     "json_schema",
     "SPEC_TOPIC",
+    "OutboundTopic",
+    "ProducesSource",
     "ServiceSpec",
     "SpecSource",
+    "SupportsOutboundDefinitions",
     "TopicSpec",
     "spec_interception",
     "read_message_metadata",

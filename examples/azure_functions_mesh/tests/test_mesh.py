@@ -22,7 +22,16 @@ from benzene.mesh import BlobArtifactStore
 from benzene.mesh_fleet import ServiceEndpoint
 
 from azure_functions_mesh.mesh.discovery_service import azure_service_source, run_mesh_aggregation
-from azure_functions_mesh.service.domain import SERVICE_TOPICS
+from azure_functions_mesh.service.domain import (
+    ORDER_CREATE_TOPIC,
+    ORDER_PLACED_TOPIC,
+    PAYMENT_CAPTURED_TOPIC,
+    PAYMENT_TAKE_TOPIC,
+    SERVICE_PRODUCES,
+    SERVICE_TOPICS,
+    SHIPMENT_BOOK_TOPIC,
+    SHIPMENT_DISPATCHED_TOPIC,
+)
 from azure_functions_mesh.service.startup import KNOWN_SERVICES, ServiceStartUp
 
 if TYPE_CHECKING:
@@ -160,6 +169,69 @@ def test_run_mesh_aggregation_publishes_registry_and_full_catalog_to_blob() -> N
 
     topics = {t["topic"] for t in container.blobs["mesh/topics.json"]["topics"]}
     assert topics == {topic for topics_ in SERVICE_TOPICS.values() for topic in topics_}
+
+
+def test_the_published_catalog_carries_the_whole_declared_producer_consumer_graph() -> None:
+    # The point of the estate: after one discover -> interrogate -> publish pass, every topic in the
+    # catalog must name BOTH sides — the providers each producing service declares on its
+    # /benzene/spec (SERVICE_PRODUCES, mesh.md §2.3) and the consumers derived from the handler
+    # registrations. A topic with consumers and an empty producers list means the declared provider
+    # edge never made it across the pull path, which is exactly the failure this asserts against.
+    endpoints, apps = _fleet()
+    container = _FakeContainerClient()
+    store = BlobArtifactStore(prefix="mesh", client=container)
+
+    def source_factory(endpoint: ServiceEndpoint):
+        return azure_service_source(endpoint, fetch=_fetch_via_apps(apps))
+
+    asyncio.run(
+        run_mesh_aggregation(
+            discovery=_FakeDiscovery(endpoints),
+            store=store,
+            source_factory=source_factory,
+            generated_at="2026-08-15T00:00:00+00:00",
+        )
+    )
+
+    topics = {t["topic"]: t for t in container.blobs["mesh/topics.json"]["topics"]}
+    graph = {
+        topic: (
+            [p["service"] for p in entry["producers"]],
+            [c["service"] for c in entry["consumers"]],
+        )
+        for topic, entry in topics.items()
+    }
+    assert graph == {
+        # orders' HTTP ingress: nothing in this estate declares it (a browser/curl produces it).
+        ORDER_CREATE_TOPIC: ([], ["orders"]),
+        PAYMENT_TAKE_TOPIC: (["orders"], ["payments"]),  # Service Bus, orders -> payments
+        ORDER_PLACED_TOPIC: (["orders"], ["inventory", "notifications"]),  # Event Hub fan-out
+        SHIPMENT_BOOK_TOPIC: (["payments"], ["shipping"]),  # Service Bus, payments -> shipping
+        PAYMENT_CAPTURED_TOPIC: (["payments"], ["analytics", "notifications"]),  # Event Grid
+        SHIPMENT_DISPATCHED_TOPIC: (  # Event Grid, shipping -> the three terminal consumers
+            ["shipping"],
+            ["analytics", "inventory", "notifications"],
+        ),
+    }
+
+    # ...and the same graph is what the topology document draws its service-to-service edges from.
+    edges = {
+        (edge["client"], edge["server"]) for edge in container.blobs["mesh/topology.json"]["edges"]
+    }
+    assert ("orders", "payments") in edges
+    assert ("payments", "shipping") in edges
+
+
+def test_every_interrogated_spec_document_declares_what_that_service_produces() -> None:
+    # The pull path's contract, service by service: /benzene/spec must carry `produces` for the three
+    # producers and omit it for the three terminal consumers (which genuinely send nothing).
+    apps = {name: _build_app(name) for name in KNOWN_SERVICES}
+    declared = {}
+    for name, app in apps.items():
+        document = json.loads(app.handle_http(method="GET", path="/benzene/spec").body)
+        declared[name] = [t["id"] for t in document.get("produces", [])]
+
+    assert declared == {name: sorted(SERVICE_PRODUCES[name]) for name in KNOWN_SERVICES}
 
 
 def test_run_mesh_aggregation_empty_mesh_is_zero_not_an_error() -> None:

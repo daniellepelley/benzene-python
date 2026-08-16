@@ -20,7 +20,13 @@ from benzene.core import (
     ServiceSpec,
 )
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
-from benzene.mesh import CallableServiceSource, HttpServiceSource, MeshCollector, MeshPoller
+from benzene.mesh import (
+    CallableServiceSource,
+    HttpServiceSource,
+    MeshCollector,
+    MeshPoller,
+    OutboundRegistry,
+)
 from benzene.results import Result
 
 
@@ -29,18 +35,23 @@ class Ping:
     n: int = 0
 
 
-def _service(name: str, topic: str, *, healthy: bool = True) -> BenzeneHttpApp:
+def _service(
+    name: str, topic: str, *, healthy: bool = True, produces: tuple[str, ...] = ()
+) -> BenzeneHttpApp:
     async def handler(_request: Ping) -> Result:
         return Result.ok({"pong": True})
 
     router = HttpRouter().register("POST", f"/{name}", topic, handler, request_type=Ping)
     registry = Registry.from_definitions(router)
+    outbound = OutboundRegistry()
+    for produced in produces:
+        outbound.register(produced, request_type=Ping)
     return BenzeneHttpApp(
         router,
         application=BenzeneMessageApplication(registry),
         standard_paths=StandardPaths(
             health=HealthChecks().add("core", lambda: healthy),
-            spec=ServiceSpec.derive(registry, service=name),
+            spec=ServiceSpec.derive(registry, service=name, produces=outbound),
         ),
     )
 
@@ -81,6 +92,36 @@ def test_poller_folds_a_fleet_into_the_collector() -> None:
     assert by_name["orders"]["health"] == "healthy"
     assert by_name["orders"]["topics"] == 1  # one provided topic, from the spec
     assert "orders:place" in {t["topic"] for t in fleet["topics"]}
+
+
+def test_a_pulled_spec_carries_declared_producers_into_the_graph() -> None:
+    # The pull path's half of the declared graph (mesh.md §2, §2.3): a handler registration makes a
+    # service that topic's CONSUMER, so without `produces` on the interrogated /benzene/spec document
+    # every topic in a pull-based mesh shows consumers and no provider at all. The producing service
+    # declares its outbound topics on its ServiceSpec; the poller carries them into the collector.
+    apps = {
+        "orders": _service("orders", "orders:place", produces=("inventory:reserve",)),
+        "inventory": _service("inventory", "inventory:reserve"),
+    }
+    fetch = _fleet_fetch(apps)
+    collector = MeshCollector()
+    poller = MeshPoller(
+        collector,
+        [
+            HttpServiceSource("orders", "http://orders", fetch=fetch),
+            HttpServiceSource("inventory", "http://inventory", fetch=fetch),
+        ],
+    )
+
+    asyncio.run(poller.poll_once())
+
+    reserve = collector.query_topic({"topic": "inventory:reserve"})
+    assert reserve["providers"] == ["orders"]  # declared by orders' outbound registry
+    assert reserve["consumers"] == ["inventory"]  # derived from inventory's handler registration
+    # orders' own inbound topic has a consumer and (correctly) no declared provider in this fleet.
+    place = collector.query_topic({"topic": "orders:place"})
+    assert place["providers"] == []
+    assert place["consumers"] == ["orders"]
 
 
 def test_poller_reports_an_unhealthy_service() -> None:
