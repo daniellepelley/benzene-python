@@ -33,6 +33,36 @@ from benzene.results import Result, Status
 from .events import TOPIC_PROPERTY
 
 
+def _require_config(
+    *, sender: str, injected: str, injected_value: Any, **required: str | None
+) -> None:
+    """Fail at construction when a sender has neither an injected client nor the config to build one.
+
+    Every sender here can be built two ways: hand it an already-constructed SDK client (the seam
+    tests use), or hand it the connection details and let it build one lazily on first send. Supply
+    neither - overwhelmingly because an environment variable was unset and its ``None`` went
+    straight through - and the Azure SDK used to raise from somewhere inside itself, on the *message
+    path*, with a message naming neither the Benzene class nor the argument that was missing.
+
+    Checking here instead makes it a start-up failure, which is the house style: a misconfigured
+    service should refuse to boot rather than accept traffic and fail every message with
+    ``service-unavailable``. ``send_message`` keeps its never-raise contract for everything that
+    happens after construction, because a sender that raises mid-loop would take a worker down for
+    what may be a transient broker outage.
+    """
+    if injected_value is not None:
+        return
+    missing = [name for name, value in required.items() if value is None]
+    if not missing:
+        return
+    needed = ", ".join(f"{name}=" for name in sorted(missing))
+    raise ValueError(
+        f"{sender} is missing {needed} and no {injected}= was injected, so it cannot build a "
+        f"client. Pass the missing argument(s) - if they come from environment variables, check "
+        f"those are actually set - or inject an already-built client with {injected}=."
+    )
+
+
 class ServiceBusMessageSender:
     """Sends to a Service Bus queue/topic, Benzene topic carried in ``application_properties``.
 
@@ -47,6 +77,13 @@ class ServiceBusMessageSender:
         sender: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
     ) -> None:
+        _require_config(
+            sender="ServiceBusMessageSender",
+            injected="sender",
+            injected_value=sender,
+            connection_string=connection_string,
+            entity_name=entity_name,
+        )
         self._connection_string = connection_string
         self._entity_name = entity_name
         self._sender = sender
@@ -55,7 +92,10 @@ class ServiceBusMessageSender:
     def _make_message(self, topic: str, message: Any, headers: dict[str, str] | None) -> Any:
         from azure.servicebus import ServiceBusMessage  # lazy: optional dependency
 
-        properties = {str(k): str(v) for k, v in (headers or {}).items()}
+        # Widened to the SDK's own key/value types rather than dict[str, str]: dicts are invariant,
+        # so the narrower literal type does not satisfy the parameter even though every value we
+        # put in it is a str. Only visible when the optional SDK is installed to typecheck against.
+        properties: dict[str | bytes, Any] = {str(k): str(v) for k, v in (headers or {}).items()}
         properties[TOPIC_PROPERTY] = topic
         return ServiceBusMessage(self._serialize(message), application_properties=properties)
 
@@ -63,8 +103,8 @@ class ServiceBusMessageSender:
         if self._sender is None:
             from azure.servicebus import ServiceBusClient  # lazy: optional dependency
 
-            client = ServiceBusClient.from_connection_string(self._connection_string)
-            self._sender = client.get_queue_sender(queue_name=self._entity_name)
+            client = ServiceBusClient.from_connection_string(str(self._connection_string))
+            self._sender = client.get_queue_sender(queue_name=str(self._entity_name))
         return self._sender
 
     async def send_message(
@@ -98,6 +138,14 @@ class EventHubMessageSender:
         producer: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
     ) -> None:
+        # eventhub_name is NOT required: a Service Bus/Event Hub connection string may carry the
+        # entity in its own EntityPath, and the SDK accepts None for the name in that case.
+        _require_config(
+            sender="EventHubMessageSender",
+            injected="producer",
+            injected_value=producer,
+            connection_string=connection_string,
+        )
         self._connection_string = connection_string
         self._eventhub_name = eventhub_name
         self._producer = producer
@@ -108,14 +156,15 @@ class EventHubMessageSender:
             from azure.eventhub import EventHubProducerClient  # lazy: optional dependency
 
             self._producer = EventHubProducerClient.from_connection_string(
-                conn_str=self._connection_string, eventhub_name=self._eventhub_name
+                conn_str=str(self._connection_string),
+                eventhub_name=self._eventhub_name,
             )
         return self._producer
 
     def _send_sync(self, topic: str, message: Any, headers: dict[str, str] | None) -> None:
         from azure.eventhub import EventData  # lazy: optional dependency
 
-        properties = {str(k): str(v) for k, v in (headers or {}).items()}
+        properties: dict[str | bytes, Any] = {str(k): str(v) for k, v in (headers or {}).items()}
         properties[TOPIC_PROPERTY] = topic
         event = EventData(self._serialize(message))
         event.properties = properties
@@ -159,6 +208,15 @@ class QueueStorageMessageSender:
         serializer: Callable[[Any], str] | None = None,
         base64_encode: bool = False,
     ) -> None:
+        # Two valid config shapes rather than one, so this cannot use _require_config's
+        # all-of-these rule: either a queue_url on its own, or a connection_string plus the
+        # queue_name to look up inside that account.
+        if client is None and queue_url is None and not (connection_string and queue_name):
+            raise ValueError(
+                "QueueStorageMessageSender needs either queue_url=, or both connection_string= "
+                "and queue_name=, and no client= was injected, so it cannot build a client. If "
+                "these come from environment variables, check those are actually set."
+            )
         self._queue_url = queue_url
         self._queue_name = queue_name
         self._connection_string = connection_string
@@ -183,10 +241,10 @@ class QueueStorageMessageSender:
 
             if self._connection_string is not None:
                 self._client = QueueClient.from_connection_string(
-                    self._connection_string, self._queue_name
+                    self._connection_string, str(self._queue_name)
                 )
             else:
-                self._client = QueueClient.from_queue_url(self._queue_url)
+                self._client = QueueClient.from_queue_url(str(self._queue_url))
         return self._client
 
     async def send_message(
@@ -225,6 +283,13 @@ class EventGridMessageSender:
         data_version: str = "1.0",
         cloud_events: bool = False,
     ) -> None:
+        _require_config(
+            sender="EventGridMessageSender",
+            injected="client",
+            injected_value=client,
+            topic_endpoint=topic_endpoint,
+            key=key,
+        )
         self._topic_endpoint = topic_endpoint
         self._key = key
         self._client = client
@@ -267,7 +332,7 @@ class EventGridMessageSender:
             from azure.eventgrid import EventGridPublisherClient  # lazy: optional dependency
 
             self._client = EventGridPublisherClient(
-                self._topic_endpoint, AzureKeyCredential(self._key)
+                str(self._topic_endpoint), AzureKeyCredential(str(self._key))
             )
         return self._client
 

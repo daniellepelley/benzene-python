@@ -75,16 +75,26 @@ class BlobArtifactStore:
         return f"{self._prefix}/{key}" if self._prefix else key
 
     def write(self, key: str, document: dict[str, Any]) -> None:
-        """Upload one JSON-serialized ``document`` at ``key`` (resolved against the store's prefix)."""
-        from azure.storage.blob import ContentSettings  # lazy: optional [azure] dependency
+        """Upload one JSON-serialized ``document`` at ``key`` (resolved against the store's prefix).
 
+        The blob is tagged ``application/json`` via the SDK's ``ContentSettings``, which is imported
+        lazily and only when it is importable. That conditional is what makes the injected-``client``
+        seam this class documents actually usable: a fake container client has no reason to pull in
+        the Azure SDK, and requiring it here would mean the seam could only be exercised by someone
+        who already had the real dependency installed - which is not a seam at all. When the SDK is
+        absent the kwarg is simply omitted; when it is present (the only way to hold a real
+        ``ContainerClient``) the upload is byte-for-byte what it always was.
+        """
         body = json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8")
-        self._container().upload_blob(
-            self._key(key),
-            body,
-            overwrite=True,
-            content_settings=ContentSettings(content_type="application/json"),
-        )
+        kwargs: dict[str, Any] = {}
+        try:
+            from azure.storage.blob import ContentSettings  # lazy: optional [azure] dependency
+        except ImportError:
+            pass
+        else:
+            kwargs["content_settings"] = ContentSettings(content_type="application/json")
+
+        self._container().upload_blob(self._key(key), body, overwrite=True, **kwargs)
 
 
 def write_artifacts_to_blob(
