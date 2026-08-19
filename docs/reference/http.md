@@ -161,11 +161,36 @@ result = await sender.send_message("orders:place", {"sku": "A"}, headers={"x-cor
   it with a fake and no network. The default (`stdlib_transport()`) uses `urllib` on a worker thread, so
   the sender needs **no extra dependency**; inject an `httpx`-backed transport for pooling in production.
 
+## Serving it alongside another transport
+
+`BenzeneHttpApp` is a plain ASGI app, so the ordinary way to run it is `uvicorn my_service:app` — that
+stays the right answer for an HTTP-only service. For a process that serves HTTP **and** polls a queue,
+the server has to run as one leg of a [`benzene.core.WorkerHost`](core.md#workerhost--running-n-transports-in-one-process):
+
+```python
+from benzene.http import asgi_server_worker, uvicorn_worker
+
+WorkerHost().add("http", uvicorn_worker(app, port=8080, access_log=False))
+
+# one level down: build the server yourself, then adapt it
+server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=8080))
+WorkerHost().add("http", asgi_server_worker(server))
+```
+
+- `uvicorn_worker(app, *, host="0.0.0.0", port=8080, **uvicorn_config)` builds
+  `uvicorn.Server(uvicorn.Config(...))` — `**uvicorn_config` is forwarded verbatim — and hands it to
+  `asgi_server_worker`. That is all it does. Needs the optional extra:
+  `pip install "benzene-http[uvicorn]"`; the error names the extra and the rung below if it is absent,
+  and it is raised when the worker is built, not on the first request.
+- `asgi_server_worker(server)` supervises any server exposing `await serve()` and a settable
+  `should_exit` (`SupportsAsgiServing`) — uvicorn's own shutdown flag, so a sibling leg stopping ends
+  `serve()`, and a signal ending `serve()` winds the siblings down.
+
 ## Exports
 
 `BenzeneHttpApp`, `HttpResponse`, `HttpRouter`, `HttpEndpoint`, `http_endpoint`, `routes_of`,
 `to_http`, `from_http`, `HttpMessageSender`, `HttpReply`, `HttpTransport`, `stdlib_transport`,
-`StandardPaths`, `DEFAULT_PREFIX`.
+`StandardPaths`, `DEFAULT_PREFIX`, `uvicorn_worker`, `asgi_server_worker`, `SupportsAsgiServing`.
 
 ## See also
 

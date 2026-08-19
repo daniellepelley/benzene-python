@@ -30,6 +30,8 @@ from typing import Any
 from benzene.core import (
     AppDefinition,
     BenzeneMessageApplication,
+    StopSignal,
+    Worker,
     application_from,
     read_message_metadata,
 )
@@ -128,3 +130,41 @@ async def run_sqs_consumer_loop(
                 await asyncio.to_thread(
                     client.delete_message, QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
                 )
+
+
+def sqs_consumer_worker(
+    app: SqsConsumerApp,
+    client: Any,
+    queue_url: str,
+    **loop_options: Any,
+) -> Worker:
+    """This consumer as one leg of a :class:`~benzene.core.WorkerHost` — for SQS *alongside* HTTP.
+
+    Reach for this only when the process runs more than one transport; a queue-only worker just
+    awaits :func:`run_sqs_consumer_loop` directly and needs nothing from here.
+
+    **The explicit form this composes** is two lines you can write yourself, and it is the whole
+    implementation — there is no privileged path::
+
+        async def worker(stop):
+            await run_sqs_consumer_loop(app, client, queue_url,
+                                        should_continue=stop.should_continue)
+
+    ``**loop_options`` are passed straight through to :func:`run_sqs_consumer_loop`
+    (``wait_time_seconds``, ``delete``, ``on_result``, ...), so anything you can do there you can do
+    here. Passing ``should_continue`` is refused: the host owns that, and silently ignoring your
+    callback would be worse than saying so.
+    """
+    if "should_continue" in loop_options:
+        raise TypeError(
+            "sqs_consumer_worker() does not take should_continue - the WorkerHost supplies it, so "
+            "one leg finishing winds the others down. To bound the loop yourself, call "
+            "run_sqs_consumer_loop(app, client, queue_url, should_continue=...) directly instead."
+        )
+
+    async def worker(stop: StopSignal) -> None:
+        await run_sqs_consumer_loop(
+            app, client, queue_url, should_continue=stop.should_continue, **loop_options
+        )
+
+    return worker

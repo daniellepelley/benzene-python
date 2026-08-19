@@ -148,3 +148,35 @@ class Scope:
         if service is None:
             raise ServiceNotRegisteredError(key)
         return service
+
+
+def use_instance(key: Any, instance: Any) -> Callable[[Container], None]:
+    """An override that swaps in one ready-made instance — for ``build_application(overrides=[...])``.
+
+    A host's job is usually to boot the shared composition root with exactly one thing changed: the
+    real outbound client for its transport. Saying that takes a named closure whose whole body is a
+    single registration, so this is that closure.
+
+    **The explicit form this composes** is the closure itself, which remains the thing to write the
+    moment a host needs to register more than one service, or anything other than a fixed instance::
+
+        def use_sns(services: Container) -> None:
+            services.add_instance(MessageSender, SnsMessageSender(topic_arn))
+
+        definition, _ = build_application(OrdersStartUp, overrides=[use_sns])
+
+    becomes::
+
+        definition, _ = build_application(
+            OrdersStartUp,
+            overrides=[use_instance(MessageSender, SnsMessageSender(topic_arn))],
+        )
+
+    Overrides run after the startup's own ``configure_services`` and last registration wins, so this
+    replaces whatever the composition root registered under ``key`` — see :func:`build_application`.
+    """
+
+    def override(services: Container) -> None:
+        services.add_instance(key, instance)
+
+    return override

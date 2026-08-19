@@ -2,8 +2,9 @@
 
 The middle layer of the Benzene Python port (distribution ``benzene-core``): the handler registry
 and ``@message`` decorator, the middleware pipeline, the per-invocation DI container, request/
-response mapping, the message-router terminal middleware, and the ``BenzeneMessageApplication``
-envelope entry point. Depends only on ``benzene-results``.
+response mapping, the message-router terminal middleware, the ``BenzeneMessageApplication``
+envelope entry point, plus :class:`WorkerHost` for running several transports in one process.
+Depends only on ``benzene-results``.
 
 Install this to run handlers through the transport-neutral ``BenzeneMessage`` envelope without
 pulling in any specific transport binding:
@@ -20,7 +21,13 @@ from __future__ import annotations
 from .casting import Cast, NoCastPathError, SchemaCasters, casting_handler
 from .clients import MessageSender
 from .context import Context
-from .dependencies import Container, Lifetime, Scope, ServiceNotRegisteredError
+from .dependencies import (
+    Container,
+    Lifetime,
+    Scope,
+    ServiceNotRegisteredError,
+    use_instance,
+)
 from .envelope import (
     VERSION_HEADER,
     VERSION_HEADER_NAMES,
@@ -85,6 +92,14 @@ from .spec import (
     spec_interception,
 )
 from .startup import AppDefinition, BenzeneStartUp, application_from, build_application
+from .worker import (
+    DuplicateWorkerError,
+    NoWorkersError,
+    StopSignal,
+    Worker,
+    WorkerHost,
+    background_worker,
+)
 
 __all__ = [
     "BenzeneMessageApplication",
@@ -160,4 +175,11 @@ __all__ = [
     "to_camel",
     "to_jsonable",
     "to_request",
+    "use_instance",
+    "DuplicateWorkerError",
+    "NoWorkersError",
+    "StopSignal",
+    "Worker",
+    "WorkerHost",
+    "background_worker",
 ]

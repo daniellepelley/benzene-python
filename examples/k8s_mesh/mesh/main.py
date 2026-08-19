@@ -1,5 +1,5 @@
-"""Container entrypoint for the mesh service: serve the mesh API/UI and re-run discovery on an
-interval (the Kubernetes analogue of .NET's ``MeshAggregationBackgroundService``), so the catalog stays
+"""Container entrypoint for the mesh service: two legs on one :class:`~benzene.core.WorkerHost` —
+serve the mesh API/UI, and re-run discovery on an interval (the Kubernetes analogue of .NET's ``MeshAggregationBackgroundService``), so the catalog stays
 fresh without anyone hitting ``POST /mesh/refresh``. A discovery/poll hiccup is swallowed and retried
 next tick — never lets a transient API or interrogation error crash the mesh pod.
 
@@ -11,6 +11,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+
+from benzene.core import WorkerHost, background_worker
+from benzene.http import uvicorn_worker
 
 from .discovery_service import MeshDiscoveryService
 from .host import build_mesh_host
@@ -25,22 +28,18 @@ async def _run_discovery_loop(discovery_service: MeshDiscoveryService) -> None:
         await asyncio.sleep(_INTERVAL_SECONDS)
 
 
-async def main() -> None:
-    import uvicorn  # a container-only dependency, imported lazily (matches deploy/mesh/collector)
-
+def build_worker_host() -> WorkerHost:
+    """The mesh API/UI surface, plus the discovery loop that keeps the catalog fresh."""
     host = build_mesh_host()
-    port = int(os.environ.get("PORT", "8080"))
-    server = uvicorn.Server(
-        uvicorn.Config(host.app, host="0.0.0.0", port=port, access_log=False)  # noqa: S104
+    return (
+        WorkerHost()
+        .add(
+            "http",
+            uvicorn_worker(host.app, port=int(os.environ.get("PORT", "8080")), access_log=False),
+        )
+        .add("discovery", background_worker(lambda: _run_discovery_loop(host.discovery_service)))
     )
-    poll_task = asyncio.create_task(_run_discovery_loop(host.discovery_service))
-    try:
-        await server.serve()
-    finally:
-        poll_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await poll_task
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == "__main__":  # pragma: no cover - the real container entry point
+    asyncio.run(build_worker_host().run())

@@ -66,8 +66,8 @@ topic as one generic method, the domain's `POST /orders` / `GET /orders/{id}` ro
 Deployment, all mounting the *same* `orders_domain`. See
 [docs/getting-started-kubernetes.md](../docs/getting-started-kubernetes.md) for why that's worth
 doing (a queue or stream is where Benzene earns its keep even as the *only* transport a service has;
-HTTP alone doesn't need it) and how `asyncio.gather` safely combines uvicorn with the SQS/Kafka
-consumer loops.
+HTTP alone doesn't need it) and how `benzene.core.WorkerHost` runs uvicorn alongside the SQS/Kafka
+consumer loops with one coordinated shutdown.
 
 ## On Kubernetes: the multi-service mesh estate
 

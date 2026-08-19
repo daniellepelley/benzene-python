@@ -12,25 +12,32 @@ three transports from **one** running process:
         Kafka topic ─────────┘         (app.py)                    (OrdersStartUp)
 ```
 
-Nothing in `orders_domain` knows which transport called it. That's the point: `app.py` runs uvicorn,
-the SQS consumer loop, and the Kafka consumer loop together on one asyncio event loop, all
-dispatching into the same composition root — a plain ASGI app alone gives you the HTTP leg; Benzene
-gives you all three from one composition root, one image, one Deployment.
+Nothing in `orders_domain` knows which transport called it. That's the point: `app.py` declares three
+legs on one [`WorkerHost`](../../packages/benzene-core/benzene/core/worker.py) — uvicorn, the SQS
+consumer loop, and the Kafka consumer loop, sharing one asyncio event loop and dispatching into the
+same composition root. A plain ASGI app alone gives you the HTTP leg; Benzene gives you all three from
+one composition root, one image, one Deployment.
 
 ## Files
 
 | Path | What it is |
 |---|---|
-| `app.py` | the one entry point - builds all three apps (`build_http_orders_app`/`build_sqs_orders_app`/`build_kafka_orders_app`, reused unmodified from their own examples) and runs uvicorn + both consumer loops together via `asyncio.gather` |
+| `app.py` | the one entry point - builds all three apps (`build_http_orders_app`/`build_sqs_orders_app`/`build_kafka_orders_app`, reused unmodified from their own examples) and adds each as a leg of a `WorkerHost` |
 | `Dockerfile` | one image installing `benzene-http`+`uvicorn`, `benzene-aws[boto3]`, and `benzene-kafka[kafka]` together |
 | `k8s/` | one Deployment + Service + a kustomize base, pointed at a real SQS queue pair and Kafka cluster via env vars - no bundled infra |
 | `compose/` | `docker-compose.yml` - LocalStack (SQS) + a throwaway Kafka broker + the one service, for a credential-free local run |
 
-`app.py`'s own module docstring explains the one thing worth knowing before copying this pattern:
+`WorkerHost` owns the coordination this example used to hand-write: whichever leg finishes first —
+a clean SIGTERM or a crash — winds the others down, `run()` waits for them all, and a crash is
+re-raised so the pod exits non-zero and Kubernetes restarts it. It is a shorthand for an
+`asyncio.gather` with a shared stop flag, and
+[`benzene/core/worker.py`](../../packages/benzene-core/benzene/core/worker.py) shows that explicit
+form in full — drop to it whenever you want different shutdown semantics.
+
+The one thing worth knowing before copying this pattern is why sharing an event loop is safe at all:
 `run_sqs_consumer_loop`/`run_consumer_loop` run their `boto3`/`confluent-kafka` calls via
-`asyncio.to_thread` internally, specifically so they can share an event loop with uvicorn without
-starving it — see [Getting Started: Benzene on
-Kubernetes](../../docs/getting-started-kubernetes.md) for why that matters.
+`asyncio.to_thread` internally, specifically so they never starve uvicorn — see [Getting Started:
+Benzene on Kubernetes](../../docs/getting-started-kubernetes.md) for why that matters.
 
 ## Run it locally (no Kubernetes, no cloud account)
 

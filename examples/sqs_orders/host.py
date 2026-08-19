@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 
 from benzene.aws import SqsConsumerApp, SqsMessageSender, run_sqs_consumer_loop
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from orders_domain import OrdersStartUp
 
 
@@ -47,10 +47,8 @@ def build_sqs_orders_app() -> SqsConsumerApp:
             "SQS host (tests use create_test_host instead)."
         )
 
-    def use_sqs(services: Container) -> None:
-        services.add_instance(MessageSender, SqsMessageSender(events_queue_url, client=_sqs_client()))
-
-    definition, _ = build_application(OrdersStartUp, overrides=[use_sqs])
+    sender = SqsMessageSender(events_queue_url, client=_sqs_client())
+    definition, _ = build_application(OrdersStartUp, overrides=[use_instance(MessageSender, sender)])
     return SqsConsumerApp.from_definition(definition)
 
 

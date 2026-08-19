@@ -24,7 +24,7 @@ from benzene.azure import (
     EventHubMessageSender,
     ServiceBusMessageSender,
 )
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from benzene.results import Result, Status
 
 from .startup import ServiceStartUp
@@ -113,8 +113,8 @@ def build_service_app(env: Mapping[str, str] | None = None) -> AzureFunctionsApp
             "Set SERVICE_NAME to run the Azure host (tests use create_test_host instead)."
         )
 
-    def use_production_sender(services: Container) -> None:
-        services.add_instance(MessageSender, _production_sender(service_name, env))
-
-    definition, _ = build_application(ServiceStartUp(service_name), overrides=[use_production_sender])
+    definition, _ = build_application(
+        ServiceStartUp(service_name),
+        overrides=[use_instance(MessageSender, _production_sender(service_name, env))],
+    )
     return AzureFunctionsApp.from_definition(definition)

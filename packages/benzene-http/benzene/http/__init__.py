@@ -27,6 +27,7 @@ from __future__ import annotations
 from .app import BenzeneHttpApp, HttpResponse
 from .client import HttpMessageSender, HttpReply, HttpTransport, UrlFor, stdlib_transport
 from .routing import HttpEndpoint, HttpRouter, http_endpoint, routes_of
+from .serving import SupportsAsgiServing, asgi_server_worker, uvicorn_worker
 from .standard import DEFAULT_PREFIX, StandardPaths
 from .status import from_http, to_http
 
@@ -40,10 +41,13 @@ __all__ = [
     "HttpRouter",
     "HttpTransport",
     "StandardPaths",
+    "SupportsAsgiServing",
     "UrlFor",
+    "asgi_server_worker",
     "from_http",
     "http_endpoint",
     "routes_of",
     "stdlib_transport",
     "to_http",
+    "uvicorn_worker",
 ]

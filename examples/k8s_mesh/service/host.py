@@ -18,7 +18,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from benzene.http import BenzeneHttpApp
 from benzene.mesh import (
     MeshFeedSender,
@@ -57,13 +57,12 @@ def build_service_host(env: Mapping[str, str] | None = None) -> ServiceHost:
     collector_url = env.get("MESH_COLLECTOR_ENVELOPE_URL") or None
     instance_id = env.get("HOSTNAME", name)  # Kubernetes sets HOSTNAME to the pod name
 
-    def use_downstream_sender(services: Container) -> None:
-        sender: MessageSender = (
-            EnvelopeHttpMessageSender(downstream_url) if downstream_url else NullMessageSender()
-        )
-        services.add_instance(MessageSender, sender)
-
-    definition, scope = build_application(ServiceStartUp(name), overrides=[use_downstream_sender])
+    sender: MessageSender = (
+        EnvelopeHttpMessageSender(downstream_url) if downstream_url else NullMessageSender()
+    )
+    definition, scope = build_application(
+        ServiceStartUp(name), overrides=[use_instance(MessageSender, sender)]
+    )
     app = BenzeneHttpApp.from_definition(definition)
 
     reporter: MeshReporter | None = None

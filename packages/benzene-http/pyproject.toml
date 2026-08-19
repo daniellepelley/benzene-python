@@ -25,6 +25,12 @@ classifiers = [
 ]
 dependencies = ["benzene-core>=0.1.0b1"]
 
+[project.optional-dependencies]
+# Only needed by benzene.http.uvicorn_worker (serving HTTP as one leg of a WorkerHost). The
+# binding itself is a plain ASGI app and requires no server: "uvicorn my_service:app" works with
+# uvicorn installed however you like, and benzene.http.asgi_server_worker takes any server object.
+uvicorn = ["uvicorn>=0.27"]
+
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"
 Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"

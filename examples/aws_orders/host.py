@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 
 from benzene.aws import AwsLambdaApp, SnsMessageSender
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from orders_domain import OrdersStartUp
 
 
@@ -22,8 +22,7 @@ def build_aws_orders_app() -> AwsLambdaApp:
             "Set BENZENE_SNS_TOPIC_ARN to run the AWS host (tests use create_test_host instead)."
         )
 
-    def use_sns(services: Container) -> None:
-        services.add_instance(MessageSender, SnsMessageSender(topic_arn))
-
-    definition, _ = build_application(OrdersStartUp, overrides=[use_sns])
+    definition, _ = build_application(
+        OrdersStartUp, overrides=[use_instance(MessageSender, SnsMessageSender(topic_arn))]
+    )
     return AwsLambdaApp.from_definition(definition)

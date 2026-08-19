@@ -25,7 +25,7 @@ from benzene.aws import (
     SnsMessageSender,
     SqsMessageSender,
 )
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from benzene.mesh import MeshFeedSender, QueueTraceExporter, S3TraceInbox, with_trace_propagation
 from benzene.results import Result, Status
 
@@ -117,10 +117,10 @@ def build_service(env: Mapping[str, str] | None = None) -> ServiceLambda:
             "Set SERVICE_NAME to run the AWS host (tests use create_test_host instead)."
         )
 
-    def use_production_sender(services: Container) -> None:
-        services.add_instance(MessageSender, _production_sender(service_name, env))
-
-    definition, scope = build_application(ServiceStartUp(service_name), overrides=[use_production_sender])
+    definition, scope = build_application(
+        ServiceStartUp(service_name),
+        overrides=[use_instance(MessageSender, _production_sender(service_name, env))],
+    )
     app = AwsLambdaApp.from_definition(definition)
     exporter = scope.get_service(QueueTraceExporter)
 

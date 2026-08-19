@@ -1,7 +1,7 @@
 """Container entrypoint for the Mesh Host: serve the mesh API and poll the fleet on a timer.
 
-Runs uvicorn with ``lifespan="off"`` and the poll loop as a sibling task in the same event loop, so
-no ASGI-lifespan wrapper is needed — ``BenzeneHttpApp`` only ever sees ``http`` scopes.
+Two legs on one :class:`~benzene.core.WorkerHost`: uvicorn with ``lifespan="off"`` (so no ASGI-lifespan
+wrapper is needed — ``BenzeneHttpApp`` only ever sees ``http`` scopes) and the fleet poll loop.
 
 When ``MESH_ARTIFACTS_DIR`` is set, the host also (re)publishes the mesh-ui artifacts after each poll
 sweep and serves them — plus the vendored ``mesh-ui.html`` — under ``/mesh-ui/``.
@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from benzene.core import WorkerHost, background_worker
+from benzene.http import uvicorn_worker
 from benzene.mesh import MeshCollector, write_artifacts
 
 from .config import MeshConfig, load_config
@@ -42,14 +44,12 @@ def _artifact_writer(host: MeshHost, config: MeshConfig):
     return write
 
 
-async def serve() -> None:
-    import uvicorn  # a container-only dependency (see requirements.txt), imported lazily
-
+def build_worker_host() -> WorkerHost:
+    """The mesh API surface, plus the fleet poll loop that keeps its catalog fresh."""
     config = load_config()
     # With a store configured, the collector rehydrates the last snapshot on construction.
     collector = MeshCollector(store=config.store) if config.store else None
     host = build_mesh_host(config.sources, collector=collector)
-    port = int(os.environ.get("PORT", "8080"))
 
     app: Any = host.app  # BenzeneHttpApp, optionally wrapped by the static UI server below
     after_sweep = None
@@ -58,24 +58,22 @@ async def serve() -> None:
         after_sweep()  # publish once up front so the UI has data before the first interval elapses
         app = StaticUiApp(app, ui_html=_UI_HTML, artifacts_dir=Path(config.artifacts_dir))
 
-    server = uvicorn.Server(
-        uvicorn.Config(app, host="0.0.0.0", port=port, lifespan="off", access_log=False)  # noqa: S104
-    )
-    poll_task = asyncio.create_task(
-        run_poll_loop(
-            host.poller,
-            interval_seconds=config.poll_interval_seconds,
-            after_sweep=after_sweep,
+    port = int(os.environ.get("PORT", "8080"))
+
+    async def poll() -> None:
+        await run_poll_loop(
+            host.poller, interval_seconds=config.poll_interval_seconds, after_sweep=after_sweep
         )
+
+    return (
+        WorkerHost()
+        .add("http", uvicorn_worker(app, port=port, lifespan="off", access_log=False))
+        .add("fleet-poll", background_worker(poll))
     )
-    try:
-        await server.serve()
-    finally:
-        poll_task.cancel()
 
 
 def main() -> None:
-    asyncio.run(serve())
+    asyncio.run(build_worker_host().run())
 
 
 if __name__ == "__main__":

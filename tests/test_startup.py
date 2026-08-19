@@ -17,6 +17,7 @@ from benzene.core import (
     Registry,
     Scope,
     build_application,
+    use_instance,
 )
 from benzene.results import Result, Status
 from benzene.testing import InMemoryBenzeneHost
@@ -64,6 +65,17 @@ def test_with_services_override_wins_over_startup_defaults() -> None:
     )
     # The overridden dependency is what the handler resolves — the fake-injection seam works.
     assert _greet(definition, "sam") == {"message": "hi sam"}
+
+
+def test_use_instance_is_the_named_closure_every_host_used_to_write() -> None:
+    # The shorthand and the closure it composes must be interchangeable, or the ladder is a fiction.
+    by_hand, _ = build_application(
+        GreetStartUp, overrides=[lambda c: c.add_instance(Greeter, Greeter("hi"))]
+    )
+    by_shorthand, _ = build_application(
+        GreetStartUp, overrides=[use_instance(Greeter, Greeter("hi"))]
+    )
+    assert _greet(by_shorthand, "sam") == _greet(by_hand, "sam") == {"message": "hi sam"}
 
 
 def test_with_config_layers_onto_startup() -> None:

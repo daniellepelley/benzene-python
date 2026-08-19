@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from benzene.http import BenzeneHttpApp, HttpMessageSender
 from orders_domain import OrdersStartUp
 
@@ -31,8 +31,7 @@ def build_http_orders_app() -> BenzeneHttpApp:
             "HTTP host (tests use create_test_host instead)."
         )
 
-    def use_http_sender(services: Container) -> None:
-        services.add_instance(MessageSender, HttpMessageSender(events_url))
-
-    definition, _ = build_application(OrdersStartUp, overrides=[use_http_sender])
+    definition, _ = build_application(
+        OrdersStartUp, overrides=[use_instance(MessageSender, HttpMessageSender(events_url))]
+    )
     return BenzeneHttpApp.from_definition(definition)

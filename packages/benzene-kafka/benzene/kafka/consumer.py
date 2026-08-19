@@ -22,6 +22,8 @@ from typing import Any, Protocol
 from benzene.core import (
     AppDefinition,
     BenzeneMessageApplication,
+    StopSignal,
+    Worker,
     application_from,
     read_message_metadata,
 )
@@ -131,3 +133,100 @@ async def run_consumer_loop(
         # At-least-once: commit only a successful outcome, so a failed record is redelivered, not lost.
         if commit and result.is_successful:
             await asyncio.to_thread(consumer.commit, message=message)
+
+
+def build_kafka_consumer(
+    *,
+    bootstrap_servers: str,
+    group_id: str,
+    topics: list[str],
+    auto_offset_reset: str = "earliest",
+    **config: Any,
+) -> Any:
+    """Build and subscribe a ``confluent_kafka.Consumer`` configured to match this binding's loop.
+
+    The one setting worth calling out is ``enable.auto.commit=False``. It is not a preference: it is
+    what makes :func:`run_consumer_loop`'s at-least-once rule true, because the loop commits the
+    offset itself and only after a **successful** result. Auto-commit on, and a record that failed
+    would have its offset committed anyway and never be redelivered. Getting that wrong is silent,
+    so this builder gets it right by default.
+
+    **The explicit form this composes** — still the thing to write when you want different broker
+    settings, and equally supported — is the ``confluent-kafka`` constructor directly::
+
+        consumer = Consumer({
+            "bootstrap.servers": ..., "group.id": ...,
+            "enable.auto.commit": False, "auto.offset.reset": "earliest",
+        })
+        consumer.subscribe(topics)
+
+    Any extra ``**config`` is merged in, using ``confluent-kafka``'s own dotted key names, and wins
+    over the defaults above — including ``enable.auto.commit``, if you really mean it.
+    """
+    try:
+        from confluent_kafka import Consumer
+    except ImportError as error:  # pragma: no cover - exercised only without the optional SDK
+        raise ImportError(
+            "build_kafka_consumer() needs the confluent-kafka SDK, which is an optional extra of "
+            "benzene-kafka. Install it with: pip install 'benzene-kafka[kafka]'."
+        ) from error
+
+    settings: dict[str, Any] = {
+        "bootstrap.servers": bootstrap_servers,
+        "group.id": group_id,
+        # The loop commits on success (at-least-once); auto-commit would defeat redelivery.
+        "enable.auto.commit": False,
+        "auto.offset.reset": auto_offset_reset,
+    }
+    settings.update(config)
+    consumer = Consumer(settings)
+    consumer.subscribe(topics)
+    return consumer
+
+
+def kafka_consumer_worker(
+    app: KafkaConsumerApp,
+    consumer: Any,
+    *,
+    close: bool = True,
+    **loop_options: Any,
+) -> Worker:
+    """This consumer as one leg of a :class:`~benzene.core.WorkerHost` — for Kafka *alongside* HTTP.
+
+    Reach for this only when the process runs more than one transport; a Kafka-only worker just
+    awaits :func:`run_consumer_loop` directly and needs nothing from here.
+
+    **The explicit form this composes** is a handful of lines you can write yourself, and it is the
+    whole implementation — there is no privileged path::
+
+        async def worker(stop):
+            try:
+                await run_consumer_loop(app, consumer, should_continue=stop.should_continue)
+            finally:
+                consumer.close()      # leave the group promptly rather than waiting for the timeout
+
+    ``close`` owns that ``finally``: on by default because a consumer left open holds its partition
+    assignment until the session times out, which delays every rebalance. Pass ``close=False`` when
+    the consumer outlives the worker and you close it yourself.
+
+    ``**loop_options`` are passed straight through to :func:`run_consumer_loop` (``poll_timeout``,
+    ``commit``, ``on_result``, ...). Passing ``should_continue`` is refused: the host owns that, and
+    silently ignoring your callback would be worse than saying so.
+    """
+    if "should_continue" in loop_options:
+        raise TypeError(
+            "kafka_consumer_worker() does not take should_continue - the WorkerHost supplies it, so "
+            "one leg finishing winds the others down. To bound the loop yourself, call "
+            "run_consumer_loop(app, consumer, should_continue=...) directly instead."
+        )
+
+    async def worker(stop: StopSignal) -> None:
+        try:
+            await run_consumer_loop(
+                app, consumer, should_continue=stop.should_continue, **loop_options
+            )
+        finally:
+            if close:
+                consumer.close()
+
+    return worker

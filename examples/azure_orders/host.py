@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 
 from benzene.azure import AzureFunctionsApp, ServiceBusMessageSender
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from orders_domain import OrdersStartUp
 
 
@@ -24,11 +24,8 @@ def build_azure_orders_app() -> AzureFunctionsApp:
             "(tests use create_test_host instead)."
         )
 
-    def use_service_bus(services: Container) -> None:
-        services.add_instance(
-            MessageSender,
-            ServiceBusMessageSender(connection_string=connection, entity_name=entity),
-        )
-
-    definition, _ = build_application(OrdersStartUp, overrides=[use_service_bus])
+    sender = ServiceBusMessageSender(connection_string=connection, entity_name=entity)
+    definition, _ = build_application(
+        OrdersStartUp, overrides=[use_instance(MessageSender, sender)]
+    )
     return AzureFunctionsApp.from_definition(definition)

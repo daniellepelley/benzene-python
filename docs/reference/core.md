@@ -112,6 +112,21 @@ service needs the scope. The `try_add_*` variants accept all three the same way.
 Lifetimes: `Lifetime.SINGLETON`, `SCOPED`, `TRANSIENT`. Keys are arbitrary tokens (typically a
 `type` or a `str`).
 
+`use_instance(key, instance)` is the shorthand for the commonest override a host writes — swap in one
+ready-made service before the app is wired:
+
+```python
+from benzene.core import MessageSender, build_application, use_instance
+
+definition, _ = build_application(
+    OrdersStartUp, overrides=[use_instance(MessageSender, SqsMessageSender(queue_url))]
+)
+```
+
+It returns exactly the closure it replaces (`lambda services: services.add_instance(key, instance)`),
+so write that closure directly the moment a host needs to register more than one service. See
+[Composition root](#composition-root) for how `overrides` are applied.
+
 > The DI container mirrors .NET's `Benzene.Dependencies`; it is folded into `benzene.core` rather
 > than shipped separately (the C# split existed for assembly isolation, which Python does not need).
 
@@ -402,6 +417,54 @@ process-wide singleton), so two targets can legitimately both handle the literal
 zero collision. See `benzene.core.inprocess`'s module docstring for the full port-divergence
 rationale.
 
+## `WorkerHost` — running N transports in one process
+
+A service that speaks more than one transport has to start several things that never return on their
+own, make whichever one finishes first wind the others down, and still exit non-zero if one crashed.
+That is framework work, so `WorkerHost` does it:
+
+```python
+from benzene.core import WorkerHost, background_worker
+from benzene.aws import sqs_consumer_worker
+from benzene.http import uvicorn_worker
+from benzene.kafka import kafka_consumer_worker
+
+await (
+    WorkerHost()
+    .add("http", uvicorn_worker(http_app, port=8080))
+    .add("sqs", sqs_consumer_worker(sqs_app, sqs_client, queue_url))
+    .add("kafka", kafka_consumer_worker(kafka_app, consumer))
+    .run()
+)
+```
+
+- `WorkerHost(*, shutdown_timeout=30.0)` — `add(name, worker)` registers one leg (returns `self`, so
+  it chains); a repeated name raises `DuplicateWorkerError` there and then. `run()` starts every leg
+  concurrently with a shared `StopSignal`, and returns only once **all** of them have finished; a leg
+  that has not noticed the stop signal within `shutdown_timeout` is cancelled rather than left to
+  hang. If any leg raised, the first such exception is re-raised after the orderly shutdown, so the
+  process exits non-zero for an orchestrator to restart. `run()` with no legs raises `NoWorkersError`
+  at start-up — never a process that boots healthy and handles nothing. `host.stop` is the shared
+  signal, so anything can wind the whole host down.
+- A **`Worker`** is just `async def worker(stop: StopSignal) -> None` — no base class. `StopSignal`
+  wraps an `asyncio.Event` and adds `should_continue()`, which drops straight into the consumer
+  loops' `should_continue=` parameter.
+- `background_worker(start)` adapts the other shape of long-lived leg: a `while True:` loop whose
+  shutdown is *cancellation* (a poller, a reporter, a refresh timer). `start` is a callable returning
+  the coroutine, so nothing is scheduled until the host runs.
+
+`WorkerHost` is a shorthand for an `asyncio.gather` over the transports' own loop functions with a
+shared `asyncio.Event` threaded through their `should_continue` parameters — that explicit form is
+written out in full in `benzene/core/worker.py`'s module docstring, and remains the thing to write
+when you want different shutdown semantics. The loop functions themselves
+(`benzene.aws.run_sqs_consumer_loop`, `benzene.kafka.run_consumer_loop`) are unchanged and still
+callable directly: a queue-only service needs no host at all.
+
+`run()` starts no threads and installs no signal handlers, deliberately — `uvicorn.Server.serve()`
+owns SIGINT/SIGTERM on the main thread, and that only works if nothing takes it away. It also cannot
+make a blocking SDK call safe: sharing one event loop works because the consumer loops route their
+`boto3`/`confluent-kafka` calls through `asyncio.to_thread` themselves.
+
 ## Exports
 
 `BenzeneMessageApplication`, `Container`, `Context`, `DuplicateHandlerError`, `Handler`,
@@ -417,7 +480,9 @@ rationale.
 `RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `SchemaCasters`,
 `casting_handler`, `Cast`, `NoCastPathError`, `ServiceSpec`, `TopicSpec`, `spec_interception`,
 `SPEC_TOPIC`, `json_schema`, `Schema`, `to_jsonable`, `to_request`, `Pipelines`,
-`InProcessMessageSender`, `InProcessFanOutSender`, `DuplicatePipelineError`, `PipelineNotFoundError`.
+`InProcessMessageSender`, `InProcessFanOutSender`, `DuplicatePipelineError`, `PipelineNotFoundError`,
+`use_instance`, `WorkerHost`, `StopSignal`, `Worker`, `background_worker`, `NoWorkersError`,
+`DuplicateWorkerError`.
 
 ## See also
 

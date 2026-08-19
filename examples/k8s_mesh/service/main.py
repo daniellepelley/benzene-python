@@ -1,9 +1,9 @@
 """Container entrypoint for a domain service (orders/payments/shipping, selected by ``MESH_SERVICE``).
 
-Runs uvicorn (the HTTP + envelope surface) and, when a collector is configured
-(``MESH_COLLECTOR_ENVELOPE_URL``), the mesh reporter's background loop together on one event loop —
-mirrors ``deploy/mesh/collector/main.py``'s ``poll_task`` pattern (a sibling ``asyncio`` task, cancelled
-in ``finally`` once uvicorn's own signal handling ends ``serve()``).
+Two legs on one :class:`~benzene.core.WorkerHost`: uvicorn (the HTTP + envelope surface) and, when a
+collector is configured (``MESH_COLLECTOR_ENVELOPE_URL``), the mesh reporter's background loop.
+Whichever stops first winds the other down — see ``benzene.core.worker`` for the hand-rolled
+``create_task``/``finally: cancel()`` this is shorthand for.
 
     MESH_SERVICE=orders PORT=8080 \\
     DOWNSTREAM_MSG_URL=http://payments/benzene/invoke \\
@@ -14,29 +14,25 @@ in ``finally`` once uvicorn's own signal handling ends ``serve()``).
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
+
+from benzene.core import WorkerHost, background_worker
+from benzene.http import uvicorn_worker
 
 from .host import build_service_host
 
 
-async def main() -> None:
-    import uvicorn  # a container-only dependency, imported lazily (matches deploy/mesh/collector)
-
+def build_worker_host() -> WorkerHost:
+    """The service's HTTP surface, plus the mesh reporter when one is configured."""
     host = build_service_host()
-    port = int(os.environ.get("PORT", "8080"))
-    server = uvicorn.Server(
-        uvicorn.Config(host.app, host="0.0.0.0", port=port, access_log=False)  # noqa: S104
+    workers = WorkerHost().add(
+        "http",
+        uvicorn_worker(host.app, port=int(os.environ.get("PORT", "8080")), access_log=False),
     )
-    reporter_task = asyncio.create_task(host.reporter.run_forever()) if host.reporter else None
-    try:
-        await server.serve()
-    finally:
-        if reporter_task is not None:
-            reporter_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await reporter_task
+    if host.reporter:
+        workers.add("mesh-reporter", background_worker(host.reporter.run_forever))
+    return workers
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == "__main__":  # pragma: no cover - the real container entry point
+    asyncio.run(build_worker_host().run())

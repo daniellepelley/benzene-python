@@ -46,6 +46,15 @@ await run_consumer_loop(app, consumer)    # the self-hosted worker: poll -> disp
   drives a duck-typed consumer (`poll(timeout)` → a record or `None`; `commit(message=...)`). A record
   carrying a broker error (`record.error()`) is skipped; with `commit=True` the offset is committed
   only after a successful result. `should_continue` bounds the loop (a real worker loops forever).
+- `build_kafka_consumer(*, bootstrap_servers, group_id, topics, auto_offset_reset="earliest", **config)`
+  constructs and subscribes a real `confluent_kafka.Consumer` configured to match the loop above —
+  most importantly `enable.auto.commit=False`, which is what makes the loop's at-least-once rule true.
+  Any `**config` (dotted `confluent-kafka` keys) wins over the defaults. Needs the `[kafka]` extra.
+- `kafka_consumer_worker(app, consumer, *, close=True, **loop_options)` returns a
+  [`benzene.core.WorkerHost`](core.md#workerhost--running-n-transports-in-one-process) leg wrapping the
+  loop above, for a process that also serves HTTP. It is a closure over
+  `run_consumer_loop(..., should_continue=stop.should_continue)` plus the `finally: consumer.close()`
+  — reach for it only when there is more than one transport.
 - `decode_kafka_message(record)` is the pure decode step (record → `{topic, headers, body}`), exposed
   for custom loops.
 
@@ -82,8 +91,8 @@ loop's at-least-once behaviour without a broker. See the runnable [`examples/kaf
 
 ## Exports
 
-`KafkaConsumerApp`, `KafkaMessageSender`, `KafkaMessage`, `TOPIC_HEADER`, `decode_kafka_message`,
-`run_consumer_loop`; and from `benzene.kafka.testing`: `KafkaTestHost`, `KafkaMessageBuilder`,
+`KafkaConsumerApp`, `KafkaMessageSender`, `KafkaMessage`, `TOPIC_HEADER`, `build_kafka_consumer`,
+`decode_kafka_message`, `kafka_consumer_worker`, `run_consumer_loop`; and from `benzene.kafka.testing`: `KafkaTestHost`, `KafkaMessageBuilder`,
 `FakeKafkaMessage`, `RecordingKafkaConsumer`.
 
 ## See also

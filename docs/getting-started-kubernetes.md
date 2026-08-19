@@ -18,7 +18,8 @@ for why a single-transport example wouldn't actually show what Benzene is for he
 ```
 
 One composition root (a `BenzeneStartUp`), mounted by one process that runs uvicorn, an SQS consumer
-loop, and a Kafka consumer loop together — one container image, one Kubernetes Deployment.
+loop, and a Kafka consumer loop together on one `benzene.core.WorkerHost` — one container image, one
+Kubernetes Deployment.
 
 ## Prerequisites
 
@@ -116,18 +117,16 @@ registers — three small functions, no entry-point code of their own:
 # http_orders/host.py
 import os
 
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from benzene.http import BenzeneHttpApp, HttpMessageSender
 from orders_domain import OrdersStartUp
 
 
 def build_http_orders_app() -> BenzeneHttpApp:
     events_url = os.environ["BENZENE_ORDERS_EVENTS_URL"]
-
-    def use_http_sender(services: Container) -> None:
-        services.add_instance(MessageSender, HttpMessageSender(events_url))
-
-    definition, _ = build_application(OrdersStartUp, overrides=[use_http_sender])
+    definition, _ = build_application(
+        OrdersStartUp, overrides=[use_instance(MessageSender, HttpMessageSender(events_url))]
+    )
     return BenzeneHttpApp.from_definition(definition)
 ```
 
@@ -136,17 +135,15 @@ def build_http_orders_app() -> BenzeneHttpApp:
 import os
 
 from benzene.aws import SqsConsumerApp, SqsMessageSender
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from orders_domain import OrdersStartUp
 
 
 def build_sqs_orders_app() -> SqsConsumerApp:
     events_queue_url = os.environ["BENZENE_SQS_EVENTS_QUEUE_URL"]
-
-    def use_sqs(services: Container) -> None:
-        services.add_instance(MessageSender, SqsMessageSender(events_queue_url))
-
-    definition, _ = build_application(OrdersStartUp, overrides=[use_sqs])
+    definition, _ = build_application(
+        OrdersStartUp, overrides=[use_instance(MessageSender, SqsMessageSender(events_queue_url))]
+    )
     return SqsConsumerApp.from_definition(definition)
 ```
 
@@ -154,95 +151,122 @@ def build_sqs_orders_app() -> SqsConsumerApp:
 # kafka_orders/host.py
 import os
 
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from benzene.kafka import KafkaConsumerApp, KafkaMessageSender
 from orders_domain import OrdersStartUp
 
 
 def build_kafka_orders_app() -> KafkaConsumerApp:
-    def use_kafka(services: Container) -> None:
-        services.add_instance(
-            MessageSender,
-            KafkaMessageSender(os.environ["BENZENE_KAFKA_TOPIC"], bootstrap_servers=os.environ["BENZENE_KAFKA_BOOTSTRAP"]),
-        )
-
-    definition, _ = build_application(OrdersStartUp, overrides=[use_kafka])
+    sender = KafkaMessageSender(
+        os.environ["BENZENE_KAFKA_TOPIC"], bootstrap_servers=os.environ["BENZENE_KAFKA_BOOTSTRAP"]
+    )
+    definition, _ = build_application(OrdersStartUp, overrides=[use_instance(MessageSender, sender)])
     return KafkaConsumerApp.from_definition(definition)
 ```
 
-Now the one entry point that runs all three — and the one thing in this whole guide that's easy to
-get wrong:
+Now the one entry point that runs all three. Running N transports in one process with coordinated
+shutdown is the framework's job, so it is a `WorkerHost` — three legs, and nothing about orders:
 
 ```python
 # k8s_orders/app.py
 import asyncio
 import os
 
-import uvicorn
-from benzene.aws import run_sqs_consumer_loop
-from benzene.kafka import run_consumer_loop
-from confluent_kafka import Consumer
+import boto3
+from benzene.aws import sqs_consumer_worker
+from benzene.core import WorkerHost
+from benzene.http import uvicorn_worker
+from benzene.kafka import build_kafka_consumer, kafka_consumer_worker
 
 from http_orders.host import build_http_orders_app
 from kafka_orders.host import build_kafka_orders_app
 from sqs_orders.host import build_sqs_orders_app
 
 
-async def main() -> None:
-    http_app = build_http_orders_app()
-    sqs_app = build_sqs_orders_app()
-    kafka_app = build_kafka_orders_app()
-
-    import boto3
-
-    sqs_client = boto3.client("sqs")  # default credential chain - an IRSA role on EKS
-    kafka_consumer = Consumer({
-        "bootstrap.servers": os.environ["BENZENE_KAFKA_BOOTSTRAP"],
-        "group.id": os.environ.get("BENZENE_KAFKA_GROUP", "orders"),
-        "enable.auto.commit": False,
-        "auto.offset.reset": "earliest",
-    })
-    kafka_consumer.subscribe([os.environ["BENZENE_KAFKA_CONSUME_TOPIC"]])
-
-    server = uvicorn.Server(uvicorn.Config(http_app, host="0.0.0.0", port=8080))
-    stop = asyncio.Event()
-
-    async def run_http() -> None:
-        await server.serve()  # returns once uvicorn decides to shut down (its own signal handling)
-        stop.set()
-
-    try:
-        await asyncio.gather(
-            run_http(),
-            run_sqs_consumer_loop(
-                sqs_app, sqs_client, os.environ["BENZENE_SQS_CONSUME_QUEUE_URL"],
-                should_continue=lambda: not stop.is_set(),
+def build_orders_worker_host() -> WorkerHost:
+    return (
+        WorkerHost()
+        .add("http", uvicorn_worker(build_http_orders_app(), port=int(os.environ["PORT"])))
+        .add("sqs", sqs_consumer_worker(
+            build_sqs_orders_app(),
+            boto3.client("sqs"),  # default credential chain - an IRSA role on EKS
+            os.environ["BENZENE_SQS_CONSUME_QUEUE_URL"],
+        ))
+        .add("kafka", kafka_consumer_worker(
+            build_kafka_orders_app(),
+            build_kafka_consumer(
+                bootstrap_servers=os.environ["BENZENE_KAFKA_BOOTSTRAP"],
+                group_id=os.environ.get("BENZENE_KAFKA_GROUP", "orders"),
+                topics=[os.environ["BENZENE_KAFKA_CONSUME_TOPIC"]],
             ),
-            run_consumer_loop(kafka_app, kafka_consumer, should_continue=lambda: not stop.is_set()),
-        )
-    finally:
-        kafka_consumer.close()
+        ))
+    )
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(build_orders_worker_host().run())
 ```
 
-Python's asyncio has one event loop per process — `uvicorn.Server.serve()`, `run_sqs_consumer_loop`,
-and `run_consumer_loop` all genuinely run concurrently on it via `asyncio.gather`, **but only because
-the two consumer loops' underlying `boto3`/`confluent-kafka` calls run through `asyncio.to_thread`
-internally** (inside `benzene.aws.sqs_consumer`/`benzene.kafka.consumer`). Called directly on the
-loop, SQS's `receive_message` (a long-poll, up to 20 seconds) would freeze uvicorn's HTTP handling for
-its whole duration — and Kafka's `consumer.poll` on an idle topic is *worse*: it's a synchronous call
-in a tight loop with no `await` between empty polls at all, so without `to_thread` it would starve
-uvicorn **permanently**, not periodically, the first time the topic went quiet. If you're calling
-these functions, you don't need to do anything about this — it's handled internally — but it's worth
-knowing why `asyncio.gather(server.serve(), sqs_task, kafka_task)` is actually safe here, since the
-naive version of that line is a real trap in most other asyncio + blocking-SDK combinations.
+`WorkerHost` guarantees four things, and you can watch all of them happen: every leg starts on the
+one event loop; whichever leg finishes **first** — a clean SIGTERM or a crash — winds the others
+down; `run()` waits for them all to actually finish before returning; and a crash is re-raised
+afterwards, so the process still exits non-zero and Kubernetes restarts the pod. `WorkerHost` also
+refuses to run with no legs at all, at start-up, rather than booting a process that handles nothing.
 
-Shutdown: uvicorn owns SIGINT/SIGTERM natively when `server.serve()` runs on the main thread (which it
-does here — nothing in `app.py` starts a new thread). Once it returns, `stop` is set, which both
-consumer loops' `should_continue` observes on their next iteration.
+### What the host does for you, and how to take it back
+
+Each `*_worker` is a closure over the transport's own public loop function, and `WorkerHost` is an
+`asyncio.gather` with a shared stop flag. Nothing is hidden, and you can write it yourself — which is
+what to do the moment you want different shutdown semantics:
+
+```python
+async def main() -> None:
+    stop = asyncio.Event()
+    server = uvicorn.Server(uvicorn.Config(http_app, host="0.0.0.0", port=8080))
+
+    async def supervised(leg):
+        try:
+            await leg
+        finally:                       # one leg going down never strands the others
+            stop.set()
+            server.should_exit = True
+
+    try:
+        await asyncio.gather(
+            supervised(server.serve()),
+            supervised(run_sqs_consumer_loop(
+                sqs_app, sqs_client, os.environ["BENZENE_SQS_CONSUME_QUEUE_URL"],
+                should_continue=lambda: not stop.is_set(),
+            )),
+            supervised(run_consumer_loop(
+                kafka_app, kafka_consumer, should_continue=lambda: not stop.is_set(),
+            )),
+        )
+    finally:
+        kafka_consumer.close()
+```
+
+The rungs in between are public too: `benzene.http.asgi_server_worker(server)` takes a server object
+you built yourself, and `run_sqs_consumer_loop` / `run_consumer_loop` are unchanged and still callable
+directly — a queue-only service just awaits one of them and needs no host at all.
+
+### Why one event loop is safe here — the trap this avoids
+
+Python's asyncio has one event loop per process, and `uvicorn.Server.serve()`, `run_sqs_consumer_loop`
+and `run_consumer_loop` genuinely run concurrently on it — **but only because the two consumer loops'
+underlying `boto3`/`confluent-kafka` calls run through `asyncio.to_thread` internally** (inside
+`benzene.aws.sqs_consumer`/`benzene.kafka.consumer`). Called directly on the loop, SQS's
+`receive_message` (a long-poll, up to 20 seconds) would freeze uvicorn's HTTP handling for its whole
+duration — and Kafka's `consumer.poll` on an idle topic is *worse*: a synchronous call in a tight loop
+with no `await` between empty polls at all, so without `to_thread` it would starve uvicorn
+**permanently**, not periodically, the first time the topic went quiet. You do not need to do anything
+about this — it is handled inside the bindings — but it is worth knowing why the naive version of that
+`gather` line is a real trap in most other asyncio + blocking-SDK combinations.
+
+Signals: uvicorn owns SIGINT/SIGTERM natively when `server.serve()` runs on the main thread, and
+`WorkerHost.run()` starts no threads of its own precisely so that stays true. On a signal uvicorn
+returns, the host sets its stop signal, and both consumer loops observe it via `should_continue` on
+their next iteration.
 
 See [Kafka Setup examples](../examples/kafka_orders) for why the Kafka leg's topic travels as a
 record **header** here (not the broker-level topic name) — a genuine, documented divergence from the
