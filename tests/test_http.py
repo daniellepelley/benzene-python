@@ -93,21 +93,47 @@ def test_unmatched_route_is_404_not_found() -> None:
     app = build_app()
     resp = asyncio.run(app.handle("GET", "/missing"))
     assert resp.status_code == 404
-    assert json.loads(resp.body)["status"] == "not-found"
+    problem = json.loads(resp.body)
+    # The Benzene status travels as benzeneStatus; `status` is RFC 9457's integer HTTP code
+    # (wire-contracts.md 1.3, 4.1) and MUST equal the code actually sent.
+    assert problem["benzeneStatus"] == "not-found"
+    assert problem["status"] == 404
+    assert problem["type"] == "https://benzene.app/problems/not-found"
+    assert resp.headers["content-type"] == "application/problem+json"
 
 
 def test_invalid_json_body_is_400_bad_request() -> None:
     app = build_app()
     resp = asyncio.run(app.handle("POST", "/orders", body="{not json"))
     assert resp.status_code == 400
-    assert json.loads(resp.body)["status"] == "bad-request"
+    problem = json.loads(resp.body)
+    assert problem["benzeneStatus"] == "bad-request"
+    assert problem["status"] == 400
+    assert resp.headers["content-type"] == "application/problem+json"
 
 
 def test_handler_exception_maps_to_503() -> None:
     app = build_app()
     resp = asyncio.run(app.handle("GET", "/boom"))
     assert resp.status_code == 503
-    assert json.loads(resp.body)["status"] == "service-unavailable"
+    problem = json.loads(resp.body)
+    assert problem["benzeneStatus"] == "service-unavailable"
+    assert problem["status"] == 503
+    assert resp.headers["content-type"] == "application/problem+json"
+
+
+def test_a_failure_carries_its_messages_in_errors_not_only_in_detail() -> None:
+    # `errors` is authoritative and ordered (wire-contracts.md 1.3), which replaced the withdrawn
+    # "split detail on ', '" rule - that was never safe, because messages contain commas.
+    app = build_app()
+    resp = asyncio.run(app.handle("GET", "/boom"))
+
+    problem = json.loads(resp.body)
+    assert problem["errors"], "a failed result's messages must be listed individually"
+    assert all("message" in entry for entry in problem["errors"])
+    # detail stays the compatibility member: the same messages, joined, for a reader that only
+    # knows the old shape.
+    assert problem["detail"] == ", ".join(entry["message"] for entry in problem["errors"])
 
 
 def test_query_string_merges_into_request() -> None:

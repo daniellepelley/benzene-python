@@ -17,9 +17,12 @@ _FIXTURE = json.loads(
     "case", _FIXTURE["forward"], ids=lambda c: f"{c['from']}->{c['to']}"
 )
 def test_forward_maps_benzene_status_to_grpc_code(case: dict) -> None:
-    # "<unknown>" in the fixture stands for any status outside the vocabulary -> Internal.
+    # "<unknown>" in the fixture stands for any status outside the vocabulary. It has two rows,
+    # distinguished by isSuccessful: a failed unknown status is Internal, one carried on a result
+    # explicitly marked successful is OK. A known status maps by its own row either way, which is
+    # why isSuccessful is absent from those rows and passes through as None here.
     status = "some-app-extension" if case["from"] == "<unknown>" else case["from"]
-    assert to_grpc(status) == case["to"]
+    assert to_grpc(status, case.get("isSuccessful")) == case["to"]
 
 
 @pytest.mark.parametrize(

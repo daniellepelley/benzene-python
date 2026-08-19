@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from benzene.results import Result, Status, is_successful
+from benzene.results.problems import problem_title, problem_type
 
 from .context import Context
 from .dependencies import Container
@@ -91,8 +92,39 @@ class BenzeneMessageApplication:
 
 
 def error_payload(result: Result[Any]) -> dict[str, Any]:
-    """The problem-details-shaped error body (wire-contracts.md section 1.3)."""
-    return {"status": result.status, "detail": ", ".join(result.errors)}
+    """The RFC 9457 problem document written as a failed response's body (wire-contracts.md 1.3).
+
+    A genuine problem document, not a problem-shaped dict: ``type`` is the section 3.1 registry URI
+    for the status (omitted for an application-defined status, which the framework has no URI for),
+    ``benzeneStatus`` is the required transport-neutral discriminator mirroring the envelope's
+    ``statusCode``, ``detail`` is the error messages joined with ``", "``, and ``errors`` carries
+    them individually and in order.
+
+    ``status`` is deliberately absent. RFC 9457 defines it as the integer HTTP response code, and
+    section 1.3 requires it to be omitted - not null - wherever no HTTP response exists, which is
+    every transport this function serves. An HTTP binding adds it when it renders the document as
+    an HTTP body (section 4.1).
+
+    The previous shape put the Benzene *status string* in a member named ``status``, colliding with
+    RFC 9457's own integer member. That collision was resolved by rename, not by dropping the RFC
+    alignment: the Benzene status now travels as ``benzeneStatus``.
+    """
+    problem: dict[str, Any] = {}
+
+    type_uri = problem_type(result.status)
+    if type_uri is not None:
+        problem["type"] = type_uri
+        problem["title"] = problem_title(result.status)
+
+    problem["detail"] = ", ".join(result.errors)
+    problem["benzeneStatus"] = result.status
+
+    # Authoritative and ordered when present (section 1.3): this replaces the withdrawn "recover
+    # errors by splitting detail on ', '" rule, which was never safe - messages contain commas.
+    if result.errors:
+        problem["errors"] = [{"message": message} for message in result.errors]
+
+    return problem
 
 
 def encode_response(result: Result[Any] | None) -> dict[str, Any]:
@@ -119,9 +151,10 @@ def decode_response(response: Mapping[str, Any]) -> Result[Any]:
     or gRPC codes — this is the one decode step needed, no reverse status-code table involved (unlike
     ``benzene.http``'s ``from_http`` or ``benzene.grpc``'s ``code_to_status``, whose peers speak a
     *different* status vocabulary on the wire). An empty ``body`` maps to a ``None`` payload; a failure
-    body in :func:`error_payload`'s shape (``{"status", "detail"}``) has its ``detail`` split back into
-    the result's ``errors`` tuple; a body that isn't valid JSON becomes ``unexpected-error`` rather than
-    raising, matching this envelope's "never crash the caller" rule everywhere else.
+    body in :func:`error_payload`'s shape (an RFC 9457 problem document) has its ``errors`` member read
+    back into the result's ``errors`` tuple, falling back to ``detail`` as a single opaque message when
+    the producer sent no ``errors``; a body that isn't valid JSON becomes ``unexpected-error`` rather
+    than raising, matching this envelope's "never crash the caller" rule everywhere else.
     """
     status = response.get("statusCode") or Status.UNEXPECTED_ERROR
     body = response.get("body") or ""
@@ -133,11 +166,30 @@ def decode_response(response: Mapping[str, Any]) -> Result[Any]:
     except (ValueError, TypeError):
         return Result.unexpected_error(f"response body is not valid JSON: {body!r}")
 
-    if not is_successful(status) and isinstance(parsed, dict) and "detail" in parsed:
-        # error_payload() always encodes a failure as {"status": ..., "detail": ...} - surface the
-        # detail as the Result's error message(s), matching what a peer decoding this envelope does.
+    if not is_successful(status) and isinstance(parsed, dict) and _looks_like_problem(parsed):
+        # errors, when present, is authoritative and ordered (section 1.3). Only when it is absent
+        # does detail stand in, and then as ONE opaque message: splitting it on ", " was withdrawn
+        # by the RFC 9457 revision because error messages contain commas.
+        raw_errors = parsed.get("errors")
+        if isinstance(raw_errors, list):
+            errors = tuple(
+                str(item.get("message", "")) if isinstance(item, dict) else str(item)
+                for item in raw_errors
+            )
+            return Result(status, None, tuple(e for e in errors if e))
+
         detail = parsed.get("detail") or ""
-        errors = tuple(e for e in detail.split(", ") if e) if detail else ()
-        return Result(status, None, errors)
+        return Result(status, None, (detail,) if detail else ())
 
     return Result(status, parsed)
+
+
+def _looks_like_problem(parsed: dict[str, Any]) -> bool:
+    """Whether a failed response's parsed body is a problem document rather than a domain payload.
+
+    Any of the three members this profile's documents always or usually carry is enough. Accepting
+    the withdrawn ``status``-string shape too would be wrong - that member is now the integer HTTP
+    code - so a legacy peer's body simply falls through and is surfaced as the payload, which is
+    honest about not understanding it rather than silently mis-reading a number as a status.
+    """
+    return "benzeneStatus" in parsed or "errors" in parsed or "detail" in parsed

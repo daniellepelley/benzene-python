@@ -48,9 +48,21 @@ _HTTP_TO_BENZENE: dict[int, str] = {
 }
 
 
-def to_http(status: str) -> int:
-    """Benzene status → HTTP code. Unknown/missing → 500."""
-    return _BENZENE_TO_HTTP.get(status, 500)
+def to_http(status: str, is_successful: bool | None = None) -> int:
+    """Benzene status → HTTP code (wire-contracts.md section 4.1).
+
+    A status in the section 3 vocabulary maps by its own row, whatever ``is_successful`` says -
+    ``ok`` is 200 and ``not-found`` is 404 regardless. ``is_successful`` decides only for an
+    **application-defined** status, which has no row: a failed one falls to 500, and one carried on
+    a result explicitly marked successful (the ``Set(status, payload, isSuccessful)`` escape hatch
+    some health-check-shaped results use) falls to 200 rather than being reported as a server error.
+    Left unset, an unknown status is treated as a failure, which is the safe default for a caller
+    that cannot tell.
+    """
+    known = _BENZENE_TO_HTTP.get(status)
+    if known is not None:
+        return known
+    return 200 if is_successful else 500
 
 
 def from_http(http_code: int) -> str:

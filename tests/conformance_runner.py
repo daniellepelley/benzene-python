@@ -86,7 +86,9 @@ def run_http_mapping() -> list[str]:
     data = _load("http-status-mapping.json")
     # forward: benzene status -> HTTP code (code carried as a string in the fixture)
     for case in data.get("forward", []):
-        got, expected = to_http(case["from"]), int(case["to"])
+        # isSuccessful only distinguishes the two '<unknown>' rows (see the fixture's description);
+        # for a known status it is absent and the default failure treatment is irrelevant.
+        got, expected = to_http(case["from"], case.get("isSuccessful")), int(case["to"])
         if got != expected:
             failures.append(f"benzene->http: {case['from']!r} -> {got}, expected {expected}")
     # reverse: HTTP code -> benzene status

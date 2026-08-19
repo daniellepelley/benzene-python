@@ -21,6 +21,7 @@ as a raw ASGI ``__call__`` for hosting under uvicorn/hypercorn/etc.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qsl
@@ -36,7 +37,7 @@ from benzene.core import (
     error_payload,
     resolve_version,
 )
-from benzene.results import Result, Status
+from benzene.results import Result, Status, is_successful
 
 from .routing import HttpRouter
 from .standard import StandardPaths
@@ -140,11 +141,7 @@ class BenzeneHttpApp:
             "body": json.dumps(request_data),
         }
         response = await self._application.handle(envelope)
-        return HttpResponse(
-            status_code=to_http(response["statusCode"]),
-            headers=dict(response["headers"]),
-            body=response["body"],
-        )
+        return _to_http_response(response)
 
     async def _handle_standard(
         self, method: str, path: str, headers: dict[str, str], body: str
@@ -196,12 +193,7 @@ class BenzeneHttpApp:
         return None
 
     def _error(self, status: str, detail: str) -> HttpResponse:
-        payload = error_payload(Result.failure(status, detail))
-        return HttpResponse(
-            status_code=to_http(status),
-            headers={"content-type": "application/json"},
-            body=json.dumps(payload),
-        )
+        return http_problem_response(Result.failure(status, detail))
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         """ASGI entry point (HTTP scope only)."""
@@ -258,3 +250,56 @@ async def _read_body(receive: Any) -> str:
         # The host must never crash on request content: a non-UTF-8 body can't be a valid Benzene
         # payload, so hand back a string the downstream JSON guard rejects as bad-request instead.
         return raw.decode("utf-8", errors="replace")
+
+
+def http_problem_response(result: Result[Any]) -> HttpResponse:
+    """Render a failed :class:`~benzene.results.Result` as an HTTP problem response (§4.1).
+
+    Two things this adds to the transport-neutral document ``error_payload`` builds, both of which
+    §4.1 makes mandatory for an HTTP failure whose negotiated format is JSON:
+
+    * the ``status`` member, which RFC 9457 defines as the integer HTTP response code and which
+      MUST equal the code actually sent. It is absent from the neutral document precisely because
+      most transports have no HTTP response for it to equal.
+    * ``content-type: application/problem+json`` rather than ``application/json``. Clients must
+      accept either, so this is safe for existing readers, but emitting it is what makes the
+      response a standards-conformant problem response rather than merely a JSON body.
+    """
+    http_status = to_http(result.status, result.is_successful)
+    payload = error_payload(result)
+    payload["status"] = http_status
+    return HttpResponse(
+        status_code=http_status,
+        headers={"content-type": "application/problem+json"},
+        body=json.dumps(payload),
+    )
+
+
+def _to_http_response(envelope: Mapping[str, Any]) -> HttpResponse:
+    """Render a Benzene response envelope as an HTTP response.
+
+    On success this is the envelope's own body and headers with the status translated. On failure
+    the body is already the transport-neutral problem document (§1.3), and §4.1 requires two HTTP
+    specifics on top: the ``status`` member equal to the HTTP code actually being sent, and
+    ``content-type: application/problem+json``. A failure body that is not a JSON object (a legacy
+    peer, or an empty body) is passed through untouched rather than guessed at.
+    """
+    status = envelope.get("statusCode") or ""
+    http_status = to_http(status)
+    headers = dict(envelope.get("headers") or {})
+    body = envelope.get("body") or ""
+
+    if is_successful(status) or not body:
+        return HttpResponse(status_code=http_status, headers=headers, body=body)
+
+    try:
+        problem = json.loads(body)
+    except (ValueError, TypeError):
+        return HttpResponse(status_code=http_status, headers=headers, body=body)
+
+    if not isinstance(problem, dict):
+        return HttpResponse(status_code=http_status, headers=headers, body=body)
+
+    problem["status"] = http_status
+    headers["content-type"] = "application/problem+json"
+    return HttpResponse(status_code=http_status, headers=headers, body=json.dumps(problem))
