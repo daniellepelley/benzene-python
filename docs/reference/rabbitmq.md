@@ -106,5 +106,3 @@ nacked, not acked — without a broker. See the runnable
   — the language-neutral binding contract this implements.
 - [`benzene.kafka`](kafka.md) — the sibling queue/stream binding this mirrors.
 - [`benzene.core`](core.md) — the registry, pipeline, and `MessageSender` port this builds on.
-</content>
-</invoke>

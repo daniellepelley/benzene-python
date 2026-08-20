@@ -384,5 +384,3 @@ Service Bus is the only outbound client `benzene.azure` ships.
   — the language-neutral host/binding contract (§1) every port implements.
 - [wire-contracts specification](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/wire-contracts.md)
   — the status → HTTP mapping (§4.1) and the envelope shape.
-</content>
-</invoke>

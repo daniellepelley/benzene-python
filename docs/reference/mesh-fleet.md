@@ -116,4 +116,3 @@ The backends differ mostly in **time units**, which is where fidelity matters mo
 - [`benzene.mesh`](mesh.md) — the `TraceEvent` / `ServiceDescriptor` / `MeshPoller` model this extends.
 - [`benzene.otel`](otel.md) — exports the same `TraceEvent` model live to an OpenTelemetry tracer
   (where the mappers project a whole trace into a backend document).
-</content>

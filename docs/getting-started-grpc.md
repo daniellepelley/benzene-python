@@ -324,5 +324,3 @@ You can use the mapping directly — `to_grpc(status)` (server side) and `from_g
 - [`benzene.testing` reference](reference/testing.md) and [`benzene.core` reference](reference/core.md).
 - Specification: [transport-bindings](https://benzene.app/docs/specification/transport-bindings),
   [wire-contracts](https://benzene.app/docs/specification/wire-contracts).
-</content>
-</invoke>
