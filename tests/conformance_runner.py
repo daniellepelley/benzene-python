@@ -157,6 +157,25 @@ def _info_from_fixture(service_info: dict, **overrides: Any) -> ServiceInfo:
     return ServiceInfo(**fields)
 
 
+def _asserted(hash_spec: dict, key: str, failures: list[str]) -> bool:
+    """Whether the fixture asks for a hash property, recording a failure if it never mentions it.
+
+    ``hash_spec.get(key)`` reads the same whether the fixture says ``false`` or has never heard of
+    the key, and those mean opposite things. The Go and TypeScript runners each spent the whole
+    producer/consumer role inversion asking for ``sensitiveToConsumes`` after the fixture had renamed
+    it to ``sensitiveToProduces``; the guard read falsey, the check quietly stopped running, and the
+    suite stayed green while asserting nothing about produced topics. A key the fixture does not
+    carry is drift between runner and fixture - never permission to stop checking.
+    """
+    if key not in hash_spec:
+        failures.append(
+            f"mesh-descriptor: fixture hash section has no {key!r} - "
+            "the runner and the fixture have drifted"
+        )
+        return False
+    return bool(hash_spec[key])
+
+
 def run_mesh_descriptor() -> list[str]:
     failures: list[str] = []
     data = _load("mesh-descriptor-cases.json")
@@ -175,7 +194,7 @@ def run_mesh_descriptor() -> list[str]:
         failures.append(f"mesh-descriptor: hash {h!r} lacks prefix {hash_spec['prefix']!r}")
     if len(h) - len(hash_spec["prefix"]) != hash_spec["hexLength"]:
         failures.append(f"mesh-descriptor: hash hex length != {hash_spec['hexLength']}")
-    if hash_spec.get("invariantToInstanceId"):
+    if _asserted(hash_spec, "invariantToInstanceId", failures):
         other = ServiceDescriptor.derive(
             register_canonical(Registry()),
             _info_from_fixture(data["serviceInfo"], instance_id="i-xyz"),
@@ -183,7 +202,7 @@ def run_mesh_descriptor() -> list[str]:
         )
         if other.descriptor_hash() != h:
             failures.append("mesh-descriptor: hash not invariant to instanceId")
-    if hash_spec.get("sensitiveToServiceVersion"):
+    if _asserted(hash_spec, "sensitiveToServiceVersion", failures):
         other = ServiceDescriptor.derive(
             register_canonical(Registry()),
             _info_from_fixture(data["serviceInfo"], service_version="9.9.9"),
@@ -191,7 +210,7 @@ def run_mesh_descriptor() -> list[str]:
         )
         if other.descriptor_hash() == h:
             failures.append("mesh-descriptor: hash not sensitive to serviceVersion")
-    if hash_spec.get("sensitiveToTopics"):
+    if _asserted(hash_spec, "sensitiveToTopics", failures):
         from .canonical_handlers import greet
 
         other = ServiceDescriptor.derive(
@@ -199,7 +218,7 @@ def run_mesh_descriptor() -> list[str]:
         )
         if other.descriptor_hash() == h:
             failures.append("mesh-descriptor: hash not sensitive to the topic set")
-    if hash_spec.get("sensitiveToProduces"):
+    if _asserted(hash_spec, "sensitiveToProduces", failures):
         other = ServiceDescriptor.derive(register_canonical(Registry()), info)  # no produces at all
         if other.descriptor_hash() == h:
             failures.append("mesh-descriptor: hash not sensitive to the produced-topic set")
