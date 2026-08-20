@@ -185,14 +185,25 @@ idempotency_interception(         # the older name `idempotency` remains a worki
 
 ### `IdempotencyStore` and `InMemoryIdempotencyStore`
 
-`IdempotencyStore` is the pluggable seam — a runtime `Protocol` of two async methods, so a
-network-backed store (Redis, DynamoDB) is a drop-in:
+`IdempotencyStore` is the pluggable seam — a runtime `Protocol`, so a network-backed store (Redis,
+DynamoDB) is a drop-in:
 
 ```python
 class IdempotencyStore(Protocol):
     async def get(self, key: str) -> Result | None: ...
     async def put(self, key: str, result: Result) -> None: ...
+    async def put_if_absent(self, key: str, result: Result) -> bool: ...
+    async def delete(self, key: str) -> None: ...
 ```
+
+`put_if_absent` **must be atomic** — it is what stops two overlapping deliveries of the same key from
+both running the handler, so implement it with `SET NX` on Redis or a conditional put on DynamoDB,
+never as a read followed by a write. It returns `True` when this caller won the reservation.
+
+The middleware reserves the key before running the handler. A delivery whose twin is still in flight
+is answered `conflict` rather than being run a second time or made to wait; a settled result is
+replayed as before; and a handler that raises releases its reservation, so a redelivery is not locked
+out.
 
 `InMemoryIdempotencyStore(*, ttl=None, clock=time.monotonic)` is the process-local implementation for
 tests and single-instance services. `ttl` (seconds) bounds how long a key is remembered (`None` keeps

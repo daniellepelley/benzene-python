@@ -272,6 +272,16 @@ def test_asgi_204_is_sent_with_an_empty_body() -> None:
     assert body == b""
 
 
+def test_handle_drops_the_body_for_a_bodiless_code() -> None:
+    # Normalising in handle() rather than only in the ASGI send path is what makes every other
+    # host inherit the rule: the Lambda, Cloud Functions and Azure Functions adapters all return
+    # this HttpResponse's body straight to their platform without inspecting the status code.
+    response = asyncio.run(build_app().handle("PUT", "/orders/7"))
+
+    assert response.status_code == 204
+    assert response.body == ""
+
+
 # --- ASGI lifespan (D10) ---------------------------------------------------------------------
 
 

@@ -499,7 +499,10 @@ collector = MeshCollector(store=JsonFileCollectorStore("/data/mesh-state.json"))
 ```
 
 The collector **restores** the last snapshot on construction and **saves** a fresh one after every
-mutating ingest, so a restarted host rehydrates the fleet it already knew. `CollectorStore` is a small
+mutating ingest, so a restarted host rehydrates the fleet it already knew. When the ingest arrives
+over the mesh endpoint (or through a `MeshPoller` sweep) the save runs off the event loop, so a slow
+S3 PUT or fsync never blocks the handler that triggered it; a direct synchronous `ingest_*` call
+still saves immediately. `CollectorStore` is a small
 two-method `Protocol` (`load() -> dict | None`, `save(dict)`), so any backend fits; two ship:
 
 - **`NullCollectorStore`** — the default, keeps nothing (pure in-memory; tests pay nothing).
@@ -507,6 +510,12 @@ two-method `Protocol` (`load() -> dict | None`, `save(dict)`), so any backend fi
   (temp file + `os.replace`) so a task killed mid-write leaves no half-written file, and a missing or
   corrupt file loads as a first boot rather than crashing the host (the catalog refills from the fleet
   within one poll interval).
+
+The trace/event log the collector keeps behind its queries is bounded: `MeshCollector(max_events=...)`
+retains the most recent N events (10 000 by default) so a long-lived host's memory and snapshot size
+stay flat rather than growing with traffic. Only the observed signals — invocation stats, per-edge
+liveness — are windowed by it; the declared graph comes from each service's registered descriptor and
+is never trimmed.
 
 The snapshot is a plain JSON-able dict — `collector.snapshot()` / `collector.restore(snap)` are public,
 so you can persist it anywhere (S3, a database) by implementing the two-method protocol over them.

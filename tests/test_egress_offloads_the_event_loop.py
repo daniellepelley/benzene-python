@@ -93,7 +93,7 @@ def test_kafka_sender_offloads_produce_and_flush(monkeypatch: pytest.MonkeyPatch
     assert spy.dispatched, "produce/flush must be dispatched via asyncio.to_thread"
 
 
-# --- RabbitMQ (direct-call pattern) ------------------------------------------------------------
+# --- RabbitMQ (closure pattern) ----------------------------------------------------------------
 
 
 def test_rabbitmq_sender_offloads_the_publish(monkeypatch: pytest.MonkeyPatch) -> None:

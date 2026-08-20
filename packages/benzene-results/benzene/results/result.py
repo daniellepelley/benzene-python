@@ -47,10 +47,21 @@ class Result(Generic[T]):
 
     @staticmethod
     def updated(payload: T | None = None) -> Result[T]:
+        """Succeeded, having changed an existing resource.
+
+        Maps to HTTP 204, which cannot carry content, so an HTTP caller receives an empty body
+        however rich the payload is; other transports deliver it intact. Use :meth:`ok` instead
+        when the caller must see the updated resource over HTTP.
+        """
         return Result(Status.UPDATED, payload)
 
     @staticmethod
     def deleted(payload: T | None = None) -> Result[T]:
+        """Succeeded, having removed a resource.
+
+        Maps to HTTP 204, which cannot carry content, so an HTTP caller receives an empty body
+        however rich the payload is; other transports deliver it intact.
+        """
         return Result(Status.DELETED, payload)
 
     @staticmethod

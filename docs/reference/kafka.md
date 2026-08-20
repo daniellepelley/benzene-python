@@ -19,8 +19,10 @@ bindings (transport-bindings §"Kafka"):
 - **Body** — the record value, decoded as the UTF-8 JSON body.
 - **Scope** — one record is one pipeline invocation and one DI scope (never per batch).
 - **Result** — there is **no response channel**: result mapping is acknowledge/log only. The consumer
-  loop commits the offset on a successful result (at-least-once) and leaves a failed record for
-  redelivery.
+  loop commits the offset on a successful result (at-least-once). Because a Kafka commit is a
+  watermark rather than a per-message ack, a failed record additionally **blocks** its partition: the
+  loop seeks back to it and commits nothing beyond it until it succeeds, so a later success on the
+  same partition cannot bury it.
 - **Failure** — a malformed body or a handler fault becomes a failure *result*, never an exception out
   of the loop, so a poison record cannot crash the host.
 
@@ -45,7 +47,10 @@ await run_consumer_loop(app, consumer)    # the self-hosted worker: poll -> disp
 - `run_consumer_loop(app, consumer, *, poll_timeout=1.0, should_continue=..., commit=True, on_result=None)`
   drives a duck-typed consumer (`poll(timeout)` → a record or `None`; `commit(message=...)`). A record
   carrying a broker error (`record.error()`) is skipped; with `commit=True` the offset is committed
-  only after a successful result. `should_continue` bounds the loop (a real worker loops forever).
+  only after a successful result, and never past an uncommitted failure on the same partition (the
+  loop seeks back to it — scoping is per `(topic, partition)`, so one partition never stalls
+  another). A record that always fails is therefore re-served: cap retries or dead-letter it from
+  `on_result`/`should_continue`. `should_continue` bounds the loop (a real worker loops forever).
 - `decode_kafka_message(record)` is the pure decode step (record → `{topic, headers, body}`), exposed
   for custom loops.
 

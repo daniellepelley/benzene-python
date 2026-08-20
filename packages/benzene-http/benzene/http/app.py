@@ -22,7 +22,7 @@ as a raw ASGI ``__call__`` for hosting under uvicorn/hypercorn/etc.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import parse_qsl
 
@@ -98,7 +98,26 @@ class BenzeneHttpApp:
         headers: dict[str, str] | None = None,
         body: str = "",
     ) -> HttpResponse:
-        """Handle one HTTP request end-to-end, returning the mapped :class:`HttpResponse`."""
+        """Handle one HTTP request end-to-end, returning the mapped :class:`HttpResponse`.
+
+        A response whose code cannot carry content (204, 304) is returned with an empty body,
+        whatever payload the handler produced. Normalising here rather than in the ASGI send path
+        means every host — ASGI, Lambda, Cloud Functions, Azure Functions — inherits it, since each
+        of them passes this response straight to its platform.
+        """
+        response = await self._dispatch(method, path, query_string, headers, body)
+        if response.status_code in _BODILESS_CODES and response.body:
+            return replace(response, body="")
+        return response
+
+    async def _dispatch(
+        self,
+        method: str,
+        path: str,
+        query_string: str = "",
+        headers: dict[str, str] | None = None,
+        body: str = "",
+    ) -> HttpResponse:
         if self._standard is not None:
             standard = await self._handle_standard(method, path, headers or {}, body)
             if standard is not None:

@@ -64,7 +64,9 @@ jobs:
             -e packages/benzene-otel \
             -e packages/benzene-mesh-fleet \
             -e packages/benzene-codegen-client
-          pip install pytest coverage
+          # azure-servicebus is installed so the one real-SDK Service Bus test is exercised
+          # here rather than skipped everywhere; the rest of the suite stays SDK-free.
+          pip install pytest coverage azure-servicebus
       - name: Conformance (dependency-free runner)
         run: python -m tests.conformance_runner
       - name: Tests (library + examples), measured

@@ -48,13 +48,16 @@ await run_consumer_loop(app, channel, queue="orders")  # the self-hosted worker:
   properties, body)` decodes the pika delivery triple, runs the pipeline, and returns the mapped
   `Result` (for the loop to act on). `RabbitMqConsumerApp.from_definition(definition)` is the one-line
   wiring from a composition root's `AppDefinition`.
-- `run_consumer_loop(app, channel, *, queue="", should_continue=..., ack=True, requeue=True,
-  on_result=None)` drives a duck-typed channel: `basic_get(queue)` returns a `(method, properties,
+- `run_consumer_loop(app, channel, *, queue, should_continue=..., ack=True, requeue=True,
+  idle_sleep=1.0, on_result=None)` drives a duck-typed channel: `basic_get(queue)` returns a `(method, properties,
   body)` triple or `(None, None, None)` when the queue is empty (pika's callback model flattened to a
   poll so the loop mirrors the Kafka binding). With `ack=True` (the default, at-least-once) a
-  **successful** result acks the delivery (`basic_ack(delivery_tag=...)`) and a failed one is nacked
-  with `requeue` (`basic_nack(delivery_tag=..., requeue=requeue)`) so it is redelivered rather than
-  silently dropped. Pass `ack=False` for manual acknowledgement and act from `on_result(method,
+  **successful** result acks the delivery (`basic_ack(delivery_tag=...)`). A failed one is nacked,
+  but only a *retryable* status (`service-unavailable`, `timeout`, `too-many-requests`) is requeued;
+  a final failure such as `bad-request` or `not-found` is nacked with `requeue=False` so it leaves
+  the queue instead of spinning at the head of it forever. Bind a dead-letter exchange
+  (`x-dead-letter-exchange`) to the queue to keep those deliveries. `idle_sleep` is how long the loop
+  waits when the queue is empty, so an idle worker does not busy-poll the broker. Pass `ack=False` for manual acknowledgement and act from `on_result(method,
   result)`. `should_continue` bounds the loop (a real worker loops forever; a test stops after N
   pulls).
 - `decode_rabbitmq_message(method, properties, body)` is the pure decode step (delivery →
