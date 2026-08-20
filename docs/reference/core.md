@@ -289,8 +289,8 @@ raises `NoCastPathError` at call time — a loud configuration error, not a sile
 
 ## Health checks
 
-A service answers the reserved `benzene:healthcheck` topic by running its registered checks (core-
-concepts §). Register named checks on a `HealthChecks` and install `health_interception` before the
+A service answers the reserved `benzene:healthcheck` topic by running its registered checks
+(core-concepts §10; wire-contracts §5). Register named checks on a `HealthChecks` and install `health_interception` before the
 router; it short-circuits the reserved topic (version ignored, like the mesh endpoint):
 
 ```python

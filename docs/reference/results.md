@@ -37,9 +37,11 @@ Result(status: str, payload=None, errors: tuple[str, ...] = ())
 
 ### Failure factories
 
-`Result.failure(status, *errors)` is the general form; `Result.bad_request(*errors)`,
-`Result.validation_error(*errors)`, `Result.not_found(*errors)`, and
-`Result.service_unavailable(*errors)` are shortcuts for the common statuses.
+`Result.failure(status, *errors)` is the general form. Each failure status also has a shortcut:
+`Result.bad_request(*errors)`, `Result.validation_error(...)`, `Result.unauthorized(...)`,
+`Result.forbidden(...)`, `Result.not_found(...)`, `Result.conflict(...)`,
+`Result.too_many_requests(...)`, `Result.timeout(...)`, `Result.not_implemented(...)`,
+`Result.service_unavailable(...)`, and `Result.unexpected_error(...)`.
 
 ```python
 Result.ok({"id": 1})

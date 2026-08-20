@@ -602,7 +602,9 @@ collector.query_fleet({})
 `ISSUES_TOPIC`, `QUERY_FLEET_TOPIC`, `QUERY_SERVICE_TOPIC`, `QUERY_TOPIC_TOPIC`, `QUERY_TRACE_TOPIC`,
 `evaluate_cloud_service_profile`, `CloudServiceProfileReport`, `RequirementCheck`, `REQUIREMENT_IDS`,
 `PROFILE_NAME`, `probe_cloud_service`, `CloudServiceProbeReport`, `RequirementProbe`, `Verdict`,
-`build_artifacts`, `write_artifacts`.
+`build_artifacts`, `write_artifacts`, `CollectorStore`, `NullCollectorStore`,
+`JsonFileCollectorStore`; and, for the cloud mesh deployments, `S3CollectorStore`, `S3ArtifactStore`
+/ `write_artifacts_to_s3`, `BlobArtifactStore` / `write_artifacts_to_blob`, and `S3TraceInbox`.
 
 ## See also
 

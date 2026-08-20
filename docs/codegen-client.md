@@ -42,10 +42,9 @@ if result.is_successful:
     payment = result.payload   # a PaymentDto
 ```
 
-Handler/client discovery in this port is **import-driven, not reflective**
-(`benzene.core.discovery`'s own docstring says the same) — import the generated module (or name its
-package in whatever discovery/composition-root scan your service uses) to register it. There is no
-scan that finds a generated client on its own.
+Wiring in this port is **import-driven, not reflective** — import the generated module and register
+its factory in your composition root, as above. There is no scan that finds a generated client on
+its own.
 
 ## The two output shapes
 
@@ -79,8 +78,9 @@ explicitly is itself an include-list of one.
 
 ## Types
 
-Every `components.schemas` entry becomes a stdlib `@dataclass` — **not** a `pydantic` model (there
-is no pydantic usage anywhere in this port). Generated dataclasses are meant to be used with the
+Every `components.schemas` entry becomes a stdlib `@dataclass` — **not** a `pydantic` model, so a
+generated client adds no runtime dependency (pydantic appears in this port only as the optional
+[`benzene-pydantic`](reference/pydantic.md) validation adapter). Generated dataclasses are meant to be used with the
 existing `benzene.core.mapping` serialization idiom (`to_jsonable`/`to_request`), which already
 camelCases on write and case-/separator-folds on read — so a generated dataclass needs no
 per-field metadata to round-trip against a .NET/Go/TypeScript peer.
