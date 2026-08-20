@@ -358,10 +358,55 @@ pipeline = MiddlewarePipeline().use(spec_interception(spec))
 
 `spec_interception(spec)` short-circuits the reserved `benzene:spec` topic (version ignored), so a
 service serves its spec over gRPC or a cloud queue too; over HTTP the [`/benzene/spec`](http.md) surface
-is its face. Pass a callable to `spec_interception` / `StandardPaths(spec=...)` to re-derive per request
-(e.g. to reflect a degraded subsystem). The mesh [`ServiceDescriptor`](mesh.md) is a richer projection
-of the same registry (adding identity, placement, and a contract hash); `ServiceSpec` is the minimal
-profile document and needs only `benzene.core`. Both share one schema derivation, `json_schema`.
+serves the **Contract Document** below and keeps this payload at `?type=native`. Pass a callable to
+`spec_interception` / `StandardPaths(spec=...)` to re-derive per request (e.g. to reflect a degraded
+subsystem). The mesh [`ServiceDescriptor`](mesh.md) is a richer projection of the same registry
+(adding identity, placement, and a contract hash); `ServiceSpec` is the minimal profile document and
+needs only `benzene.core`. Both share one schema derivation, `json_schema`.
+
+## Contract document
+
+A `ContractDocument` is the **cross-language** projection of the same registry — the shape
+`contract-document.md` specifies, which the Cloud Service Profile's R5 requires a service to serve at
+`/benzene/spec` and which every language's client generator parses:
+
+```json
+{"openapi": "3.0.1", "info": {"title": "orders", "description": "", "version": "1.0.0"},
+ "messageEndpoint": "/benzene/invoke", "transports": ["http", "sqs"],
+ "requests": [{"topic": "orders:place", "httpMappings": [{"method": "POST", "path": "/orders"}],
+               "request": {"$ref": "#/components/schemas/PlaceOrder"}, "response": {"$ref": "..."}}],
+ "events": [{"topic": "order:placed", "message": {"$ref": "..."}}],
+ "components": {"schemas": {"PlaceOrder": {"type": "object", "properties": {"sku": {"type": "string"}}}}}}
+```
+
+```python
+from benzene.core import ContractDocument, HttpMapping
+
+document = ContractDocument.derive(
+    registry,
+    service="orders",
+    version="1.0.0",
+    produces=outbound,                       # -> events[], same three forms ServiceSpec.derive takes
+    message_endpoint="/benzene/invoke",
+    transports=("http", "sqs"),
+    http_mappings={("orders:place", ""): [HttpMapping("POST", "/orders")]},
+)
+document.to_payload()
+```
+
+- **`derive(registry, ...)`** sees the handlers' declared Python types, so each dataclass payload is
+  named once in `components.schemas` and referenced by `$ref` — that is what lets a generator emit one
+  named type per payload instead of one anonymous type per topic. An untyped (`dict`) handler has no
+  name worth publishing, so its schema is written inline, which §2 allows.
+- **`from_spec(spec, ...)`** projects an already-derived `ServiceSpec`. The types are gone by then, so
+  every schema is inline and the catalogue is empty. This is what `/benzene/spec` serves when you wired
+  only `spec=`; it costs a generator the payload *names*, not any of the contract.
+
+Emission follows §1's presence column rather than whatever is convenient: `transports` is **omitted**
+when empty (never `[]`), `info` writes empty strings rather than going missing, `messageEndpoint` is
+absent when the service exposes none (consumers feature-detect send capability on it), and
+`requests`/`events`/`components` are always present even when empty. A `version` is omitted rather than
+written as `""`, and `reserved` is written only when true.
 
 ## Transport metadata
 
@@ -501,6 +546,8 @@ make a blocking SDK call safe: sharing one event loop works because the consumer
 `DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `MessageSender`, `with_retry`, `with_correlation_id`,
 `RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `SchemaCasters`,
 `casting_handler`, `Cast`, `NoCastPathError`, `ServiceSpec`, `TopicSpec`, `spec_interception`,
+`ContractDocument`, `ContractRequest`, `ContractEvent`, `ContractSource`, `HttpMapping`,
+`CONTRACT_OPENAPI`, `is_reserved_topic`, `resolve_contract`,
 `SPEC_TOPIC`, `json_schema`, `Schema`, `to_jsonable`, `to_request`, `Pipelines`,
 `InProcessMessageSender`, `InProcessFanOutSender`, `DuplicatePipelineError`, `PipelineNotFoundError`,
 `use_instance`, `WorkerHost`, `StopSignal`, `Worker`, `background_worker`, `NoWorkersError`,

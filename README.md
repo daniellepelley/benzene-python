@@ -319,9 +319,11 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 13. **(done)** The Cloud Service Profile's well-known HTTP surfaces (design-principles §5.2; profile
     R3/R4/R5/R7) — `BenzeneHttpApp(standard_paths=StandardPaths(...))` exposes `/benzene/invoke` (the
     wire-envelope endpoint), `/benzene/health` (the `{isHealthy, healthChecks}` aggregate, 200/503), and
-    `/benzene/spec` (the registry-derived `ServiceSpec`) under a configurable `/benzene/` prefix. The
-    schema derivation moved into `benzene.core` (shared by the spec doc and the mesh descriptor), and
-    the reserved `benzene:spec` topic is answered on any transport by `spec_interception`.
+    `/benzene/spec` (the registry-derived **Contract Document** — the cross-language format
+    `contract-document.md` specifies and every port's client generator parses — with this port's native
+    `ServiceSpec` payload still reachable at `?type=native`) under a configurable `/benzene/` prefix.
+    The schema derivation moved into `benzene.core` (shared by the spec doc and the mesh descriptor),
+    and the reserved `benzene:spec` topic is answered on any transport by `spec_interception`.
 14. **(done)** PyPI packaging — every package carries complete metadata (PEP 639 `license = "MIT"` with
     a bundled `LICENSE`, classifiers, pinned inter-package deps) and builds a clean sdist + wheel that
     passes `twine check`. A [`release`](.github/workflows/release.yml) workflow builds all nineteen

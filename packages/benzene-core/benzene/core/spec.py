@@ -8,9 +8,13 @@ request/response JSON schema (:func:`benzene.core.json_schema`), plus — for a 
 one (mesh.md §2.3) — the topics it *produces*, so the document describes both sides of the service's
 contract and not just what it consumes.
 
-This is the transport-neutral core of R5. The reserved topic ``benzene:spec`` is answered by
+This is the transport-neutral core of R5, and this port's **native** shape for it. R5's own document
+is the cross-language Contract Document (:class:`~benzene.core.ContractDocument`,
+``contract-document.md``), which is what ``/benzene/spec`` serves and what every language's client
+generator parses; a ``ServiceSpec`` projects into one, and stays reachable in its own right at
+``/benzene/spec?type=native``. The reserved topic ``benzene:spec`` is answered with this payload by
 :func:`spec_interception` (the same interception pattern as health checks and the mesh endpoint), so a
-service can serve its spec over *any* transport; the HTTP binding maps ``/benzene/spec`` onto it.
+service can serve its spec over *any* transport.
 
 The mesh :class:`~benzene.mesh.ServiceDescriptor` is a richer, mesh-facing projection of the same
 registry (adding identity, placement, and a contract hash); ``ServiceSpec`` is the minimal
@@ -132,7 +136,7 @@ class ServiceSpec:
         )
         produced = tuple(
             sorted(
-                (_outbound_spec(item) for item in _outbound_items(produces)),
+                (_outbound_spec(item) for item in outbound_items(produces)),
                 key=lambda t: (t.id, t.version),
             )
         )
@@ -148,8 +152,12 @@ class ServiceSpec:
         return payload
 
 
-def _outbound_items(produces: ProducesSource | None) -> Iterable[OutboundTopic | str]:
-    """Normalize the three accepted ``produces`` forms into one iterable of declarations."""
+def outbound_items(produces: ProducesSource | None) -> Iterable[OutboundTopic | str]:
+    """Normalize the three accepted ``produces`` forms into one iterable of declarations.
+
+    Shared with :mod:`benzene.core.contract`, which projects the same declaration into a Contract
+    Document's ``events[]`` — one reading of what ``produces`` accepts, not two.
+    """
     if produces is None:
         return ()
     if isinstance(produces, str):  # a bare str is iterable — silently declaring one topic per letter

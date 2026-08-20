@@ -255,3 +255,82 @@ def test_stdlib_get_reads_the_body_off_an_http_error(monkeypatch: pytest.MonkeyP
     status, body = run(get("http://orders/benzene/health"))
     assert status == 503
     assert body == '{"isHealthy": false}'
+
+
+# --- pulling a service this port did not build ----------------------------------------------------
+
+#: A .NET/Go/TypeScript service's /benzene/spec: the Contract Document (contract-document.md), the
+#: format R5 names. Literal rather than produced here, so the test still fails if this port's own
+#: emitter drifts away from the format.
+_FOREIGN_CONTRACT_DOCUMENT = {
+    "openapi": "3.0.1",
+    "info": {"title": "payments", "description": "", "version": "2.1.0"},
+    "messageEndpoint": "/benzene/invoke",
+    "requests": [
+        {
+            "topic": "payments:capture",
+            "request": {"$ref": "#/components/schemas/CapturePayment"},
+            "response": {},
+        },
+        {"topic": "benzene:spec", "reserved": True, "request": {}, "response": {}},
+    ],
+    "events": [{"topic": "payment:captured", "message": {"type": "object"}}],
+    "components": {
+        "schemas": {
+            "CapturePayment": {
+                "type": "object",
+                "properties": {"orderId": {"type": "string"}},
+                "required": ["orderId"],
+            }
+        }
+    },
+}
+
+
+def test_a_contract_document_service_folds_into_the_collector_like_any_other() -> None:
+    # Reading only the native {service, topics} shape meant a polled foreign service landed in the
+    # fleet as an empty catalogue: present, contributing no topics and no graph edges at all.
+    collector = _polled(_FOREIGN_CONTRACT_DOCUMENT)
+
+    fleet = collector.query_fleet({})
+    assert [s["service"] for s in fleet["services"]] == ["payments"]  # info.title names the service
+    # requests[] are what it consumes and events[] what it produces — the graph edges a pull-based
+    # mesh exists to draw.
+    capture = collector.query_topic({"topic": "payments:capture"})
+    assert capture["consumers"] == ["payments"]
+    captured = collector.query_topic({"topic": "payment:captured"})
+    assert captured["providers"] == ["payments"]
+    # The reserved framework topic stays out of the graph, as it does for a native document, so the
+    # same service does not look different depending on which shape it happened to serve.
+    assert "benzene:spec" not in {t["topic"] for t in fleet["topics"]}
+
+
+def test_a_polled_contract_documents_refs_are_resolved_into_real_schemas() -> None:
+    # A $ref into a catalogue the collector never sees would compare as "the schema changed" the
+    # moment a producer renamed a class, so the reference is resolved on the way in.
+    collector = _polled(_FOREIGN_CONTRACT_DOCUMENT)
+    specs = collector.snapshot()["services"][0]["topicSpecs"]
+    assert specs["payments:capture"]["requestSchema"] == {
+        "type": "object",
+        "properties": {"orderId": {"type": "string"}},
+        "required": ["orderId"],
+    }
+
+
+def _polled(document: dict) -> MeshCollector:
+    """One poll sweep of a single service answering ``document`` at /benzene/spec."""
+    collector = MeshCollector()
+    source = CallableServiceSource(
+        "payments",
+        spec=_returning(document),
+        health=_returning({"isHealthy": True, "healthChecks": {}}),
+    )
+    assert all(result.ok for result in run(MeshPoller(collector, [source]).poll_once()))
+    return collector
+
+
+def _returning(document: dict):
+    async def fetch() -> dict:
+        return document
+
+    return fetch

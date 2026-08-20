@@ -68,11 +68,13 @@ def test_spec_surface_carries_the_typed_request_response_schemas() -> None:
     response = handler(ApiGatewayRequestBuilder("GET", "/benzene/spec").build())
     assert response["statusCode"] == 200
     spec = json.loads(response["body"])
-    assert spec["service"] == "orders"
+    # R5's Contract Document (contract-document.md): info.title names the service and requests[]
+    # carries one entry per topic with its request/response Schema Objects.
+    assert spec["info"]["title"] == "orders"
     # The derived spec now carries real schemas (so the mesh-ui functional map shows them).
-    topic = next(t for t in spec["topics"] if t["id"] == "orders:place")
-    assert "sku" in topic["requestSchema"]["properties"]
-    assert "service" in topic["responseSchema"]["properties"]
+    request = next(r for r in spec["requests"] if r["topic"] == "orders:place")
+    assert "sku" in request["request"]["properties"]
+    assert "service" in request["response"]["properties"]
 
 
 def test_traces_are_pushed_to_the_collector_after_an_invocation() -> None:

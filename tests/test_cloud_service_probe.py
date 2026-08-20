@@ -9,6 +9,7 @@ failure.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -122,3 +123,67 @@ def test_report_payload_round_trips() -> None:
 
 def _reason(report, requirement_id: str) -> str:
     return next(p.reason for p in report.probes if p.id == requirement_id)
+
+
+# --- grading a service this port did not build (the point of a language-neutral probe) ------------
+
+#: What a .NET service actually answers at /benzene/spec: the Contract Document (R5,
+#: contract-document.md), including its reserved framework topics. Written out literally rather than
+#: produced by this port, so the test would still fail if this port's own emitter drifted.
+_DOTNET_CONTRACT_DOCUMENT = {
+    "openapi": "3.0.1",
+    "info": {"title": "payments-api", "description": "", "version": "2.1.0"},
+    "messageEndpoint": "/benzene/invoke",
+    "transports": ["api-gateway", "sqs"],
+    "requests": [
+        {
+            "topic": "payments:capture",
+            "httpMappings": [{"method": "POST", "path": "/payments"}],
+            "request": {"$ref": "#/components/schemas/CapturePayment"},
+            "response": {"$ref": "#/components/schemas/PaymentDto"},
+        },
+        {"topic": "benzene:spec", "reserved": True, "request": {}, "response": {}},
+    ],
+    "events": [{"topic": "payment:captured", "message": {"$ref": "#/components/schemas/Captured"}}],
+    "components": {
+        "schemas": {
+            "CapturePayment": {"type": "object", "properties": {"orderId": {"type": "string"}}},
+            "PaymentDto": {"type": "object", "properties": {"id": {"type": "string"}}},
+            "Captured": {"type": "object", "properties": {"id": {"type": "string"}}},
+        }
+    },
+}
+
+
+def _foreign_service_client():
+    """An HttpCall standing in for a non-Python service: R5 answers the Contract Document."""
+
+    async def call(method: str, url: str, body: str | None) -> tuple[int, str]:
+        path = urlsplit(url).path
+        if path == "/benzene/spec":
+            return 200, json.dumps(_DOTNET_CONTRACT_DOCUMENT)
+        if path == "/benzene/health":
+            return 200, json.dumps({"isHealthy": True, "healthChecks": {}})
+        if path == "/benzene/invoke":
+            inner = json.dumps({"service": "payments-api", "topics": [{"id": "payments:capture"}]})
+            return 200, json.dumps({"statusCode": "ok", "headers": {}, "body": inner})
+        return 404, ""
+
+    return call
+
+
+def test_a_contract_document_service_grades_the_same_as_a_native_one() -> None:
+    # The README's claim is that this probe "grades any port's service the same way". It did not:
+    # R2 read `topics` and R5 required a {service, topics} document, so the reference implementation
+    # of the format R5 actually names came back with R2 unsatisfied and R5 malformed.
+    report = asyncio.run(probe_cloud_service("http://payments", http=_foreign_service_client()))
+    assert report.not_satisfied == []
+    assert report.verdict("R5") is Verdict.SATISFIED
+    assert report.verdict("R2") is Verdict.SATISFIED
+
+
+def test_the_probes_topic_count_ignores_the_reserved_framework_topics() -> None:
+    report = asyncio.run(probe_cloud_service("http://payments", http=_foreign_service_client()))
+    reason = next(p.reason for p in report.probes if p.id == "R2")
+    # benzene:spec is in requests[] and is not an application topic (§5.1's flag-or-prefix rule).
+    assert reason == "spec lists 1 application topic(s)"

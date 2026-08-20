@@ -179,7 +179,9 @@ descriptor = ServiceDescriptor.derive(
 
 The outside-in counterpart: point it at a *deployed* service's base URL and it audits the profile over
 plain HTTP, speaking only the language-neutral surfaces (`/benzene/spec`, `/benzene/health`,
-`/benzene/invoke`) so it grades a Go, Node, or .NET service exactly as a Python one. Each requirement
+`/benzene/invoke`) so it grades a Go, Node, or .NET service exactly as a Python one — it reads either
+document `/benzene/spec` may answer with (R5's Contract Document, or this port's native payload), so
+that claim now holds for the reference implementation of the format R5 actually names. Each requirement
 gets a **tri-state** `Verdict` — `satisfied` / `not-satisfied` / `inconclusive` — always with a reason.
 
 ```python
@@ -578,15 +580,20 @@ collector.query_fleet({})
   `urllib` on a worker thread. `CallableServiceSource(name, spec=, health=)` backs a source with two
   async callables — for tests or a bespoke transport (e.g. a Lambda invoke).
 - `poll_once()` sweeps all sources concurrently and returns a `PollResult` per source; a down service is
-  a failed result, never a broken sweep. `MeshPoller._poll` forwards a polled spec's `produces` into the
-  collector exactly like `topics`, so a source whose spec document *carries* `produces` gives the
-  collector provider edges too (mesh.md §4). `HttpServiceSource`'s `{prefix}/spec` is answered by
-  `benzene.core.ServiceSpec` (the Cloud Service Profile surface, `{"service", "topics"}` — no
-  `produces` field today), so a fleet polled purely over HTTP gets consumer edges from the pull and no
-  provider edges from it; a `CallableServiceSource` whose `spec` callable instead returns a full
-  `ServiceDescriptor.to_payload()` (as the AWS Lambda mesh example's `benzene:mesh`-topic source does)
-  gets both. Traces still feed invocation/error stats, never graph membership, and every source composes
-  with a push feed in one collector.
+  a failed result, never a broken sweep. A polled spec's produced topics fold into the collector exactly
+  like its consumed ones, so the pull path draws provider edges as well as consumer edges (mesh.md §4).
+- **Either spec shape is read.** `{prefix}/spec` answers R5's
+  [Contract Document](http.md) (`requests[]` consumed, `events[]` produced) by default and this port's
+  native `{service, topics, produces}` payload at `?type=native`; `benzene.mesh.specdoc` reads both, so
+  a polled .NET, Go, or TypeScript service folds into the collector exactly like a Python one — where
+  reading only the native shape used to ingest it as an empty catalogue. Reserved `benzene:` topics are
+  dropped from either shape, so a service does not look different depending on which it served, and a
+  Contract Document's `$ref`s are resolved against its `components.schemas` on the way in (a reference
+  into a catalogue the collector never sees would compare as "the schema changed" on a class rename).
+  A `CallableServiceSource` whose `spec` callable returns a full `ServiceDescriptor.to_payload()` (as
+  the AWS Lambda mesh example's `benzene:mesh`-topic source does) is read the same way. Traces still
+  feed invocation/error stats, never graph membership, and every source composes with a push feed in
+  one collector.
 
 ## Exports
 
@@ -597,7 +604,9 @@ collector.query_fleet({})
 `InMemoryTraceExporter`, `QueueTraceExporter`, `parse_traceparent`, `new_trace_id`, `new_span_id`,
 `current_traceparent`, `with_trace_propagation`, `TracePropagatingMessageSender`,
 `MeshFeedSender`, `Heartbeat`, `Issue`, `IssueBatch`, `IssueAggregator`, `classify`,
-`issue_fingerprint`, `CLASSIFICATIONS`, `MeshCollector`, `collector_registry`, `CollectorError`,
+`issue_fingerprint`, `CLASSIFICATIONS`, `is_spec_document`, `is_contract_document`,
+`is_native_document`, `spec_service`, `spec_topics`, `spec_produces`,
+`MeshCollector`, `collector_registry`, `CollectorError`,
 `CollectorBadRequest`, `CollectorNotFound`, `REGISTER_TOPIC`, `HEARTBEAT_TOPIC`, `TRACES_TOPIC`,
 `ISSUES_TOPIC`, `QUERY_FLEET_TOPIC`, `QUERY_SERVICE_TOPIC`, `QUERY_TOPIC_TOPIC`, `QUERY_TRACE_TOPIC`,
 `evaluate_cloud_service_profile`, `CloudServiceProfileReport`, `RequirementCheck`, `REQUIREMENT_IDS`,

@@ -11,7 +11,7 @@ Python API that satisfies it and the test that proves it.
 | **R2** | Topics served through the handler registry | `Registry` is the single source of truth; every host builds its app from it | `tests/test_core.py` |
 | **R3** | Health checks + HTTP `/benzene/health` | `HealthChecks` + `health_interception` (reserved `benzene:healthcheck`); the HTTP surface returns the full `{isHealthy, healthChecks}` aggregate, `200`/`503` | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
 | **R4** | Wire-envelope invocability + HTTP `/benzene/invoke` | `BenzeneMessageApplication.handle` is the envelope entry point; `StandardPaths` exposes `POST /benzene/invoke` | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
-| **R5** | Registry-derived spec at `/benzene/spec` | `ServiceSpec.derive(registry, service=...)` + `spec_interception` (reserved `benzene:spec`); `StandardPaths` exposes `GET /benzene/spec` | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
+| **R5** | Registry-derived spec at `/benzene/spec` | `StandardPaths` exposes `GET /benzene/spec`, answering the cross-language **Contract Document** (`ContractDocument.derive`/`from_spec`, contract-document.md) with the native `ServiceSpec` payload at `?type=native`; `spec_interception` answers the reserved `benzene:spec` topic | `tests/test_contract_document.py`, `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
 | **R6** | Mesh service-side feeds | `ServiceDescriptor` (reserved `benzene:mesh`), `MeshFeedSender` (register / heartbeat / traces), `trace_middleware` (one `TraceEvent` per invocation) | `tests/test_mesh.py`, `mesh-*` conformance fixtures |
 | **R7** | Default `/benzene/` standard paths, configurable | `StandardPaths(prefix="/benzene", ...)` — one config object, relocatable prefix; threaded into every HTTP-capable host | `tests/test_wellknown.py::test_prefix_is_configurable_and_relocates_every_surface` |
 | **R8** | Join + propagate W3C trace context | `trace_middleware` joins an inbound `traceparent`; `with_trace_propagation` forwards the current span to outbound calls | `tests/test_mesh.py` (outbound trace propagation), `mesh-trace-cases` |
@@ -53,15 +53,20 @@ class OrdersStartUp(BenzeneStartUp):
         )
 ```
 
-## The two documents: spec vs. descriptor
+## The documents: contract, spec, descriptor
 
 R5's spec document and R6's mesh `ServiceDescriptor` are both **derived from the registry** and share
 one schema derivation (`benzene.core.json_schema`), but serve different audiences:
 
-- **`ServiceSpec`** (`/benzene/spec`) — the minimal, transport-facing "what I serve": `{service, topics}`
-  with request/response schemas. Depends only on `benzene-core`.
+- **`ContractDocument`** (`/benzene/spec`) — R5's own document and the cross-language one
+  (contract-document.md): `{openapi, info, messageEndpoint, transports?, requests[], events[],
+  components}`, the single input every language's client generator parses. Depends only on
+  `benzene-core`.
+- **`ServiceSpec`** (`/benzene/spec?type=native`, and the reserved `benzene:spec` topic) — this port's
+  own minimal "what I serve": `{service, topics}` with request/response schemas. It is what the
+  Contract Document is projected from when you wire `spec=` alone.
 - **`ServiceDescriptor`** (`benzene:mesh`) — the richer mesh view: adds service identity, placement, and
   a content `descriptorHash` for drift detection. Lives in `benzene-mesh`.
 
-A service can expose either or both; they never disagree about the topics, because both read the one
-registry.
+A service can expose any or all of them; they never disagree about the topics, because they all read
+the one registry.

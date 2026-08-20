@@ -128,14 +128,39 @@ app = BenzeneHttpApp(
   the RFC 9457 problem document (`{type, title, detail, benzeneStatus, errors[]}`, wire-contracts
   §1.3) — because an unhealthy `Result` is `service-unavailable` and the envelope drops its payload.
   Both name the failing checks; the HTTP surface additionally keeps the per-check breakdown.
-- **`GET /benzene/spec`** (R5) — the derived [`ServiceSpec`](core.md#service-spec): `{service, topics}`
-  with each topic's request/response JSON schema, projected from the registry (never hand-written).
-  Enabled by passing `spec` (a `ServiceSpec` or a callable returning one).
+- **`GET /benzene/spec`** (R5) — the derived **[Contract Document](core.md#contract-document)**:
+  `{openapi, info, messageEndpoint, transports?, requests[], events[], components}`, projected from the
+  registry (never hand-written). This is the format `contract-document.md` specifies and every
+  language's client generator parses, so a .NET/Go/TypeScript generator pointed here reads a Python
+  service the same way it reads its own. Enabled by passing `spec` (a `ServiceSpec` or a callable) or
+  `contract` (a `ContractDocument` or a callable) — see the `?type=` switch below.
 - **Prefix** (R7) — `prefix` defaults to `/benzene` and is configurable; relocating it moves every
   surface together (the prefix is the steer, not a cage), so tell your clients the new base.
 
+### `?type=` on `/benzene/spec`
+
+R5 names the Contract Document as `/benzene/spec?type=benzene&format=json`, and that is what the
+surface answers **by default** — a generator that follows the profile's documented path and asks for
+nothing must get the document the profile names, not a shape only this port can read. (It is also
+where the .NET reference lands for an absent or unrecognised type, so the two ports agree.)
+
+| `?type=` | Document |
+| --- | --- |
+| absent, `benzene`, or anything unrecognised | the Contract Document (contract-document.md) |
+| `native` | this port's own [`ServiceSpec`](core.md#service-spec) payload, `{service, topics[, produces]}` |
+
+`format` is accepted and ignored: JSON is the only rendering this port produces.
+
+Left to itself the served document is projected from the `ServiceSpec`, with schemas written inline
+and this host's own knowledge folded in — `messageEndpoint` (`/benzene/invoke`), each topic's
+`httpMappings` from the router, and any `StandardPaths(transports=...)` you declared. Pass
+`contract=ContractDocument.derive(registry, ...)` to serve an authored document instead: that
+projection sees the handlers' declared types, so it can **name** each payload in
+`components.schemas` rather than inlining it.
+
 The reserved topic **`benzene:spec`** is answered on *any* transport by `spec_interception` (the same
-pattern as health and mesh interception); the HTTP `/benzene/spec` surface is its HTTP face.
+pattern as health and mesh interception) and still carries the native `ServiceSpec` payload; the
+`?type=` switch is an HTTP-surface affordance, which is the only place R5 defines one.
 
 The three cloud hosts drive their HTTP trigger through this same `BenzeneHttpApp`, so passing
 `standard_paths=` to `GcpFunctionsApp` / `AwsLambdaApp` / `AzureFunctionsApp` exposes the identical

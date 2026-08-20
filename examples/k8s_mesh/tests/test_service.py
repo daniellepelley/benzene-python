@@ -100,5 +100,5 @@ def test_health_and_spec_surfaces_answer() -> None:
 
     spec = host.send_http("GET", "/benzene/spec")
     assert spec.status_code == 200
-    topics = {t["id"] for t in json.loads(spec.body)["topics"]}
+    topics = {r["topic"] for r in json.loads(spec.body)["requests"]}
     assert SHIPMENT_BOOK_TOPIC in topics

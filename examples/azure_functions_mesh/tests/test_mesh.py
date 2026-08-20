@@ -229,7 +229,8 @@ def test_every_interrogated_spec_document_declares_what_that_service_produces() 
     declared = {}
     for name, app in apps.items():
         document = json.loads(app.handle_http(method="GET", path="/benzene/spec").body)
-        declared[name] = [t["id"] for t in document.get("produces", [])]
+        # events[] is where a Contract Document declares what a service produces (§3).
+        declared[name] = [event["topic"] for event in document.get("events", [])]
 
     assert declared == {name: sorted(SERVICE_PRODUCES[name]) for name in KNOWN_SERVICES}
 

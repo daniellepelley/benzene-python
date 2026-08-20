@@ -4,7 +4,8 @@ Where :class:`MeshFeedSender` is the *push* side (a service sends its register/h
 the poller is the *pull* side, mirroring the .NET Mesh Host: it reaches out to a configured fleet on a
 timer, reads each service's well-known surfaces (``/benzene/spec`` + ``/benzene/health`` — exposed by
 :class:`~benzene.http.StandardPaths`), and folds the result into the same collector. A service needs no
-egress wiring to appear in the mesh; it only has to be *pollable*.
+egress wiring to appear in the mesh; it only has to be *pollable* — in any language, since
+:mod:`benzene.mesh.specdoc` reads either shape ``/benzene/spec`` answers with.
 
     poller = MeshPoller(collector, [
         HttpServiceSource("orders", "https://orders.svc"),
@@ -32,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from .collector import MeshCollector
+from .specdoc import spec_produces, spec_service, spec_topics
 
 #: A GET fetch: a URL → ``(status_code, body_text)``. Injectable so a test drives it with no network.
 HttpGet = Callable[[str], Awaitable[tuple[int, str]]]
@@ -137,9 +139,13 @@ class MeshPoller:
             health = await source.fetch_health()
         except Exception as exc:  # a down/unreachable service must not break the sweep
             return PollResult(source.name, ok=False, error=str(exc))
-        service = str(spec.get("service") or source.name)
-        topics = spec.get("topics", [])
-        produces = spec.get("produces", [])
+        # Read whichever shape the service serves: the Contract Document every port's /benzene/spec
+        # now answers with, or this port's native {service, topics} payload. Reading only the latter
+        # is what made a pulled .NET/Go/TypeScript service fold into the collector as an empty
+        # catalogue - present in the fleet, contributing no topics and no graph edges.
+        service = spec_service(spec, source.name)
+        topics = spec_topics(spec)
+        produces = spec_produces(spec)
         descriptor_hash = _spec_hash(service, topics, produces)
         self._collector.ingest_register(
             {

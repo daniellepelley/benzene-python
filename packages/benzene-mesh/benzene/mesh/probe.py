@@ -4,8 +4,9 @@ Where :mod:`benzene.mesh.profile` is the service's *own* wiring-time self-check,
 outside-in counterpart: point it at a running service's base URL and it reports, per requirement, a
 **tri-state** verdict — ``satisfied`` / ``not-satisfied`` / ``inconclusive`` — always with a reason.
 It only speaks the language-neutral HTTP surfaces (``/benzene/spec``, ``/benzene/health``,
-``/benzene/invoke``), so it audits a Go, Node, or .NET service exactly as it audits a Python one; it
-depends on nothing in the rest of the port.
+``/benzene/invoke``), so it audits a Go, Node, or .NET service exactly as it audits a Python one —
+including reading either shape ``/benzene/spec`` answers with (:mod:`benzene.mesh.specdoc`): the
+Contract Document R5 names, or this port's native payload. It depends on nothing else in the port.
 
 A black-box probe genuinely cannot verify everything a service-side self-check can, so — matching the
 profile spec (cloud-service-profile.md §5) — two things stay ``inconclusive`` by design and are never
@@ -35,6 +36,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+
+from .specdoc import is_spec_document, spec_topics
 
 #: The default well-known path prefix (design-principles §5.2).
 DEFAULT_PREFIX = "/benzene"
@@ -150,7 +153,7 @@ async def probe_cloud_service(
             RequirementProbe("R2", Verdict.NOT_SATISFIED, "/benzene/spec did not return a document")
         )
     else:
-        topic_ids = [str(t.get("id", "")) for t in spec.document.get("topics", [])]
+        topic_ids = [str(t.get("id", "")) for t in spec_topics(spec.document)]
         app_topics = [t for t in topic_ids if t and not _is_reserved(t)]
         probes.append(
             RequirementProbe(
@@ -193,9 +196,10 @@ async def probe_cloud_service(
         _surface_verdict(
             "R5",
             spec,
-            lambda doc: "service" in doc and "topics" in doc,
+            is_spec_document,
             present="/benzene/spec returns a derived spec document",
-            malformed="/benzene/spec did not return a {service, topics} document",
+            malformed="/benzene/spec returned neither a Contract Document ({openapi, info, "
+            "requests, events, components}) nor a native {service, topics} one",
         )
     )
 

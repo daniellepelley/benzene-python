@@ -205,4 +205,5 @@ def test_http_standard_paths_also_answer_health_and_spec() -> None:
 
     spec = host.send_http("GET", "/benzene/spec")
     assert spec.status_code == 200
-    assert {t["id"] for t in json.loads(spec.body)["topics"]} == {ORDER_CREATE_TOPIC}
+    # R5's Contract Document — requests[].topic, the format every port's client generator parses.
+    assert {r["topic"] for r in json.loads(spec.body)["requests"]} == {ORDER_CREATE_TOPIC}

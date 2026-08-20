@@ -122,7 +122,9 @@ def test_spec_derives_topics_and_schemas_from_the_registry() -> None:
         router, application=BenzeneMessageApplication(registry), standard_paths=StandardPaths(spec=spec)
     )
 
-    response = asyncio.run(app.handle("GET", "/benzene/spec"))
+    # ?type=native is where this port's own {service, topics} payload lives now; the bare path
+    # answers the Contract Document (covered below).
+    response = asyncio.run(app.handle("GET", "/benzene/spec", "type=native"))
     assert response.status_code == 200
     doc = json.loads(response.body)
     assert doc["service"] == "greeter"
@@ -187,7 +189,7 @@ def test_spec_source_may_be_a_callable_redrived_each_request() -> None:
         application=BenzeneMessageApplication(registry),
         standard_paths=StandardPaths(spec=lambda: ServiceSpec.derive(registry, service="greeter")),
     )
-    doc = json.loads(asyncio.run(app.handle("GET", "/benzene/spec")).body)
+    doc = json.loads(asyncio.run(app.handle("GET", "/benzene/spec", "type=native")).body)
     assert doc["service"] == "greeter"
 
 

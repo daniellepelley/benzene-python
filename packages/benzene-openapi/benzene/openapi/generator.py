@@ -1,10 +1,11 @@
 """OpenAPI 3.1 generation from the handler registry — a sibling projection to the derived spec.
 
-The port already derives two documents from the same registry: the Cloud Service Profile's
-:class:`~benzene.core.ServiceSpec` (``/benzene/spec``) and the mesh
-:class:`~benzene.mesh.ServiceDescriptor`, both of which embed the per-topic JSON Schema that
+The port already derives three documents from the same registry: the Cloud Service Profile's
+:class:`~benzene.core.ContractDocument` (served at ``/benzene/spec``), this port's native
+:class:`~benzene.core.ServiceSpec` payload (``/benzene/spec?type=native``), and the mesh
+:class:`~benzene.mesh.ServiceDescriptor` — all of which embed the per-topic JSON Schema that
 :func:`benzene.core.json_schema` derives from a handler's declared request/response type. This module
-adds a third projection of that *same* registry: a standard **OpenAPI 3.1** document, so the contract
+adds a further projection of that *same* registry: a standard **OpenAPI 3.1** document, so the contract
 a service serves can be browsed, diffed, and fed to the OpenAPI tooling ecosystem (Swagger UI, code
 generators, contract linters) without a hand-maintained spec. Mirrors .NET's ``Benzene.Schema.OpenApi``.
 

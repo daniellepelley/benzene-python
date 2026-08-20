@@ -31,6 +31,7 @@ from benzene.core import (
     AppDefinition,
     BenzeneMessageApplication,
     Container,
+    HttpMapping,
     MiddlewarePipeline,
     Registry,
     application_from,
@@ -40,7 +41,7 @@ from benzene.core import (
 from benzene.results import Result, Status, is_successful
 
 from .routing import HttpRouter
-from .standard import StandardPaths
+from .standard import NATIVE_SPEC_TYPE, StandardPaths
 from .status import to_http
 
 
@@ -97,7 +98,7 @@ class BenzeneHttpApp:
     ) -> HttpResponse:
         """Handle one HTTP request end-to-end, returning the mapped :class:`HttpResponse`."""
         if self._standard is not None:
-            standard = await self._handle_standard(method, path, headers or {}, body)
+            standard = await self._handle_standard(method, path, query_string, headers or {}, body)
             if standard is not None:
                 return standard
 
@@ -144,7 +145,7 @@ class BenzeneHttpApp:
         return _to_http_response(response)
 
     async def _handle_standard(
-        self, method: str, path: str, headers: dict[str, str], body: str
+        self, method: str, path: str, query_string: str, headers: dict[str, str], body: str
     ) -> HttpResponse | None:
         """Serve a well-known profile surface, or ``None`` if the request is not one (→ route it)."""
         std = self._standard
@@ -182,12 +183,26 @@ class BenzeneHttpApp:
                 status_code, {"content-type": "application/json"}, json.dumps(report.to_payload())
             )
 
-        # R5 — /benzene/spec: the derived spec document (topics + payload schemas from the registry).
-        if std.spec is not None and verb == "GET" and path == std.spec_path:
-            spec = std.resolved_spec()
-            if spec is not None:
+        # R5 — /benzene/spec: the derived spec document. ?type= picks the format (the R5 spelling is
+        # ?type=benzene&format=json): the Contract Document by default — the shape every language's
+        # client generator parses, and what a caller asking for nothing must get — with this port's
+        # native {service, topics} payload still reachable at ?type=native. `format` is accepted and
+        # ignored: JSON is the only rendering this port produces.
+        if (
+            (std.spec is not None or std.contract is not None)
+            and verb == "GET"
+            and path == std.spec_path
+        ):
+            query = dict(parse_qsl(query_string or ""))
+            if query.get("type", "").strip().lower() == NATIVE_SPEC_TYPE:
+                spec = std.resolved_spec()
+                document = None if spec is None else spec.to_payload()
+            else:
+                contract = std.resolved_contract(_http_mappings(self._router))
+                document = None if contract is None else contract.to_payload()
+            if document is not None:
                 return HttpResponse(
-                    200, {"content-type": "application/json"}, json.dumps(spec.to_payload())
+                    200, {"content-type": "application/json"}, json.dumps(document)
                 )
 
         return None
@@ -273,6 +288,21 @@ def http_problem_response(result: Result[Any]) -> HttpResponse:
         headers={"content-type": "application/problem+json"},
         body=json.dumps(payload),
     )
+
+
+def _http_mappings(router: HttpRouter) -> dict[tuple[str, str], list[HttpMapping]]:
+    """This host's routes as a Contract Document ``httpMappings`` table, keyed by (topic, version).
+
+    A route resolves to one handler, so the key is the registry's own ``(topic, version)`` and not
+    the topic alone — a topic served at two versions on two routes must not advertise both routes on
+    both entries. Registration order is preserved, which is also the order the router matches in.
+    """
+    mappings: dict[tuple[str, str], list[HttpMapping]] = {}
+    for endpoint in router.endpoints():
+        mappings.setdefault((endpoint.topic, endpoint.version), []).append(
+            HttpMapping(method=endpoint.method, path=endpoint.path)
+        )
+    return mappings
 
 
 def _to_http_response(envelope: Mapping[str, Any]) -> HttpResponse:

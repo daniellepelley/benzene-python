@@ -21,6 +21,16 @@ from __future__ import annotations
 from .casting import Cast, NoCastPathError, SchemaCasters, casting_handler
 from .clients import MessageSender
 from .context import Context
+from .contract import (
+    CONTRACT_OPENAPI,
+    ContractDocument,
+    ContractEvent,
+    ContractRequest,
+    ContractSource,
+    HttpMapping,
+    is_reserved_topic,
+    resolve_contract,
+)
 from .dependencies import (
     Container,
     Lifetime,
@@ -142,6 +152,14 @@ __all__ = [
     "Next",
     "Schema",
     "json_schema",
+    "CONTRACT_OPENAPI",
+    "ContractDocument",
+    "ContractEvent",
+    "ContractRequest",
+    "ContractSource",
+    "HttpMapping",
+    "is_reserved_topic",
+    "resolve_contract",
     "SPEC_TOPIC",
     "OutboundTopic",
     "ProducesSource",

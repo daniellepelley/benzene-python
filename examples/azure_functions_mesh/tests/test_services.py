@@ -130,8 +130,9 @@ def test_http_standard_paths_answer_health_and_spec() -> None:
     spec = host.send_http("GET", "/benzene/spec")
     assert spec.status_code == 200
     body = json.loads(spec.body)
-    assert body["service"] == "shipping"
-    assert {t["id"] for t in body["topics"]} == {SHIPMENT_BOOK_TOPIC}
+    # R5's Contract Document: the service name is info.title and the topics are requests[].topic.
+    assert body["info"]["title"] == "shipping"
+    assert {r["topic"] for r in body["requests"]} == {SHIPMENT_BOOK_TOPIC}
 
 
 def test_http_standard_paths_invoke_also_answers() -> None:
