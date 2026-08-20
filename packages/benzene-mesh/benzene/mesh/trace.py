@@ -2,8 +2,9 @@
 
 A mesh-enabled service emits exactly one **TraceEvent** for every routed invocation: the topic it
 handled, the semantic status it produced, how long it took, and its place in a W3C trace. The
-:func:`trace_middleware` reads an inbound ``traceparent`` header to join an existing trace (or
-starts a fresh one), times the pipeline, and hands the finished event to a :class:`TraceExporter`.
+:func:`trace_interception` (still exported under its original name, :func:`trace_middleware`) reads an
+inbound ``traceparent`` header to join an existing trace (or starts a fresh one), times the pipeline,
+and hands the finished event to a :class:`TraceExporter`.
 
 **Export must never affect the traffic it observes** — it is asynchronous, non-blocking, and lossy
 under backpressure (mesh.md §3). The middleware therefore swallows any exporter error: no mesh feed
