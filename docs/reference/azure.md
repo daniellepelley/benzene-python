@@ -1,12 +1,12 @@
 # `benzene.azure`
 
 Host Benzene handlers on **Azure Functions** — HTTP, Service Bus, Event Hub, Queue Storage, Blob
-Storage, Cosmos DB change feed, Timer, and Event Grid triggers — plus Service Bus, Queue Storage, and
-Event Grid outbound clients. **Distribution: `benzene-azure` (depends on `benzene-core`,
+Storage, Cosmos DB change feed, Timer, and Event Grid triggers — plus Service Bus, Event Hub, Queue
+Storage, and Event Grid outbound clients. **Distribution: `benzene-azure` (depends on `benzene-core`,
 `benzene-http`).**
 
 ```bash
-pip install benzene-azure          # add [servicebus,storage,eventgrid] for the real outbound clients
+pip install benzene-azure   # add [servicebus,eventhub,storage,eventgrid] for the real outbound clients
 ```
 
 ## Overview
@@ -70,6 +70,10 @@ for the v2-model wiring.
 - `ServiceBusMessageSender(connection_string=..., entity_name=...)` — carries the Benzene topic +
   headers in the message's `application_properties` (a native channel), over `azure-servicebus`
   (`[servicebus]`).
+- `EventHubMessageSender(connection_string=..., eventhub_name=..., producer=None)` — sends one event
+  per publish with the Benzene topic + headers in the event's `properties`, the same convention
+  `decode_event_hub_event` reads back. `eventhub_name` may be omitted when the connection string's own
+  `EntityPath` names the hub; inject `producer` for tests. Over `azure-eventhub` (`[eventhub]`).
 - `QueueStorageMessageSender(queue_url=..., *, queue_name=..., connection_string=...,
   base64_encode=False)` — a Storage Queue has *no* attribute channel, so the sender serializes a
   Benzene envelope `{topic, headers, body}` (the shape `decode_queue_storage` lifts straight back).
@@ -80,7 +84,7 @@ for the v2-model wiring.
   topic in `eventType` / `type`. Native schema carries the headers in a `headers` field; CloudEvents
   carries them as *extension attributes*. Over `azure-eventgrid` (`[eventgrid]`).
 
-All three implement `benzene.core.MessageSender`, import their SDK lazily, and map a send failure to
+All four implement `benzene.core.MessageSender`, import their SDK lazily, and map a send failure to
 `service-unavailable` (never raising for a domain outcome).
 
 ## Testing
