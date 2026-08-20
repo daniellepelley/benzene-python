@@ -26,11 +26,17 @@ await sender.send_message("orders:created", order, headers={"x-correlation-id": 
 - **Consumer** — the Benzene topic comes from the record's `topic` header (the cross-port convention);
   the other Kafka headers are the Benzene headers (UTF-8), the value is the JSON body. One record is
   one scope; there is **no response channel**, so the result is acknowledge/log only — `run_consumer_loop`
-  commits the offset on success (at-least-once) and leaves a failed record for redelivery. A poison
-  record can never crash the loop.
+  commits the offset on success (at-least-once) and, because a Kafka commit is a *watermark* rather
+  than a per-message ack, `seek`s back to a failed record instead of committing past it (the loop
+  never buries a failure under a later success on the same partition; other partitions are unaffected).
+  The failed record is re-served and logged at warning level — cap the retries or dead-letter it from
+  the `on_result`/`should_continue` seams, or pass `commit=False` and own the offsets yourself. A
+  poison record can never crash the loop.
 - **Outbound** — `KafkaMessageSender` implements the `benzene.core.MessageSender` port over
   `confluent-kafka` (optional extra), forwarding the header dictionary onto the record's Kafka headers
-  so correlation/trace propagation rides across the hop.
+  so correlation/trace propagation rides across the hop. The send waits for the broker ack within
+  `flush_timeout` — an unacknowledged message is a `timeout` failure, not a false success — and a
+  missing `confluent-kafka` raises an `ImportError` naming the extra rather than becoming a result.
 
 The binding is duck-typed against `confluent-kafka`, so decode, dispatch, and send are exercised in
 memory with fakes — no broker, no SDK. Test through `benzene.kafka.testing` (a native-record builder +

@@ -7,8 +7,10 @@ correlation/trace propagation rides across the hop), and carries the Benzene **t
 configured Kafka topic, header-routed (the single-stream, header-routed pattern the Pub/Sub client
 uses too).
 
-The ``confluent-kafka`` producer is an optional dependency imported lazily; inject any object exposing
-``produce(topic, value, headers, on_delivery)`` + ``flush(timeout)`` to test without a broker.
+The ``confluent-kafka`` producer is an optional dependency imported lazily (a missing SDK raises a
+teaching :class:`ImportError` naming the extra — a deployment error, never a per-message result);
+inject any object exposing ``produce(topic, value, headers, on_delivery)`` + ``flush(timeout)`` to
+test without a broker.
 """
 
 from __future__ import annotations
@@ -50,7 +52,13 @@ class KafkaMessageSender:
 
     def _client(self) -> Any:
         if self._producer is None:
-            from confluent_kafka import Producer  # lazy: optional dependency
+            try:
+                from confluent_kafka import Producer  # lazy: optional dependency
+            except ImportError as exc:  # a missing SDK is a deployment error, not a send outcome
+                raise ImportError(
+                    "KafkaMessageSender requires confluent-kafka — install it with "
+                    "'pip install benzene-kafka[kafka]'."
+                ) from exc
 
             self._producer = Producer({"bootstrap.servers": self._bootstrap_servers or "localhost"})
         return self._producer
@@ -65,24 +73,33 @@ class KafkaMessageSender:
         data = self._serialize(message).encode("utf-8")
 
         delivery_errors: list[Any] = []
+        deliveries: list[Any] = []
 
         def _on_delivery(error: Any, _message: Any) -> None:
+            deliveries.append(error)
             if error is not None:
                 delivery_errors.append(error)
 
-        def _publish() -> None:
+        def _publish() -> Any:
             producer = self._client()
             producer.produce(
                 self._kafka_topic, value=data, headers=header_list, on_delivery=_on_delivery
             )
             # ``flush`` blocks up to ``flush_timeout`` for the broker ack; run the whole publish on a
-            # worker thread so it never stalls the event loop (e.g. a co-hosted ASGI server).
-            producer.flush(self._flush_timeout)
+            # worker thread so it never stalls the event loop (e.g. a co-hosted ASGI server). It
+            # returns the number of messages *still* in flight when the timeout expired.
+            return producer.flush(self._flush_timeout)
 
         try:
-            await asyncio.to_thread(_publish)
+            remaining = await asyncio.to_thread(_publish)
+        except ImportError:
+            raise  # a missing confluent-kafka is a deployment error — surface it, never map it
         except Exception as ex:  # a produce/flush failure is service-unavailable, never a crash
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         if delivery_errors:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(delivery_errors[0]))
+        if remaining or not deliveries:
+            # Still buffered locally (or no delivery callback ever fired): the broker never
+            # acknowledged, so reporting success here would silently lose the message.
+            return Result.failure(Status.TIMEOUT, "broker did not acknowledge within flush_timeout")
         return Result.ok()

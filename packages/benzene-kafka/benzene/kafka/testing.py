@@ -26,11 +26,19 @@ if TYPE_CHECKING:
 
 @dataclass
 class FakeKafkaMessage:
-    """A stand-in for a ``confluent_kafka.Message``: ``headers()`` / ``value()`` / ``error()``."""
+    """A stand-in for a ``confluent_kafka.Message``.
+
+    Exposes the accessors the binding reads — ``headers()`` / ``value()`` / ``error()`` for the
+    decode, and ``topic()`` / ``partition()`` / ``offset()`` for the loop's per-partition offset
+    bookkeeping (the seek-back that keeps a failed record from being leapfrogged).
+    """
 
     _headers: list[tuple[str, bytes]]
     _value: bytes
     _error: Any = None
+    _topic: str = "benzene"
+    _partition: int = 0
+    _offset: int = 0
 
     def headers(self) -> list[tuple[str, bytes]]:
         return self._headers
@@ -41,12 +49,31 @@ class FakeKafkaMessage:
     def error(self) -> Any:
         return self._error
 
+    def topic(self) -> str:
+        return self._topic
+
+    def partition(self) -> int:
+        return self._partition
+
+    def offset(self) -> int:
+        return self._offset
+
 
 class KafkaMessageBuilder:
     """Builds a :class:`FakeKafkaMessage` for a Benzene ``topic`` + body, headers as Kafka headers."""
 
-    def __init__(self, topic: str) -> None:
+    def __init__(
+        self,
+        topic: str,
+        *,
+        kafka_topic: str = "benzene",
+        partition: int = 0,
+        offset: int = 0,
+    ) -> None:
         self._topic = topic
+        self._kafka_topic = kafka_topic
+        self._partition = partition
+        self._offset = offset
         self._headers: dict[str, str] = {}
         self._body: str = ""
 
@@ -63,25 +90,36 @@ class KafkaMessageBuilder:
             (str(k), str(v).encode("utf-8")) for k, v in self._headers.items()
         ]
         headers.append((TOPIC_HEADER, self._topic.encode("utf-8")))
-        return FakeKafkaMessage(_headers=headers, _value=self._body.encode("utf-8"))
+        return FakeKafkaMessage(
+            _headers=headers,
+            _value=self._body.encode("utf-8"),
+            _topic=self._kafka_topic,
+            _partition=self._partition,
+            _offset=self._offset,
+        )
 
 
 @dataclass
 class RecordingKafkaConsumer:
     """An in-memory consumer that replays a fixed list of records, then reports empty polls.
 
-    Records committed via :meth:`commit` are appended to :attr:`committed`, so a test can assert the
-    loop's at-least-once behaviour (a failed record is *not* committed) without a broker.
+    Records committed via :meth:`commit` are appended to :attr:`committed` and every
+    :meth:`seek` target to :attr:`seeks`, so a test can assert the loop's at-least-once behaviour (a
+    failed record is *not* committed, and the loop seeks back to it) without a broker.
     """
 
     records: list[Any]
     committed: list[Any] = field(default_factory=list)
+    seeks: list[Any] = field(default_factory=list)
 
     def poll(self, _timeout: float) -> Any:
         return self.records.pop(0) if self.records else None
 
     def commit(self, *, message: Any) -> None:
         self.committed.append(message)
+
+    def seek(self, partition: Any) -> None:
+        self.seeks.append(partition)
 
 
 class KafkaTestHost:
