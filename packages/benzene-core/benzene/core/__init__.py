@@ -26,6 +26,7 @@ from .dependencies import (
     Lifetime,
     Scope,
     ServiceNotRegisteredError,
+    ServiceOverride,
     use_instance,
 )
 from .envelope import (
@@ -175,6 +176,7 @@ __all__ = [
     "to_camel",
     "to_jsonable",
     "to_request",
+    "ServiceOverride",
     "use_instance",
     "DuplicateWorkerError",
     "NoWorkersError",

@@ -150,7 +150,19 @@ class Scope:
         return service
 
 
-def use_instance(key: Any, instance: Any) -> Callable[[Container], None]:
+#: A service override: a callable handed the :class:`Container` to register into.
+#:
+#: The return type is ``object``, not ``None``, and that is load-bearing. Every ``add_*`` method on
+#: Container is fluent (it returns the Container so registrations chain), so the shortest way to
+#: write an override - ``lambda c: c.add_instance(Greeter, fake)``, the form this module's own
+#: docstrings use - is a callable returning ``Container``. Typed ``Callable[[Container], None]`` that
+#: one-liner is rejected by a type checker, and a user running mypy has to expand it into a four-line
+#: named function or reach for ``# type: ignore``. The value is ignored either way; the annotation
+#: now says so.
+ServiceOverride = Callable[[Container], object]
+
+
+def use_instance(key: Any, instance: Any) -> ServiceOverride:
     """An override that swaps in one ready-made instance — for ``build_application(overrides=[...])``.
 
     A host's job is usually to boot the shared composition root with exactly one thing changed: the

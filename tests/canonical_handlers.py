@@ -46,7 +46,7 @@ async def status_handler(request: StatusRequest) -> Result:
     # Return the requested status verbatim: a typed payload for success, the given errors for failure.
     if is_successful(request.status):
         return Result(request.status, StatusResponse(applied=request.status))
-    return Result(request.status, None, tuple(request.errors))
+    return Result.failure(request.status, *request.errors)
 
 
 @dataclass

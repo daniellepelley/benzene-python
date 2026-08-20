@@ -29,6 +29,8 @@ from benzene.mesh import (
 )
 from benzene.results import Result
 
+from ._async import run
+
 
 @dataclass
 class Ping:
@@ -225,7 +227,7 @@ def test_stdlib_get_returns_status_and_body(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(poller_module.urllib.request, "urlopen", lambda *a, **k: _FakeResponse())
     get = poller_module._stdlib_get()
-    status, body = asyncio.run(get("http://orders/benzene/spec"))
+    status, body = run(get("http://orders/benzene/spec"))
     assert status == 200
     assert body == '{"service": "orders"}'
 
@@ -249,6 +251,6 @@ def test_stdlib_get_reads_the_body_off_an_http_error(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(poller_module.urllib.request, "urlopen", _raise)
     get = poller_module._stdlib_get()
-    status, body = asyncio.run(get("http://orders/benzene/health"))
+    status, body = run(get("http://orders/benzene/health"))
     assert status == 503
     assert body == '{"isHealthy": false}'

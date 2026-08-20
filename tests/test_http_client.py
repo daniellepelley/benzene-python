@@ -10,6 +10,8 @@ from benzene.core import MessageSender, message
 from benzene.http import BenzeneHttpApp, HttpMessageSender, HttpReply, HttpRouter, http_endpoint
 from benzene.results import Result
 
+from ._async import run
+
 
 def _sender(reply: HttpReply, captured: dict | None = None) -> HttpMessageSender:
     async def transport(url: str, headers: dict, body: str) -> HttpReply:
@@ -151,10 +153,10 @@ def test_stdlib_transport_posts_and_maps_status_over_a_real_socket() -> None:
     thread.start()
     try:
         transport = stdlib_transport()
-        ok = asyncio.run(transport(f"http://localhost:{port}/ok", {"content-type": "application/json"}, "5"))
+        ok = run(transport(f"http://localhost:{port}/ok", {"content-type": "application/json"}, "5"))
         assert ok.status_code == 201
         assert json.loads(ok.body) == {"echo": 5}
-        missing = asyncio.run(transport(f"http://localhost:{port}/missing", {}, "{}"))
+        missing = run(transport(f"http://localhost:{port}/missing", {}, "{}"))
         assert missing.status_code == 404  # HTTPError mapped to a reply, not raised
         assert json.loads(missing.body)["detail"] == "nope"
     finally:

@@ -116,11 +116,14 @@ def run_http_mapping() -> list[str]:
         got, expected = to_http(case["from"], case.get("isSuccessful")), int(case["to"])
         if got != expected:
             failures.append(f"benzene->http: {case['from']!r} -> {got}, expected {expected}")
-    # reverse: HTTP code -> benzene status
+    # reverse: HTTP code -> benzene status. Its own names: `got`/`expected` above are the ints of
+    # the forward direction, and reusing them for status strings is what makes the pair untypeable.
     for case in _cases(data, "reverse", "http-status-mapping", failures):
-        got, expected = from_http(int(case["from"])), case["to"]
-        if got != expected:
-            failures.append(f"http->benzene: {case['from']} -> {got!r}, expected {expected!r}")
+        got_status, expected_status = from_http(int(case["from"])), case["to"]
+        if got_status != expected_status:
+            failures.append(
+                f"http->benzene: {case['from']} -> {got_status!r}, expected {expected_status!r}"
+            )
     return failures
 
 
@@ -530,25 +533,25 @@ def run_problem_details() -> list[str]:
         failures.append("problem-details: fixture has no 'httpRules' - the runner and the fixture have drifted")
     for case in _cases(rules, "failureCases", "problem-details.httpRules", failures):
         status, expected_http = case["benzeneStatus"], case["httpStatus"]
-        response = http_problem_response(Result.failure(status, "boom"))
+        http_response = http_problem_response(Result.failure(status, "boom"))
         name = f"httpRules {status}"
 
-        if response.status_code != expected_http:
-            failures.append(f"problem-details[{name}]: HTTP {response.status_code}, expected {expected_http}")
-        content_type = (response.headers or {}).get("content-type")
+        if http_response.status_code != expected_http:
+            failures.append(f"problem-details[{name}]: HTTP {http_response.status_code}, expected {expected_http}")
+        content_type = (http_response.headers or {}).get("content-type")
         if content_type != "application/problem+json":
             failures.append(f"problem-details[{name}]: content-type {content_type!r}, expected application/problem+json")
 
-        document = json.loads(response.body)
+        document = json.loads(http_response.body)
         if document.get("status") != expected_http:
             failures.append(
                 f"problem-details[{name}]: document status {document.get('status')!r}, expected {expected_http}"
             )
         # The two MUST come from the same mapping (4.1), so they can never disagree.
-        if document.get("status") != response.status_code:
+        if document.get("status") != http_response.status_code:
             failures.append(
                 f"problem-details[{name}]: document status {document.get('status')!r} disagrees with "
-                f"the response status {response.status_code}"
+                f"the response status {http_response.status_code}"
             )
         if document.get("benzeneStatus") != status:
             failures.append(
@@ -561,18 +564,18 @@ def run_problem_details() -> list[str]:
             "problem-details: fixture has no 'httpRules.successCase' - the runner and the fixture have drifted"
         )
     else:
-        response = _to_http_response(encode_response(Result.ok({"applied": success["benzeneStatus"]})))
-        if response.status_code != success["httpStatus"]:
+        http_response = _to_http_response(encode_response(Result.ok({"applied": success["benzeneStatus"]})))
+        if http_response.status_code != success["httpStatus"]:
             failures.append(
-                f"problem-details[httpRules success]: HTTP {response.status_code}, expected {success['httpStatus']}"
+                f"problem-details[httpRules success]: HTTP {http_response.status_code}, expected {success['httpStatus']}"
             )
-        content_type = (response.headers or {}).get("content-type", "")
+        content_type = (http_response.headers or {}).get("content-type", "")
         if not content_type.startswith(success["contentType"]):
             failures.append(
                 f"problem-details[httpRules success]: content-type {content_type!r}, "
                 f"expected {success['contentType']!r}"
             )
-        body = json.loads(response.body) if response.body else {}
+        body = json.loads(http_response.body) if http_response.body else {}
         for member in ("type", "title", "status", "benzeneStatus", "errors"):
             if member in body:
                 failures.append(
