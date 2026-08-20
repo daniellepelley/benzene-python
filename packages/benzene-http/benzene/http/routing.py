@@ -16,7 +16,13 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from benzene.core import Handler, HandlerDefinition, definition_of, infer_request_type
+from benzene.core import (
+    DuplicateHandlerError,
+    Handler,
+    HandlerDefinition,
+    definition_of,
+    infer_request_type,
+)
 
 _HTTP_ROUTES_ATTR = "_benzene_http_routes"
 
@@ -94,6 +100,11 @@ class HttpRouter:
     first-class explicit path (mirroring :meth:`benzene.core.Registry.register`). The router also
     carries the underlying :class:`~benzene.core.HandlerDefinition` records so the app can build a
     message registry from it.
+
+    Like :class:`~benzene.core.Registry`, a ``(topic, version)`` pair maps to exactly one handler:
+    binding an already-registered topic to a *different* handler raises
+    :class:`~benzene.core.DuplicateHandlerError` at registration time. Several routes for the *same*
+    handler are the intended stacked-decorator case and stay legal.
     """
 
     def __init__(self) -> None:
@@ -140,9 +151,20 @@ class HttpRouter:
         return self
 
     def _register(self, method: str, path: str, definition: HandlerDefinition) -> None:
+        key = (definition.topic, definition.version)
+        existing = self._definitions.get(key)
+        # One handler may own several routes (stacked @http_endpoint) — that registers the same
+        # definition again, which is fine. A *different* handler on the same topic is a wiring
+        # mistake: silently rebinding it would make every route serve the last handler registered.
+        if existing is not None and existing.handler is not definition.handler:
+            raise DuplicateHandlerError(
+                f"Route {method.upper()} {path} maps topic {definition.topic!r} to a different "
+                "handler than an earlier route. Two routes may share a topic only when they share "
+                "the handler (stack @http_endpoint, or register the same function); otherwise give "
+                "each handler its own topic."
+            )
         self._endpoints.append(HttpEndpoint(method, path, definition.topic, definition.version))
-        # One handler may own several routes — register its definition once.
-        self._definitions[(definition.topic, definition.version)] = definition
+        self._definitions[key] = definition
 
     def match(self, method: str, path: str) -> tuple[HttpEndpoint, dict[str, str]] | None:
         """Resolve ``(method, path)`` to an endpoint and its captured path params, first match."""

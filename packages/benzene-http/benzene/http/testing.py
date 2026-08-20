@@ -20,10 +20,10 @@ rewriting its tests.
 from __future__ import annotations
 
 import asyncio
-import json
-from dataclasses import asdict, is_dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
+
+from benzene.core import encode_body
 
 from .app import BenzeneHttpApp, HttpResponse
 
@@ -31,13 +31,24 @@ if TYPE_CHECKING:
     from benzene.core import Scope
 
 
+#: What a sync ``send_*`` says when it is called from inside a running event loop.
+_ASYNC_TEST_HINT = (
+    "send_http() is synchronous — call it from a plain 'def' test. From an async test, drive the "
+    "app directly: `await host._app.handle(...)`."
+)
+
+
 def _body(value: Any) -> str:
-    """Serialize a request body to the JSON string the ASGI binding expects (dataclass/dict/str)."""
+    """Serialize a request body the way a real HTTP peer would (the wire policy, camelCase).
+
+    A string passes through as the caller's exact bytes; everything else goes through
+    :func:`benzene.core.encode_body`, so a dataclass field ``order_id`` arrives as ``orderId`` —
+    exactly what a .NET/Go/TS caller sends. Encoding with ``asdict`` instead would let a raw-dict
+    handler pass in memory and break against a real peer.
+    """
     if isinstance(value, str):
         return value
-    if is_dataclass(value) and not isinstance(value, type):
-        return json.dumps(asdict(value))
-    return json.dumps(value)
+    return encode_body(value)
 
 
 class HttpTestHost:
@@ -57,13 +68,22 @@ class HttpTestHost:
         headers: dict[str, str] | None = None,
         query: dict[str, str] | None = None,
     ) -> HttpResponse:
-        """Send one HTTP request through the real ASGI app; returns the mapped :class:`HttpResponse`."""
-        return asyncio.run(
-            self._app.handle(
-                method=method,
-                path=path,
-                query_string=urlencode(query) if query else "",
-                headers=dict(headers or {}),
-                body=_body(body) if body is not None else "",
-            )
+        """Send one HTTP request through the real ASGI app; returns the mapped :class:`HttpResponse`.
+
+        Synchronous — call it from a plain ``def`` test. From an ``async`` test, await
+        ``host._app.handle(...)`` instead (there is no event loop to nest).
+        """
+        request = self._app.handle(
+            method=method,
+            path=path,
+            query_string=urlencode(query) if query else "",
+            headers=dict(headers or {}),
+            body=_body(body) if body is not None else "",
         )
+        try:
+            return asyncio.run(request)
+        except RuntimeError as ex:
+            if "cannot be called from a running event loop" not in str(ex):
+                raise
+            request.close()  # the coroutine never started; don't leave it un-awaited
+            raise RuntimeError(_ASYNC_TEST_HINT) from ex

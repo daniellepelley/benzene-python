@@ -75,6 +75,13 @@ class _CaptureContext:
         self.trailing = tuple(trailing)
 
 
+#: What the sync harness says when it is called from inside a running event loop.
+_ASYNC_TEST_HINT = (
+    "send_grpc() is synchronous — call it from a plain 'def' test. From an async test, drive the "
+    "app directly: `await host._handler._application.handle(...)`."
+)
+
+
 class GrpcTestHost:
     """Wraps a :class:`BenzeneGrpcHandler` for in-memory tests of the gRPC ingress."""
 
@@ -87,13 +94,22 @@ class GrpcTestHost:
     def send_grpc(
         self, topic: str, body: Any = None, headers: dict[str, str] | None = None
     ) -> GrpcResponse:
-        """Invoke ``topic`` as a unary call — ``headers`` become request metadata — with no socket."""
+        """Invoke ``topic`` as a unary call — ``headers`` become request metadata — with no socket.
+
+        Synchronous (the real gRPC server calls the handler on a worker thread too), so call it from
+        a plain ``def`` test; from an ``async`` test drive the application directly instead.
+        """
         request = encode_body({} if body is None else body).encode("utf-8")
         metadata = tuple((str(k), str(v)) for k, v in (headers or {}).items())
         context = _CaptureContext(metadata)
         # Drive the real handler exactly as gRPC would: resolve the method for the topic, then call it.
         method = self._handler.service(SimpleNamespace(method=method_for(topic)))
-        out = method.unary_unary(request, context)
+        try:
+            out = method.unary_unary(request, context)
+        except RuntimeError as ex:
+            if "cannot be called from a running event loop" not in str(ex):
+                raise
+            raise RuntimeError(_ASYNC_TEST_HINT) from ex
         status = next(
             (value for key, value in context.trailing if key == BENZENE_STATUS_TRAILER), "ok"
         )

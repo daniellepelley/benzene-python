@@ -87,3 +87,51 @@ def test_headers_propagate_as_request_metadata() -> None:
             )
         )
     assert seen["corr"] == "c1"  # forwarded as gRPC metadata, read off the context
+
+
+# --- the sender never raises (C5) -----------------------------------------------------------
+
+
+class _RaisingChannel:
+    """A duck-typed ``grpc.Channel`` whose call blows up the way a broken channel really does."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    def unary_unary(self, method: str):  # noqa: ANN202 - duck-typed grpc surface
+        exc = self._exc
+
+        class _Callable:
+            def with_call(self, request, metadata=()):  # noqa: ANN001, ANN202
+                raise exc
+
+        return _Callable()
+
+
+def test_a_closed_channel_becomes_a_service_unavailable_result() -> None:
+    # grpc raises ValueError (not RpcError) when the channel is already closed; the sender port
+    # promises a Result either way, so a retrying sender can see it as a status.
+    with _serving(_orders_app()) as channel:
+        pass  # the context manager closes the channel on exit
+    result = asyncio.run(GrpcMessageSender(channel).send_message("orders:place", {"sku": "A"}))
+    assert result.status == "service-unavailable"
+
+
+def test_any_channel_exception_becomes_a_service_unavailable_result() -> None:
+    sender = GrpcMessageSender(_RaisingChannel(RuntimeError("channel exploded")))
+    result = asyncio.run(sender.send_message("orders:place", {}))
+    assert result.status == "service-unavailable"
+    assert "channel exploded" in " ".join(result.errors)
+
+
+def test_channel_timeout_becomes_a_timeout_result() -> None:
+    sender = GrpcMessageSender(_RaisingChannel(TimeoutError("deadline")))
+    result = asyncio.run(sender.send_message("orders:place", {}))
+    assert result.status == "timeout"
+
+
+def test_a_missing_sdk_still_raises_importerror() -> None:
+    # A deployment error to fix, not a transport blip to retry (the sender-wide rule).
+    sender = GrpcMessageSender(_RaisingChannel(ImportError("No module named 'grpc._cython'")))
+    with pytest.raises(ImportError):
+        asyncio.run(sender.send_message("orders:place", {}))

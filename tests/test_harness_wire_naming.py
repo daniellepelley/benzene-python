@@ -62,3 +62,27 @@ def test_every_cloud_request_builder_uses_camelcase_wire_naming() -> None:
     azure = pytest.importorskip("benzene.azure.testing")
     msg = azure.service_bus_message("orders:place", order)
     assert json.loads(msg.get_body().decode("utf-8")) == expected
+
+
+def test_http_test_host_uses_camelcase_wire_naming() -> None:
+    """The in-memory HTTP host encodes a dataclass body the way a real HTTP peer sends it."""
+    from benzene.core import message
+    from benzene.http import BenzeneHttpApp, HttpRouter, http_endpoint
+    from benzene.http.testing import HttpTestHost
+    from benzene.results import Result
+
+    @http_endpoint("POST", "/orders")
+    @message("orders:place")
+    async def place(request: dict) -> Result:  # a raw-dict handler sees the literal wire keys
+        return Result.ok(request)
+
+    host = HttpTestHost(BenzeneHttpApp(HttpRouter().add(place)))
+    response = host.send_http("POST", "/orders", body=PlaceOrder("A1", "Ada"))
+    assert json.loads(response.body) == {"orderId": "A1", "customerName": "Ada"}
+
+
+def test_http_test_host_passes_a_string_body_through_unchanged() -> None:
+    from benzene.http.testing import _body
+
+    assert _body('{"already": "encoded"}') == '{"already": "encoded"}'
+    assert _body(PlaceOrder("A1", "Ada")) == encode_body(PlaceOrder("A1", "Ada"))

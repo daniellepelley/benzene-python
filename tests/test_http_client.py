@@ -143,3 +143,43 @@ def test_round_trip_through_the_real_inbound_binding() -> None:
     result = asyncio.run(sender.send_message("orders:place", {"sku": "ABC"}))
     assert result.status == "created"                       # 201 mapped back through from_http
     assert result.payload == {"sku": "ABC", "accepted": True}
+
+
+# --- the sender never raises (C5) -----------------------------------------------------------
+
+
+def _raising_sender(exc: BaseException) -> HttpMessageSender:
+    async def transport(url: str, headers: dict, body: str) -> HttpReply:
+        raise exc
+
+    return HttpMessageSender("https://svc.example", transport=transport)
+
+
+def test_connection_failure_becomes_a_service_unavailable_result() -> None:
+    # urllib raises URLError for a refused connection / DNS failure — the sender port promises a
+    # Result, never an exception, so RetryingMessageSender (which retries on statuses) can see it.
+    import urllib.error
+
+    result = asyncio.run(
+        _raising_sender(urllib.error.URLError("refused")).send_message("orders:place", {})
+    )
+    assert result.status == "service-unavailable"
+    assert "refused" in " ".join(result.errors)
+
+
+def test_any_transport_exception_becomes_a_service_unavailable_result() -> None:
+    result = asyncio.run(_raising_sender(RuntimeError("socket exploded")).send_message("t", {}))
+    assert result.status == "service-unavailable"
+    assert "socket exploded" in " ".join(result.errors)
+
+
+def test_transport_timeout_becomes_a_timeout_result() -> None:
+    result = asyncio.run(_raising_sender(TimeoutError("timed out")).send_message("t", {}))
+    assert result.status == "timeout"
+
+
+def test_a_transports_missing_sdk_still_raises_importerror() -> None:
+    # An httpx-backed transport whose package is missing is a deployment error to fix, not a
+    # transport blip to retry — the same rule every sender follows for a missing SDK.
+    with pytest.raises(ImportError):
+        asyncio.run(_raising_sender(ImportError("No module named 'httpx'")).send_message("t", {}))

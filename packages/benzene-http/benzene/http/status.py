@@ -2,6 +2,12 @@
 
 Used by an HTTP transport binding to translate a Benzene status to an HTTP code (forward) and by an
 HTTP client to recover a Benzene status from an HTTP code (reverse).
+
+Note the one place the mapping loses information by protocol: ``updated`` and ``deleted`` both map to
+**204 No Content**, and RFC 9110 forbids content on a 204 — so a payload passed to
+``Result.updated(...)`` / ``Result.deleted(...)`` does **not** cross an HTTP hop (the ASGI host sends
+an empty body; other transports still carry it), and the reverse table recovers ``deleted``. Return
+``Result.ok(payload)`` when the caller must receive the payload over HTTP.
 """
 
 from __future__ import annotations

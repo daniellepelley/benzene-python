@@ -5,7 +5,8 @@
 - **Topic** — resolved from route/method conventions via an :class:`HttpRouter`.
 - **Headers** — HTTP headers flow in and out, both directions.
 - **Status** — the handler's Benzene status maps to an HTTP code via wire-contracts §4.1
-  (:func:`to_http`).
+  (:func:`to_http`). A status mapping to a bodiless code (``updated``/``deleted`` → 204) is sent
+  without content, as RFC 9110 requires — so a payload on those Results does not cross an HTTP hop.
 - **Scope** — one DI scope and exactly one pipeline invocation per request (delegated to the
   underlying :class:`~benzene.core.BenzeneMessageApplication`).
 - **Failure** — an uncaught handler error becomes a Benzene ``service-unavailable`` (mapped to
@@ -41,6 +42,9 @@ from benzene.results import Result, Status
 from .routing import HttpRouter
 from .standard import StandardPaths
 from .status import to_http
+
+#: HTTP codes that must be sent without content (RFC 9110 sections 15.3.5 and 15.4.5).
+_BODILESS_CODES = frozenset({204, 304})
 
 
 @dataclass(frozen=True)
@@ -204,7 +208,10 @@ class BenzeneHttpApp:
         )
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
-        """ASGI entry point (HTTP scope only)."""
+        """ASGI entry point: an ``http`` request, or the ``lifespan`` startup/shutdown protocol."""
+        if scope.get("type") == "lifespan":
+            await _serve_lifespan(receive, send)
+            return
         if scope.get("type") != "http":
             raise ValueError(
                 f"BenzeneHttpApp only handles 'http' scopes, got {scope.get('type')!r}"
@@ -233,12 +240,32 @@ class BenzeneHttpApp:
                 ],
             }
         )
+        # RFC 9110: a 204/304 response carries no content. Benzene's ``updated``/``deleted`` statuses
+        # map to 204 and may still carry a payload (other transports deliver it), so the body is
+        # dropped here — h11/uvicorn abort the whole response if one is written.
+        bodiless = response.status_code in _BODILESS_CODES
         await send(
             {
                 "type": "http.response.body",
-                "body": response.body.encode("utf-8"),
+                "body": b"" if bodiless else response.body.encode("utf-8"),
             }
         )
+
+
+async def _serve_lifespan(receive: Any, send: Any) -> None:
+    """Answer the ASGI lifespan protocol so ``uvicorn --lifespan on`` starts (and stops) cleanly.
+
+    The app holds no startup/shutdown state of its own — the container and its scopes are built by
+    the composition root — so startup and shutdown are simply acknowledged.
+    """
+    while True:
+        message = await receive()
+        kind = message.get("type")
+        if kind == "lifespan.startup":
+            await send({"type": "lifespan.startup.complete"})
+        elif kind == "lifespan.shutdown":
+            await send({"type": "lifespan.shutdown.complete"})
+            return
 
 
 async def _read_body(receive: Any) -> str:

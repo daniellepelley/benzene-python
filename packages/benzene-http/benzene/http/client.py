@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any, TypeAlias
 
 from benzene.core import encode_body
-from benzene.results import Result, is_successful
+from benzene.results import Result, Status, is_successful
 
 from .status import from_http
 
@@ -66,9 +66,25 @@ class HttpMessageSender:
     async def send_message(
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
-        url = self._resolve_url(topic)
+        """POST the message and map the reply to a :class:`~benzene.results.Result` — never raises.
+
+        A transport failure (connection refused, DNS failure, TLS error, timeout) becomes a
+        ``service-unavailable`` / ``timeout`` Result like every other sender, so a
+        :class:`~benzene.resilience.RetryingMessageSender` — which retries on *statuses*, not
+        exceptions — can see it. A misconfigured ``url_for`` map still raises ``KeyError``: that is a
+        wiring mistake at startup, not a transport failure to retry, and neither is the
+        ``ImportError`` an SDK-backed transport raises when its package is missing.
+        """
+        url = self._resolve_url(topic)  # a config error, deliberately raised rather than mapped
         out_headers = {**(headers or {}), self._topic_header: topic, "content-type": "application/json"}
-        reply = await self._transport(url, out_headers, encode_body(message))
+        try:
+            reply = await self._transport(url, out_headers, encode_body(message))
+        except ImportError:
+            raise  # a transport's missing SDK is a deployment error, never a service-unavailable
+        except TimeoutError as ex:
+            return Result.failure(Status.TIMEOUT, str(ex) or "the HTTP request timed out")
+        except Exception as ex:
+            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex) or type(ex).__name__)
         return _reply_to_result(reply)
 
     def _resolve_url(self, topic: str) -> str:

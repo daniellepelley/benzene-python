@@ -65,9 +65,14 @@ class BenzeneGrpcHandler(grpc.GenericRpcHandler):
     def _invoke(self, topic: str, request: bytes, context: Any) -> bytes:
         headers = {str(key): str(value) for key, value in context.invocation_metadata()}
         body = request.decode("utf-8") if request else ""
-        response = asyncio.run(
-            self._application.handle({"topic": topic, "headers": headers, "body": body})
-        )
+        pending = self._application.handle({"topic": topic, "headers": headers, "body": body})
+        try:
+            response = asyncio.run(pending)
+        except RuntimeError:
+            # asyncio.run refuses to nest inside a running loop (a caller driving the sync handler
+            # from async code). The coroutine never started — close it so it does not leak.
+            pending.close()
+            raise
         status = response["statusCode"]
         context.set_trailing_metadata(((BENZENE_STATUS_TRAILER, status),))
         if not is_successful(status):

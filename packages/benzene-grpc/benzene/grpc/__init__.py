@@ -2,8 +2,11 @@
 
 Ships the Benzene ↔ gRPC **status mapping** (wire-contracts.md §4.2): :func:`to_grpc` /
 :func:`from_grpc` and the ``benzene-status`` trailer rule that preserves the exact status across the
-codes that collapse to one gRPC code. This is the foundation of a gRPC transport binding; the
-server/client transport over ``grpcio`` builds on top and is the next step.
+codes that collapse to one gRPC code — and, on top of it, the full transport over ``grpcio``:
+:class:`BenzeneGrpcHandler` / :func:`add_benzene_handler` serve every topic as a unary method
+(the method name *is* the topic), and :class:`GrpcMessageSender` is the outbound
+:class:`~benzene.core.MessageSender` over a ``grpc.Channel``. The transport needs the
+``[transport]`` extra; the mapping alone never does.
 
     pip install benzene-grpc
 

@@ -13,7 +13,7 @@ import json
 from typing import Any
 
 from benzene.core import encode_body
-from benzene.results import Result
+from benzene.results import Result, Status
 
 import grpc
 
@@ -31,6 +31,13 @@ class GrpcMessageSender:
     async def send_message(
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
+        """Invoke ``topic`` as a unary call and map the outcome to a Result — never raises.
+
+        A gRPC error maps through the reverse code table; anything else the channel throws (a closed
+        channel raises ``ValueError``, a broken transport raises whatever it likes) becomes
+        ``service-unavailable`` — or ``timeout`` for a :class:`TimeoutError` — so a retrying sender,
+        which retries on *statuses* rather than exceptions, can see it.
+        """
         invoke = self._channel.unary_unary(method_for(topic))
         metadata = tuple((str(key), str(value)) for key, value in (headers or {}).items())
         request = encode_body(message).encode("utf-8")
@@ -43,6 +50,12 @@ class GrpcMessageSender:
             status = _trailer_status(exc.trailing_metadata()) or code_to_status(exc.code())
             detail = exc.details()
             return Result.failure(status, detail) if detail else Result.failure(status)
+        except ImportError:
+            raise  # a missing grpcio plugin is a deployment error, never a service-unavailable
+        except TimeoutError as ex:
+            return Result.failure(Status.TIMEOUT, str(ex) or "the gRPC call timed out")
+        except Exception as ex:  # a closed/broken channel is a transport failure, not a crash
+            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex) or type(ex).__name__)
         status = _trailer_status(call.trailing_metadata()) or "ok"
         return Result(status, _parse(response.decode("utf-8")))
 

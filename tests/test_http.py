@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 
 import pytest
-from benzene.core import message
+from benzene.core import DuplicateHandlerError, message
 from benzene.http import BenzeneHttpApp, HttpEndpoint, HttpRouter, http_endpoint
 from benzene.results import Result
 
@@ -29,6 +29,12 @@ async def create_order(request: dict) -> Result:
     return Result.created({"id": request["id"]})
 
 
+@http_endpoint("PUT", "/orders/{id}")
+@message("order:update")
+async def update_order(request: dict) -> Result:
+    return Result.updated({"id": request["id"], "echo": "payload that must not cross the wire"})
+
+
 @http_endpoint("GET", "/boom")
 @message("boom")
 async def boom(_request: dict) -> Result:
@@ -36,7 +42,7 @@ async def boom(_request: dict) -> Result:
 
 
 def build_app() -> BenzeneHttpApp:
-    router = HttpRouter().add(greet).add(create_order).add(boom)
+    router = HttpRouter().add(greet).add(create_order).add(update_order).add(boom)
     return BenzeneHttpApp(router)
 
 
@@ -224,3 +230,128 @@ def test_asgi_non_utf8_body_yields_400_not_a_crash() -> None:
     # The host must never crash on request content: a non-UTF-8 body is a clean 400.
     start = asyncio.run(run())
     assert start["status"] == 400
+
+
+# --- 204/304 carry no body on the wire (C7) -------------------------------------------------
+
+
+def _drive_asgi(app: BenzeneHttpApp, scope: dict, body: bytes = b"") -> tuple[dict, bytes]:
+    """Run one request through the raw ASGI callable, returning (response.start, body bytes)."""
+
+    async def run() -> tuple[dict, bytes]:
+        sent: list[dict] = []
+
+        async def receive() -> dict:
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        async def send(message_: dict) -> None:
+            sent.append(message_)
+
+        await app(scope, receive, send)
+        start = next(m for m in sent if m["type"] == "http.response.start")
+        payload = next(m for m in sent if m["type"] == "http.response.body")["body"]
+        return start, payload
+
+    return asyncio.run(run())
+
+
+def test_asgi_204_is_sent_with_an_empty_body() -> None:
+    # RFC 9110: a 204 must not carry content — h11/uvicorn sever the connection if it does, so the
+    # payload of Result.updated(...) is dropped at the HTTP hop (other transports still carry it).
+    start, body = _drive_asgi(
+        build_app(),
+        {
+            "type": "http",
+            "method": "PUT",
+            "path": "/orders/7",
+            "query_string": b"",
+            "headers": [],
+        },
+    )
+    assert start["status"] == 204
+    assert body == b""
+
+
+# --- ASGI lifespan (D10) ---------------------------------------------------------------------
+
+
+def test_asgi_lifespan_scope_completes_startup_and_shutdown() -> None:
+    # uvicorn --lifespan on opens a 'lifespan' scope before any request; the app must answer it.
+    app = build_app()
+
+    async def run() -> list[str]:
+        incoming = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
+        sent: list[dict] = []
+
+        async def receive() -> dict:
+            return incoming.pop(0)
+
+        async def send(message_: dict) -> None:
+            sent.append(message_)
+
+        await app({"type": "lifespan"}, receive, send)
+        return [m["type"] for m in sent]
+
+    assert asyncio.run(run()) == ["lifespan.startup.complete", "lifespan.shutdown.complete"]
+
+
+def test_asgi_still_rejects_other_scope_types() -> None:
+    app = build_app()
+
+    async def receive() -> dict:  # pragma: no cover - never reached
+        return {}
+
+    async def send(_message: dict) -> None:  # pragma: no cover - never reached
+        return None
+
+    with pytest.raises(ValueError, match="only handles 'http' scopes"):
+        asyncio.run(app({"type": "websocket"}, receive, send))
+
+
+# --- duplicate topic registration (D2) -------------------------------------------------------
+
+
+async def _other_echo(request: dict) -> Result:
+    return Result.ok({"other": True})
+
+
+def test_a_second_route_binding_a_topic_to_a_different_handler_raises() -> None:
+    router = HttpRouter().register("GET", "/a", "shared:topic", _echo)
+    with pytest.raises(DuplicateHandlerError, match="different handler"):
+        router.register("POST", "/b", "shared:topic", _other_echo)
+
+
+def test_one_handler_may_own_several_routes() -> None:
+    # The documented stacked-decorator case: same handler, same topic, two routes — still fine.
+    @http_endpoint("GET", "/hello/{name}")
+    @http_endpoint("GET", "/hi/{name}")
+    @message("greet:twice", request_type=Greet)
+    async def greet_twice(request: Greet) -> Result:
+        return Result.ok({"greeting": f"Hi {request.name}"})
+
+    app = BenzeneHttpApp(HttpRouter().add(greet_twice))
+    for path in ("/hello/ada", "/hi/ada"):
+        resp = asyncio.run(app.handle("GET", path))
+        assert json.loads(resp.body) == {"greeting": "Hi ada"}
+
+
+def test_registering_the_same_handler_twice_for_a_topic_is_allowed() -> None:
+    router = HttpRouter().register("GET", "/a", "shared:topic", _echo)
+    router.register("POST", "/b", "shared:topic", _echo)  # same function object, no rebinding
+    assert len(router.endpoints()) == 2
+    assert len(router.definitions()) == 1
+
+
+# --- the sync test host teaches instead of leaking asyncio's error (D10) ---------------------
+
+
+def test_send_http_from_an_async_test_raises_a_teaching_error() -> None:
+    from benzene.http.testing import HttpTestHost
+
+    host = HttpTestHost(build_app())
+
+    async def inside_an_async_test() -> None:
+        host.send_http("GET", "/greet/ada")
+
+    with pytest.raises(RuntimeError, match=r"send_http\(\) is synchronous"):
+        asyncio.run(inside_an_async_test())

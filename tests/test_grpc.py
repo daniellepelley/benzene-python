@@ -39,3 +39,26 @@ def test_benzene_status_trailer_wins_verbatim() -> None:
     assert from_grpc("OK", trailer="created") == "created"
     assert from_grpc("Internal", trailer="conflict") == "conflict"  # even across a failure code
     assert BENZENE_STATUS_TRAILER == "benzene-status"
+
+
+def test_send_grpc_from_an_async_test_raises_a_teaching_error() -> None:
+    """The sync harness explains itself instead of leaking asyncio's opaque nested-loop error."""
+    import asyncio
+
+    pytest.importorskip("grpc")
+    from benzene.core import BenzeneMessageApplication, Registry, message
+    from benzene.grpc.server import BenzeneGrpcHandler
+    from benzene.grpc.testing import GrpcTestHost
+    from benzene.results import Result
+
+    @message("orders:place")
+    async def place(request: dict) -> Result:
+        return Result.created(request)
+
+    host = GrpcTestHost(BenzeneGrpcHandler(BenzeneMessageApplication(Registry().add(place))))
+
+    async def inside_an_async_test() -> None:
+        host.send_grpc("orders:place", {"sku": "A"})
+
+    with pytest.raises(RuntimeError, match=r"send_grpc\(\) is synchronous"):
+        asyncio.run(inside_an_async_test())
