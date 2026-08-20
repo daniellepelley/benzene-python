@@ -74,7 +74,7 @@ class TopicRoutingMessageSender:
 def _production_sender(service_name: str, env: Mapping[str, str]) -> MessageSender:
     """Build the real per-topic outbound router from the env vars Terraform sets for this service,
     wrapped so a downstream hop joins the caller's trace (mesh.md §3) — the collector then derives the
-    consumer edge from the ``traceparent`` it carries, exactly as :func:`trace_middleware` on the
+    consumer edge from the ``traceparent`` it carries, exactly as :func:`trace_interception` on the
     receiving service reads it back out."""
     senders: dict[str, MessageSender] = {}
     for topic, env_var in _SQS_TARGETS.get(service_name, {}).items():

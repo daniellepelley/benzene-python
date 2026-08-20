@@ -1,13 +1,13 @@
 # `sqs_orders` — the order domain on AWS SQS (self-hosted)
 
 Mounts the shared [`orders_domain`](../orders_domain) on the **self-hosted SQS consumer** binding
-(`benzene.aws.run_sqs_consumer_loop`) — distinct from `aws_orders`, which reaches SQS via a *Lambda
+(`benzene.aws.run_consumer_loop`) — distinct from `aws_orders`, which reaches SQS via a *Lambda
 event source*. This one polls the queue itself, the shape you want for a long-running worker, a
 container, or a Kubernetes Deployment. The same handlers as every other host — only
 [`host.py`](host.py) is SQS-specific.
 
 Unlike the cloud hosts (triggered by a runtime), this service owns its own loop:
-`run_sqs_consumer_loop` long-polls a queue, dispatches one message at a time, and deletes it on
+`run_consumer_loop` long-polls a queue, dispatches one message at a time, and deletes it on
 success (at-least-once — a failed message is left on the queue for redelivery/DLQ redrive). There is
 no HTTP surface — the domain is reached over messages whose `topic` message attribute names the
 Benzene topic.

@@ -152,20 +152,20 @@ A non-positive `refill_rate` raises `ValueError` at construction.
 ## Idempotency
 
 At-least-once transports (SQS, Pub/Sub, Kafka, Service Bus) redeliver: the same logical message can
-reach the handler twice. The `idempotency` middleware makes the *second* delivery a no-op by keying
-each invocation on a caller-supplied idempotency header and **replaying the first result** — so "charge
-the card" happens once even though the message arrived twice.
+reach the handler twice. The `idempotency_interception` middleware makes the *second* delivery a
+no-op by keying each invocation on a caller-supplied idempotency header and **replaying the first
+result** — so "charge the card" happens once even though the message arrived twice.
 
 ```python
-from benzene.resilience import InMemoryIdempotencyStore, idempotency
+from benzene.resilience import InMemoryIdempotencyStore, idempotency_interception
 
-definition.middleware += [idempotency(InMemoryIdempotencyStore(ttl=3600))]
+definition.middleware += [idempotency_interception(InMemoryIdempotencyStore(ttl=3600))]
 ```
 
-### `idempotency`
+### `idempotency_interception`
 
 ```python
-idempotency(
+idempotency_interception(         # the older name `idempotency` remains a working alias
     store: IdempotencyStore,
     *,
     key_headers: Sequence[str] = DEFAULT_KEY_HEADERS,   # ("idempotency-key", "message-id")
@@ -291,7 +291,7 @@ limit and bulkhead at the edge to shed load early, idempotency to dedupe before 
 `DEFAULT_TRIP_ON`, `circuit_breaker_interception`, `with_circuit_breaker`; `Bulkhead`,
 `BulkheadMessageSender`, `bulkhead_interception`, `with_bulkhead`; `RateLimiter`,
 `RateLimitingMessageSender`, `rate_limit_interception`, `with_rate_limit`; `IdempotencyStore`,
-`InMemoryIdempotencyStore`, `DEFAULT_KEY_HEADERS`, `idempotency`; `Saga`, `SagaStep`, `SagaResult`,
+`InMemoryIdempotencyStore`, `DEFAULT_KEY_HEADERS`, `idempotency_interception` (alias `idempotency`); `Saga`, `SagaStep`, `SagaResult`,
 `SagaAction`, `SagaCompensation`.
 
 ## See also

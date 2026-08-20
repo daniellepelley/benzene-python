@@ -5,7 +5,7 @@ outbound ``MessageSender`` differs — a real ``SqsMessageSender`` in production
 this file is SQS-specific.
 
 Unlike the cloud hosts (triggered by a Lambda event source), an SQS service here owns its own loop: it
-polls a queue directly and runs :func:`~benzene.aws.run_sqs_consumer_loop`, which turns each message
+polls a queue directly and runs :func:`~benzene.aws.run_consumer_loop`, which turns each message
 into one pipeline invocation and deletes it on success. There is no HTTP surface — the order domain is
 reached over messages whose ``topic`` message attribute names the Benzene topic (``orders:place`` /
 ``orders:created``).
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-from benzene.aws import SqsConsumerApp, SqsMessageSender, run_sqs_consumer_loop
+from benzene.aws import SqsConsumerApp, SqsMessageSender, run_consumer_loop
 from benzene.core import Container, MessageSender, build_application
 from orders_domain import OrdersStartUp
 
@@ -57,7 +57,7 @@ def build_sqs_orders_app() -> SqsConsumerApp:
 async def main() -> None:  # pragma: no cover - the real queue entry point
     """Poll a real queue and run the loop (requires ``boto3`` + a reachable queue)."""
     queue_url = os.environ["BENZENE_SQS_CONSUME_QUEUE_URL"]
-    await run_sqs_consumer_loop(build_sqs_orders_app(), _sqs_client(), queue_url)
+    await run_consumer_loop(build_sqs_orders_app(), _sqs_client(), queue_url)
 
 
 if __name__ == "__main__":  # pragma: no cover

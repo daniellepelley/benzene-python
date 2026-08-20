@@ -9,14 +9,14 @@ pip install "benzene-otel[otel]"   # the [otel] extra pulls opentelemetry-api / 
 
 ## Overview
 
-The Benzene Python port **already traces itself**: `benzene.mesh.trace_middleware` times every
+The Benzene Python port **already traces itself**: `benzene.mesh.trace_interception` times every
 invocation and emits one `benzene.mesh.TraceEvent` (topic, status, W3C trace ids, start time,
 duration) through a `benzene.mesh.TraceExporter` seam. Until now that tracing was *Benzene-internal
 only* — it fed a mesh collector, never a general OpenTelemetry pipeline. This distribution closes that
 gap **without re-instrumenting anything**:
 
 - **Trace export** — `OtelTraceExporter` *is* a `TraceExporter`, so it drops straight into the
-  existing `trace_middleware` and forwards each already-finished span to a real OpenTelemetry tracer.
+  existing `trace_interception` and forwards each already-finished span to a real OpenTelemetry tracer.
 - **Response-as-event** — `response_event_interception` reshapes each invocation's *result* into a
   `ResponseEvent` and publishes it to a `ResponseEventSink` after the handler runs, mirroring .NET's
   `Benzene.ResponseEvents`.
@@ -32,17 +32,17 @@ rather than instrumenting the pipeline a second time. Wire it as the sink of the
 tracing:
 
 ```python
-from benzene.mesh import trace_middleware
+from benzene.mesh import trace_interception
 from benzene.otel import OtelTraceExporter
 
-definition.middleware.insert(0, trace_middleware(OtelTraceExporter(), service="orders"))
+definition.middleware.insert(0, trace_interception(OtelTraceExporter(), service="orders"))
 ```
 
 - `OtelTraceExporter(tracer=None, *, instrumentation_name="benzene.otel")` — with no `tracer` the
   OpenTelemetry SDK is imported lazily and a real tracer is acquired via
   `opentelemetry.trace.get_tracer(instrumentation_name)`; inject a `tracer` (a fake, or a
   pre-configured real one) and **nothing** is imported.
-- `export(event)` — the `TraceExporter` seam `trace_middleware` calls. Like every mesh feed it is
+- `export(event)` — the `TraceExporter` seam `trace_interception` calls. Like every mesh feed it is
   non-blocking and lossy: it **never raises**, so a bad tracer cannot break the invocation it observes
   (mesh §3).
 - One `TraceEvent` is exactly one span, so mapping is one-to-one: `topic` → span name, `started_at` →
@@ -83,7 +83,7 @@ definition.middleware.append(response_event_interception(sink))
 - `ResponseEvent` — a frozen dataclass (`topic`, `status`, `version`, `correlation_id`, `payload`,
   `errors`) with `is_successful` and `to_payload()` (its camelCase wire form, omitting rather than
   nulling absent fields). The correlation id is read from the `x-correlation-id` header
-  (`CORRELATION_ID_HEADER`), the same header `trace_middleware` reads.
+  (`CORRELATION_ID_HEADER`), the same header `trace_interception` reads.
 - `ResponseEventSink` — the `runtime_checkable` protocol a concrete stream implements: a single
   `async def emit(self, event: ResponseEvent) -> None`. `RecordingSink` is the in-memory fake — a
   `list` subclass whose `emit` appends — for tests and dogfooding.
@@ -92,7 +92,7 @@ definition.middleware.append(response_event_interception(sink))
 
 - **No spans reach my collector.** The exporter never raises by design, so a misconfigured tracer
   fails silently rather than crashing the pipeline. Inject an explicit tracer and assert on it in a
-  test, or check that `trace_middleware(OtelTraceExporter(...), service=...)` is actually installed on
+  test, or check that `trace_interception(OtelTraceExporter(...), service=...)` is actually installed on
   `definition.middleware`.
 - **`ModuleNotFoundError: opentelemetry`.** Install the extra (`pip install "benzene-otel[otel]"`) or
   inject a pre-built `tracer` so the lazy import is never reached.
@@ -104,7 +104,7 @@ definition.middleware.append(response_event_interception(sink))
 
 ## See also
 
-- [`benzene.mesh`](mesh.md) — the `TraceEvent` / `TraceExporter` / `trace_middleware` model this
+- [`benzene.mesh`](mesh.md) — the `TraceEvent` / `TraceExporter` / `trace_interception` model this
   consumes.
 - [`benzene.mesh_fleet`](mesh-fleet.md) — the sibling fleet trace-mappers (Jaeger / Tempo / X-Ray)
   that project the same `TraceEvent` model into a backend's JSON.

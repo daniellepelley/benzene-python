@@ -1,6 +1,6 @@
 """Wire three Benzene services into one in-process mesh and report them to a collector.
 
-Each service runs its own pipeline with ``trace_middleware`` (so every invocation emits a TraceEvent)
+Each service runs its own pipeline with ``trace_interception`` (so every invocation emits a TraceEvent)
 and calls the next service through a ``with_trace_propagation``-wrapped in-process sender (so the
 ``traceparent`` — hence the parent/child span link — crosses the hop). At startup each service
 registers its descriptor — including an :class:`~benzene.mesh.OutboundRegistry` declaring what it
@@ -32,7 +32,7 @@ from benzene.mesh import (
     QueueTraceExporter,
     ServiceDescriptor,
     ServiceInfo,
-    trace_middleware,
+    trace_interception,
     with_trace_propagation,
 )
 from benzene.results import Result
@@ -65,7 +65,7 @@ class _InProcessSender:
 
 def _service(name: str, registry: Registry) -> tuple[BenzeneMessageApplication, QueueTraceExporter]:
     exporter = QueueTraceExporter()
-    pipeline = MiddlewarePipeline().use(trace_middleware(exporter, service=name, instance_id=f"{name}-1"))
+    pipeline = MiddlewarePipeline().use(trace_interception(exporter, service=name, instance_id=f"{name}-1"))
     return BenzeneMessageApplication(registry, pipeline), exporter
 
 

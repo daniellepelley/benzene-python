@@ -19,7 +19,7 @@ on its own:
 - **Self-description** — project the handler registry into a `ServiceDescriptor` (identity, placement,
   per-topic request/response schemas, a content hash).
 - **The reserved endpoint** — `mesh_interception()` answers `benzene:mesh` with that descriptor.
-- **Tracing** — `trace_middleware()` emits exactly one `TraceEvent` per invocation.
+- **Tracing** — `trace_interception()` emits exactly one `TraceEvent` per invocation.
 - **Collector feeds** — `MeshFeedSender` pushes the descriptor, heartbeats, traces, and issues to a
   collector over any outbound `MessageSender`.
 
@@ -269,7 +269,7 @@ response = await app.handle({"topic": "benzene:mesh", "headers": {}, "body": ""}
 - Provisioning it is a deployment choice. Don't install it and the endpoint simply doesn't exist, while
   every other mesh feed keeps working.
 
-In a real service, install this (and `trace_middleware`) in your `BenzeneStartUp` by returning it on
+In a real service, install this (and `trace_interception`) in your `BenzeneStartUp` by returning it on
 the `AppDefinition`'s `middleware` — then every host and the test harness boot it identically, and you
 can answer it over HTTP by mapping a `GET /benzene/spec` route to `benzene:mesh`. See
 [Joining the mesh](../cookbooks/joining-the-mesh.md) §2b for the composition-root pattern and testing
@@ -277,17 +277,17 @@ it through `create_test_host(...).build_aws()`.
 
 ## Tracing
 
-`trace_middleware()` emits exactly one `TraceEvent` per routed invocation — the topic, the semantic
+`trace_interception()` emits exactly one `TraceEvent` per routed invocation — the topic, the semantic
 status, how long it took, and its place in a W3C trace. Install it **outermost** (first in the pipeline)
 so it times the whole invocation, including routing.
 
 ```python
-from benzene.mesh import InMemoryTraceExporter, trace_middleware
+from benzene.mesh import InMemoryTraceExporter, trace_interception
 
 exporter = InMemoryTraceExporter()
 pipeline = (
     MiddlewarePipeline()
-    .use(trace_middleware(exporter, service="orders", instance_id="orders-7f9c"))
+    .use(trace_interception(exporter, service="orders", instance_id="orders-7f9c"))
     .use(mesh_interception(descriptor))
 )
 ```
@@ -342,7 +342,7 @@ Wire keys: `traceId`, `spanId`, `service`, `topic`, `status` (always present) pl
 
 ### Outbound propagation
 
-`trace_middleware` records the current invocation's trace in a `contextvar`, so an outbound call made
+`trace_interception` records the current invocation's trace in a `contextvar`, so an outbound call made
 *during* the invocation can forward it (mesh.md §3):
 
 - `current_traceparent()` — the W3C `traceparent` (`00-<traceId>-<spanId>-01`) for the invocation
@@ -588,7 +588,7 @@ collector.query_fleet({})
 `ServiceInfo`, `ServiceDescriptor`, `TopicDescriptor`, `OutboundRegistry`, `OutboundDefinition`,
 `DuplicateOutboundRegistrationError`, `MESH_TOPIC`, `Schema`, `json_schema`,
 `MeshPoller`, `HttpServiceSource`, `CallableServiceSource`, `ServiceSource`, `PollResult`, `PollError`,
-`mesh_interception`, `DescriptorSource`, `trace_middleware`, `TraceEvent`, `TraceExporter`,
+`mesh_interception`, `DescriptorSource`, `trace_interception` (alias `trace_middleware`), `TraceEvent`, `TraceExporter`,
 `InMemoryTraceExporter`, `QueueTraceExporter`, `parse_traceparent`, `new_trace_id`, `new_span_id`,
 `current_traceparent`, `with_trace_propagation`, `TracePropagatingMessageSender`,
 `MeshFeedSender`, `Heartbeat`, `Issue`, `IssueBatch`, `IssueAggregator`, `classify`,

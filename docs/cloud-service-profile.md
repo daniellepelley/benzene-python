@@ -12,9 +12,9 @@ Python API that satisfies it and the test that proves it.
 | **R3** | Health checks + HTTP `/benzene/health` | `HealthChecks` + `health_interception` (reserved `benzene:healthcheck`); the HTTP surface returns the full `{isHealthy, healthChecks}` aggregate, `200`/`503` | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
 | **R4** | Wire-envelope invocability + HTTP `/benzene/invoke` | `BenzeneMessageApplication.handle` is the envelope entry point; `StandardPaths` exposes `POST /benzene/invoke` | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
 | **R5** | Registry-derived spec at `/benzene/spec` | `ServiceSpec.derive(registry, service=...)` + `spec_interception` (reserved `benzene:spec`); `StandardPaths` exposes `GET /benzene/spec` | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
-| **R6** | Mesh service-side feeds | `ServiceDescriptor` (reserved `benzene:mesh`), `MeshFeedSender` (register / heartbeat / traces), `trace_middleware` (one `TraceEvent` per invocation) | `tests/test_mesh.py`, `mesh-*` conformance fixtures |
+| **R6** | Mesh service-side feeds | `ServiceDescriptor` (reserved `benzene:mesh`), `MeshFeedSender` (register / heartbeat / traces), `trace_interception` (one `TraceEvent` per invocation) | `tests/test_mesh.py`, `mesh-*` conformance fixtures |
 | **R7** | Default `/benzene/` standard paths, configurable | `StandardPaths(prefix="/benzene", ...)` — one config object, relocatable prefix; threaded into every HTTP-capable host | `tests/test_wellknown.py::test_prefix_is_configurable_and_relocates_every_surface` |
-| **R8** | Join + propagate W3C trace context | `trace_middleware` joins an inbound `traceparent`; `with_trace_propagation` forwards the current span to outbound calls | `tests/test_mesh.py` (outbound trace propagation), `mesh-trace-cases` |
+| **R8** | Join + propagate W3C trace context | `trace_interception` joins an inbound `traceparent`; `with_trace_propagation` forwards the current span to outbound calls | `tests/test_mesh.py` (outbound trace propagation), `mesh-trace-cases` |
 
 ## Claiming the profile
 
@@ -37,7 +37,7 @@ app = BenzeneHttpApp(
 
 The same `standard_paths=` argument works on `GcpFunctionsApp`, `AwsLambdaApp`, and `AzureFunctionsApp`,
 so a service claims the HTTP surfaces identically whether it runs under ASGI or a cloud function. Add
-`trace_middleware` and the `MeshFeedSender` for R6/R8 — see [joining the mesh](cookbooks/joining-the-mesh.md).
+`trace_interception` and the `MeshFeedSender` for R6/R8 — see [joining the mesh](cookbooks/joining-the-mesh.md).
 
 A service booted from a `BenzeneStartUp` declares the surfaces once, in the composition root, by
 returning them on its `AppDefinition` (alongside `router` and `middleware`) — then every host and the

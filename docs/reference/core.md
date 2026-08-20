@@ -88,6 +88,27 @@ Carries the resolved `topic`, `version`, the native `request`, lower-cased `head
 per-invocation `scope`, and a `result` slot the router fills in. Transport adapters may subclass it
 to add invocation-scoped facts.
 
+### Reading a header in a handler
+
+Handlers take **only the request** — that is the spec's shape, and it is what keeps them transport-
+neutral. Headers live on `Context`, one layer out. To let a handler act on one (a tenant id, a
+correlation id, an idempotency key), copy it into the request in a middleware: at middleware time
+`context.request` is still the decoded payload, so anything added here is mapped onto the handler's
+declared request type by the router.
+
+```python
+async def tenant_from_header(context: Context, next: Next) -> None:
+    tenant = context.headers.get("tenant-id", "")            # headers are lower-cased for you
+    if isinstance(context.request, dict):                    # the decoded payload, pre-mapping
+        context.request = {**context.request, "tenant_id": tenant}
+    await next()
+```
+
+Register it ahead of the router (`MiddlewarePipeline([tenant_from_header]).use(message_router(registry))`,
+or in the `middleware` list your `BenzeneStartUp` returns) and declare the field on the request:
+`tenant_id: str = ""`. It arrives populated on every transport, because every transport lifts its
+native metadata into `context.headers` on the way in.
+
 ## Dependency injection
 
 A minimal container with per-invocation scoping and **overridable defaults**: the framework

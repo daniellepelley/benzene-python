@@ -17,8 +17,8 @@ same mesh.
 > `benzene-grpc`), the transport hosts (`benzene-gcp` / `benzene-aws` / `benzene-azure`, plus
 > `benzene-kafka` and `benzene-rabbitmq`), the cross-cutting middleware (`benzene-resilience`,
 > `benzene-auth`, `benzene-cache`, `benzene-otel`, `benzene-openapi`), the mesh (`benzene-mesh` /
-> `benzene-mesh-fleet`), and the adapters (`benzene-pydantic`, `benzene-testing`) — that pass **every
-> language-neutral conformance fixture**. Core, the inbound + outbound HTTP and gRPC bindings, the three
+> `benzene-mesh-fleet`), and the adapters and tooling (`benzene-pydantic`, `benzene-testing`,
+> `benzene-codegen-client`) — that pass **every language-neutral conformance fixture**. Core, the inbound + outbound HTTP and gRPC bindings, the three
 > cloud hosts (each multi-transport with egress, AWS now spanning eight Lambda event sources plus a
 > self-hosted SQS consumer), the Kafka and RabbitMQ transports, the mesh module (descriptor, tracing,
 > collector) and its fleet discovery/trace-mappers, resilience policies (circuit breaker, bulkhead, rate
@@ -343,7 +343,7 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     and send run in memory with no broker; tested through the shared harness (`build_kafka()` +
     `send_kafka`) and dogfooded by [`examples/kafka_orders/`](examples/kafka_orders). Mirrors
     `Benzene.Kafka.Core`.
-19. **(done)** A **self-hosted SQS consumer** (`benzene.aws.run_sqs_consumer_loop`/`SqsConsumerApp`) —
+19. **(done)** A **self-hosted SQS consumer** (`benzene.aws.run_consumer_loop`/`SqsConsumerApp`) —
     distinct from the Lambda SQS trigger `benzene-aws` already had: this one polls a queue itself
     (`receive_message`/`delete_message`, an optional `[boto3]` extra), the shape a long-running worker
     or a Kubernetes Deployment needs. Benzene topic from the `topic` message attribute, one message per

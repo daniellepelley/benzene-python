@@ -27,7 +27,8 @@ gives you all three from one composition root, one image, one Deployment.
 | `compose/` | `docker-compose.yml` - LocalStack (SQS) + a throwaway Kafka broker + the one service, for a credential-free local run |
 
 `app.py`'s own module docstring explains the one thing worth knowing before copying this pattern:
-`run_sqs_consumer_loop`/`run_consumer_loop` run their `boto3`/`confluent-kafka` calls via
+both `run_consumer_loop`s (`benzene.aws`'s and `benzene.kafka`'s) run their
+`boto3`/`confluent-kafka` calls via
 `asyncio.to_thread` internally, specifically so they can share an event loop with uvicorn without
 starving it — see [Getting Started: Benzene on
 Kubernetes](../../docs/getting-started-kubernetes.md) for why that matters.

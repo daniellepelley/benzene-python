@@ -295,7 +295,8 @@ Package the module together with its `benzene-*` dependencies (add `benzene-aws[
 1. Create the Lambda function and set its **handler** to `main.handler` (or your packaged path).
 2. Set the environment variable **`BENZENE_SNS_TOPIC_ARN`** to the ARN of the SNS topic the
    `place_order` handler publishes to.
-3. Attach the triggers — all three flow into the same function:
+3. Attach the triggers this example uses — every one flows into the same function, and you can add
+   any of the other sources from [§7](#7-supported-event-sources) the same way:
    - an **API Gateway** proxy integration (REST v1 or HTTP API v2 both work — the binding detects
      either shape),
    - an **SQS** event-source mapping (enable *ReportBatchItemFailures* so `batchItemFailures` is
@@ -365,12 +366,17 @@ execution-role IAM to receive requests.
 - **Lambda context.** `to_lambda_handler` passes the native `context` into `AwsLambdaApp.handle`; it
   is available to the host but is not injected into handlers today — keep handlers transport-neutral
   and read request metadata from headers instead.
+- **Reading one of those headers in a handler.** A handler takes only the request, so lift the header
+  onto it in a middleware — see
+  [Reading a header in a handler](reference/core.md#reading-a-header-in-a-handler) for the five-line
+  recipe. It works identically on every source here, since each lifts its native metadata (SQS/SNS
+  message attributes, API Gateway headers, Kafka record headers) into `context.headers` on the way in.
 
 > **Compared with the .NET port:** Python's `benzene.aws` host still does not ship the .NET host's
 > invocation feature (`UseBenzeneInvocation`), a W3C-trace-context middleware, or log-enrichment
 > middleware; correlation is available at the header level as described above. Tracing, however, is no
 > longer .NET-only: the port already traces every invocation through the mesh (`benzene.mesh`'s
-> `trace_middleware`), and [`benzene-otel`](reference/otel.md) exports those existing mesh spans through
+> `trace_interception`), and [`benzene-otel`](reference/otel.md) exports those existing mesh spans through
 > the OpenTelemetry SDK (topic → span name, semantic status → OTel span status). That is span *export*,
 > not automatic `Activity`-style instrumentation of the AWS SDK — you opt in by wiring
 > `OtelTraceExporter` into the mesh trace middleware.

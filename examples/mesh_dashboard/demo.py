@@ -14,7 +14,7 @@ reads from:
   before a single order is placed (mesh.md §4).
 - **Heartbeats** — each service beats with named health checks, so ``services/{name}.json`` renders
   per-check health, not just an aggregate.
-- **Real traced invocations** — placing an order runs the handlers through ``trace_middleware`` with
+- **Real traced invocations** — placing an order runs the handlers through ``trace_interception`` with
   ``traceparent`` propagated across each hop, so the collector derives the exercise counts
   (``usage.json``) and each declared edge's invocation/error stats from genuine span parentage.
 
@@ -45,7 +45,7 @@ from benzene.mesh import (
     ServiceDescriptor,
     ServiceInfo,
     build_artifacts,
-    trace_middleware,
+    trace_interception,
     with_trace_propagation,
     write_artifacts,
 )
@@ -118,7 +118,7 @@ class _InProcessSender:
 def _service(name: str, registry: Registry) -> tuple[BenzeneMessageApplication, QueueTraceExporter]:
     exporter = QueueTraceExporter()
     pipeline = MiddlewarePipeline().use(
-        trace_middleware(exporter, service=name, instance_id=f"{name}-1")
+        trace_interception(exporter, service=name, instance_id=f"{name}-1")
     )
     return BenzeneMessageApplication(registry, pipeline), exporter
 

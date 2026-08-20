@@ -60,7 +60,7 @@ assert descriptor.descriptor_hash().startswith("sha256:")
 
 ## 2. Answer the reserved topic and trace every invocation
 
-Two pieces of middleware. `trace_middleware` goes **outermost** so it times the whole invocation;
+Two pieces of middleware. `trace_interception` goes **outermost** so it times the whole invocation;
 `mesh_interception` goes **before the router** so it short-circuits `benzene:mesh` and lets everything
 else route normally.
 
@@ -69,7 +69,7 @@ else route normally.
 from benzene.core import (
     BenzeneMessageApplication, MessageSender, MiddlewarePipeline, build_application,
 )
-from benzene.mesh import InMemoryTraceExporter, mesh_interception, trace_middleware
+from benzene.mesh import InMemoryTraceExporter, mesh_interception, trace_interception
 from benzene.testing import FakeMessageSender
 
 from mesh_wiring import build_descriptor
@@ -86,7 +86,7 @@ descriptor = build_descriptor(registry)
 exporter = InMemoryTraceExporter()                    # your TraceExporter in production
 pipeline = (
     MiddlewarePipeline()
-    .use(trace_middleware(exporter, service="orders", instance_id="orders-7f9c"))
+    .use(trace_interception(exporter, service="orders", instance_id="orders-7f9c"))
     .use(mesh_interception(descriptor))
 )
 app = BenzeneMessageApplication(registry, pipeline)
@@ -129,7 +129,7 @@ a `GET /benzene/spec` URL, answered by the same interceptor:
 # startup.py
 from benzene.core import AppDefinition
 from benzene.mesh import (InMemoryTraceExporter, MESH_TOPIC, ServiceDescriptor, ServiceInfo,
-                          TraceExporter, mesh_interception, trace_middleware)
+                          TraceExporter, mesh_interception, trace_interception)
 from benzene.results import Result
 
 async def _spec(_request):                # /benzene/spec is answered by mesh_interception
@@ -149,7 +149,7 @@ class MeshOrdersStartUp(OrdersStartUp):
         return AppDefinition(
             registry=base.registry,
             router=base.router,
-            middleware=[trace_middleware(exporter, service="orders"), mesh_interception(descriptor)],
+            middleware=[trace_interception(exporter, service="orders"), mesh_interception(descriptor)],
         )
 ```
 
@@ -172,7 +172,7 @@ host.send_sqs("orders:place", {"sku": "ABC"}, headers={"x-correlation-id": "c1"}
 assert host.scope.get_service(TraceExporter)[0].correlation_id == "c1"   # trace, via the root scope
 ```
 
-`trace_middleware` joins an inbound `traceparent` trace when present (else starts a fresh one) and
+`trace_interception` joins an inbound `traceparent` trace when present (else starts a fresh one) and
 reads `x-correlation-id` for the business correlation id. Exporter failures are swallowed — tracing
 never breaks the request.
 
@@ -186,7 +186,7 @@ from benzene.core import HEALTH_TOPIC, HealthChecks, health_interception
 
 health = HealthChecks().add("order-store", check_store)          # a bool or HealthCheckResult
 base.router.register("GET", "/benzene/health", HEALTH_TOPIC, _spec)   # answered by the interceptor
-middleware = [trace_middleware(exporter, service="orders"),
+middleware = [trace_interception(exporter, service="orders"),
               health_interception(health), mesh_interception(descriptor)]
 # host.send_http("GET", "/benzene/health") -> 200 {"isHealthy": true, "healthChecks": {...}}
 ```
@@ -230,7 +230,7 @@ await feeds.publish_issues(issues.flush())           # flush() resets the window
 ## Adopt only what you need
 
 Every feed is optional on both sides. Install `mesh_interception` and nothing else to be discoverable
-without tracing; add `trace_middleware` for a trace feed; add `MeshFeedSender` to push into a collector.
+without tracing; add `trace_interception` for a trace feed; add `MeshFeedSender` to push into a collector.
 Leave any of them out and the rest of the service is unchanged — an unprovisioned endpoint, an
 unreachable collector, or a failing exporter must never affect service traffic.
 
@@ -242,7 +242,7 @@ unreachable collector, or a failing exporter must never affect service traffic.
 - **`benzene:mesh` routes to a handler / 404s instead of returning the descriptor.** Register
   `mesh_interception` in the pipeline *before* the router runs (pass it to the `MiddlewarePipeline`, as
   above) — the router is the terminal middleware.
-- **Traces missing or double-counted.** Install `trace_middleware` once, outermost. It emits exactly
+- **Traces missing or double-counted.** Install `trace_interception` once, outermost. It emits exactly
   one `TraceEvent` per routed invocation.
 - **The hash changed but the code didn't.** `descriptor_hash()` excludes `instanceId`, `degraded`, and
   `profile`, but includes `serviceVersion`, `placement`, the topic set, and the schemas — bumping the

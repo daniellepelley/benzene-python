@@ -38,7 +38,7 @@ from benzene.mesh import (
     ServiceDescriptor,
     ServiceInfo,
     mesh_interception,
-    trace_middleware,
+    trace_interception,
 )
 
 from .domain import (
@@ -81,7 +81,7 @@ class ServiceStartUp(BenzeneStartUp):
 
     def configure_services(self, services: Container, config: Mapping[str, str]) -> None:
         # A singleton so the host (build_service, host.py) can drain the same exporter instance
-        # trace_middleware (below) writes into — every handler otherwise closes over its own sender.
+        # trace_interception (below) writes into — every handler otherwise closes over its own sender.
         services.add_instance(QueueTraceExporter, QueueTraceExporter())
 
     def configure(self, services: Scope, config: Mapping[str, str]) -> AppDefinition:
@@ -142,7 +142,7 @@ class ServiceStartUp(BenzeneStartUp):
             # (build_service, host.py) drains this same exporter instance and pushes the batch to the
             # mesh Lambda after each invocation, feeding invocation/error stats for the edges the
             # descriptor above already declared (mesh.md §4).
-            trace_middleware(exporter, service=name, instance_id=name),
+            trace_interception(exporter, service=name, instance_id=name),
             mesh_interception(descriptor),
             health_interception(checks),
         ]

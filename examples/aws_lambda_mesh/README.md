@@ -36,7 +36,7 @@ Each of the six services is **one Lambda**, tagged `benzene=true` for discovery,
 - sends its produced topics through the transport Terraform wires for it (SQS/SNS/EventBridge) via a
   small per-topic outbound router (`service/host.py`'s `TopicRoutingMessageSender`) — a single POST to
   `/orders` therefore genuinely cascades through the whole estate on a real deploy;
-- runs `benzene.mesh.trace_middleware` outermost (`service/startup.py`) and wraps that router in
+- runs `benzene.mesh.trace_interception` outermost (`service/startup.py`) and wraps that router in
   `benzene.mesh.with_trace_propagation`, so a downstream hop joins the caller's trace; after each
   invocation it drains the batch and **pushes it straight into the mesh's trace inbox in S3**
   (`benzene.mesh.MeshFeedSender` + `benzene.mesh.S3TraceInbox`, via the `MESH_ARTIFACT_BUCKET` env var

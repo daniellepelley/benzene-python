@@ -76,7 +76,7 @@ def test_payments_capture_sends_shipping_book_and_payment_captured() -> None:
 
 # --- tracing: the mesh needs a joined trace + a per-invocation event to derive consumer edges --------
 #
-# ServiceStartUp installs trace_middleware outermost and registers a QueueTraceExporter singleton
+# ServiceStartUp installs trace_interception outermost and registers a QueueTraceExporter singleton
 # (startup.py); host.py wraps the production outbound sender in with_trace_propagation. This proves
 # that wiring genuinely joins an inbound trace to the outbound hop it causes — the same mechanism the
 # mesh Lambda's collector reads to derive "payments consumes payments:capture" (test_mesh.py proves the

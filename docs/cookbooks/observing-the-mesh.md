@@ -218,7 +218,7 @@ to feed that graph's invocation/error stats — and the **query** read models ar
   needs the calling service to register with `consumes` naming the topic (via `ServiceDescriptor.derive(
   ..., consumes=outbound_registry)` on push, or a polled spec that carries `consumes`). Confirm the
   calling service actually declares that outbound registration; `errorRate` on an edge that does exist
-  still needs `trace_middleware` enabled and `traceparent` propagated (`with_trace_propagation`) so the
+  still needs `trace_interception` enabled and `traceparent` propagated (`with_trace_propagation`) so the
   matching traces reach the collector.
 - **Latency / rate numbers are blank.** Expected: those need a metrics feed the pull + trace catalog
   doesn't have, so they degrade to `null` by design rather than being fabricated.

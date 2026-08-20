@@ -184,8 +184,8 @@ import asyncio
 import os
 
 import uvicorn
-from benzene.aws import run_sqs_consumer_loop
-from benzene.kafka import run_consumer_loop
+from benzene.aws import run_consumer_loop as run_sqs_loop
+from benzene.kafka import run_consumer_loop as run_kafka_loop
 from confluent_kafka import Consumer
 
 from http_orders.host import build_http_orders_app
@@ -219,11 +219,11 @@ async def main() -> None:
     try:
         await asyncio.gather(
             run_http(),
-            run_sqs_consumer_loop(
+            run_sqs_loop(
                 sqs_app, sqs_client, os.environ["BENZENE_SQS_CONSUME_QUEUE_URL"],
                 should_continue=lambda: not stop.is_set(),
             ),
-            run_consumer_loop(kafka_app, kafka_consumer, should_continue=lambda: not stop.is_set()),
+            run_kafka_loop(kafka_app, kafka_consumer, should_continue=lambda: not stop.is_set()),
         )
     finally:
         kafka_consumer.close()
@@ -233,8 +233,9 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-Python's asyncio has one event loop per process — `uvicorn.Server.serve()`, `run_sqs_consumer_loop`,
-and `run_consumer_loop` all genuinely run concurrently on it via `asyncio.gather`, **but only because
+Python's asyncio has one event loop per process — `uvicorn.Server.serve()` and both
+`run_consumer_loop`s (`benzene.aws`'s and `benzene.kafka`'s — same name, hence the import aliases
+above) all genuinely run concurrently on it via `asyncio.gather`, **but only because
 the two consumer loops' underlying `boto3`/`confluent-kafka` calls run through `asyncio.to_thread`
 internally** (inside `benzene.aws.sqs_consumer`/`benzene.kafka.consumer`). Called directly on the
 loop, SQS's `receive_message` (a long-poll, up to 20 seconds) would freeze uvicorn's HTTP handling for

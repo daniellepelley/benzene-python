@@ -3,7 +3,7 @@ construction time by ``service_name`` (``orders`` / ``payments`` / ``shipping`` 
 env var, read by ``host.py``). Mirrors ``examples/orders_domain/startup.py``'s shape, extended with:
 
 - a ``QueueTraceExporter`` (registered so ``host.py`` can pull the same instance both into the
-  pipeline's ``trace_middleware`` and into the mesh reporter that drains it), and
+  pipeline's ``trace_interception`` and into the mesh reporter that drains it), and
 - the Cloud Service Profile's well-known surfaces (``StandardPaths`` — health, derived spec, and the
   generic ``/benzene/invoke`` envelope endpoint every downstream hop and the mesh's poller both use).
 
@@ -27,7 +27,7 @@ from benzene.core import (
     ServiceSpec,
 )
 from benzene.http import HttpRouter, StandardPaths
-from benzene.mesh import QueueTraceExporter, trace_middleware
+from benzene.mesh import QueueTraceExporter, trace_interception
 
 from .domain import (
     ORDER_CREATE_TOPIC,
@@ -70,10 +70,10 @@ class ServiceStartUp(BenzeneStartUp):
             health=HealthChecks().add("self", lambda: True),
             spec=ServiceSpec.derive(registry, service=name),
         )
-        # trace_middleware installed OUTERMOST so it times the whole invocation (including the
+        # trace_interception installed OUTERMOST so it times the whole invocation (including the
         # /benzene/invoke path, which runs through this same pipeline) and joins/starts the W3C
         # trace the mesh's Fleet plane later derives consumer edges from.
-        middleware = [trace_middleware(exporter, service=name, instance_id=name)]
+        middleware = [trace_interception(exporter, service=name, instance_id=name)]
         return AppDefinition(
             registry=registry, router=router, middleware=middleware, standard_paths=standard
         )

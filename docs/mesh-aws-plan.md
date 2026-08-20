@@ -29,7 +29,7 @@ at `/mesh/report`), serves a **UI at `/mesh-ui`**, and persists artifacts to a v
   `query:fleet/service/topic/trace` — with consumer-edge topology, health, hash-drift, missing-feeds.
 - **The poller** (done — `benzene.mesh.MeshPoller`): pulls a fleet's spec+health into the collector.
 - **AWS host**: `benzene-aws` (API Gateway + SQS + SNS + egress) — services can target Lambda.
-- **Trace propagation**: `trace_middleware` + `with_trace_propagation` for the call graph.
+- **Trace propagation**: `trace_interception` + `with_trace_propagation` for the call graph.
 
 ## The gap → phased build
 
@@ -40,7 +40,7 @@ zip, boto3 clients against real AWS, IAM, cold start. *Nothing downstream is tru
 green.* — needs AWS credentials.
 
 **Phase 1 — a real fleet.** 2–3 related services (`orders` → `inventory` → `notifications`) deployed to
-Lambda, each with `StandardPaths` + `trace_middleware` + traceparent propagation, and pushing traces to
+Lambda, each with `StandardPaths` + `trace_interception` + traceparent propagation, and pushing traces to
 the collector (so the graph has real consumer edges). Built on the shared example domain. *(Fleet
 example code is AWS-independent and can land first; deploy needs Phase 0.)*
 
