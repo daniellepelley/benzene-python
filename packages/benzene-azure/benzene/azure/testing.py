@@ -8,11 +8,13 @@ Event Grid (native schema + CloudEvents 1.0) — in memory, no Azure SDK require
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 from urllib.parse import urlencode
 
 from benzene.core import encode_body, to_jsonable
@@ -197,6 +199,45 @@ def event_grid_cloud_event(
     return event
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+_RUNNING_LOOP = "cannot be called from a running event loop"
+
+
+class _SynchronousSendError(RuntimeError):
+    """A synchronous ``send_*`` was called from inside a running event loop.
+
+    A ``RuntimeError`` subclass so it reads (and is caught) exactly like asyncio's own — only with a
+    message that says what to do instead.
+    """
+
+
+def _synchronous(method: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Turn asyncio's opaque "cannot be called from a running event loop" into a teaching error.
+
+    Every ``send_*`` below drives the app through :func:`asyncio.run`, which refuses to run inside an
+    already-running loop — so calling one from an ``async def`` test dies with a message about
+    asyncio internals rather than about the test. This names the culprit and the two ways out.
+    """
+
+    @functools.wraps(method)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        try:
+            return method(*args, **kwargs)
+        except RuntimeError as exc:
+            # A delegating ``send_*`` re-labels the inner error with the name the caller used.
+            if _RUNNING_LOOP not in str(exc) and not isinstance(exc, _SynchronousSendError):
+                raise
+            raise _SynchronousSendError(
+                f"{method.__name__}() is synchronous — call it from a plain 'def' test. "
+                "From an async test, drive the app directly: `await host._app.handle(...)`."
+            ) from exc
+
+    return wrapper
+
+
 class AzureFunctionsTestHost:
     """Wraps an :class:`AzureFunctionsApp` for in-memory tests of each trigger."""
 
@@ -206,6 +247,7 @@ class AzureFunctionsTestHost:
     def __init__(self, app: AzureFunctionsApp) -> None:
         self._app = app
 
+    @_synchronous
     def send_http(
         self,
         method: str,
@@ -222,17 +264,21 @@ class AzureFunctionsTestHost:
             body="" if body is None else encode_body(body),
         )
 
+    @_synchronous
     def send_service_bus(
         self, topic: str, body: Any, headers: dict[str, str] | None = None
     ) -> None:
         self._app.handle_service_bus(service_bus_message(topic, body, headers))
 
+    @_synchronous
     def send_event_hub(self, topic: str, body: Any, headers: dict[str, str] | None = None) -> None:
         self._app.handle_event_hub([event_hub_event(topic, body, headers)])
 
+    @_synchronous
     def send_event_hub_batch(self, events: list[FakeEventHubEvent]) -> None:
         self._app.handle_event_hub(events)
 
+    @_synchronous
     def send_queue_storage(
         self,
         topic: str,
@@ -245,9 +291,11 @@ class AzureFunctionsTestHost:
             queue_storage_message(topic, body, headers), default_topic=default_topic
         )
 
+    @_synchronous
     def send_queue_text(self, text: str, *, default_topic: str = "") -> None:
         self._app.handle_queue_storage(queue_text_message(text), default_topic=default_topic)
 
+    @_synchronous
     def send_blob(
         self,
         name: str,
@@ -258,11 +306,14 @@ class AzureFunctionsTestHost:
     ) -> None:
         self._app.handle_blob(blob_event(name, uri, **fields), default_topic=default_topic)
 
+    @_synchronous
     def send_cosmos(self, documents: list[Any], *, default_topic: str = "cosmos:change") -> None:
         self._app.handle_cosmos(cosmos_change_feed(*documents), default_topic=default_topic)
 
+    @_synchronous
     def send_timer(self, *, past_due: bool = False, default_topic: str = "timer:tick") -> None:
         self._app.handle_timer(timer_request(past_due=past_due), default_topic=default_topic)
 
+    @_synchronous
     def send_event_grid(self, event: Any, *, default_topic: str = "") -> None:
         self._app.handle_event_grid(event, default_topic=default_topic)

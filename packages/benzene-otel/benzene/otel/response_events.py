@@ -26,7 +26,7 @@ from typing import Any, Protocol, runtime_checkable
 from benzene.core import Context, Middleware, Next
 from benzene.results import Result, Status, is_successful
 
-_logger = logging.getLogger("benzene.otel.response_events")
+logger = logging.getLogger(__name__)
 
 #: The business correlation id header, as read by :func:`benzene.mesh.trace_middleware`.
 CORRELATION_ID_HEADER = "x-correlation-id"
@@ -129,6 +129,6 @@ def response_event_interception(
         try:
             await sink.emit(event)
         except Exception:
-            _logger.warning("response-event sink failed for topic %r", context.topic, exc_info=True)
+            logger.warning("response-event sink failed for topic %r", context.topic, exc_info=True)
 
     return middleware

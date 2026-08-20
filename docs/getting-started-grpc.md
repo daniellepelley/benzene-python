@@ -30,6 +30,11 @@ It builds on the base tutorial: read [Getting started](getting-started.md) first
 pip install 'benzene-grpc[transport]'   # the status mapping + the gRPC server/client transport
 ```
 
+> **Not on PyPI yet.** Until the first release these names don't resolve — install the
+> `benzene-*` layers from a local checkout of this repo instead, then carry on with the guide
+> unchanged:
+> `git clone https://github.com/daniellepelley/benzene-python && cd benzene-python && pip install -e packages/benzene-results -e packages/benzene-core -e 'packages/benzene-grpc[transport]'`
+
 The distribution is **`benzene-grpc`**. It depends on `benzene-core` (the pipeline and message
 handlers), so a single install pulls in everything the mapping needs. `grpcio` is only required by the
 actual server/client *transport* and is an optional extra — install the bare package if you only need

@@ -10,8 +10,10 @@ response side drives a real ``MiddlewarePipeline`` + ``message_router``, as ``te
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
+import pytest
 from benzene.core import Context, MiddlewarePipeline, Registry, message_router
 from benzene.mesh import TraceEvent, trace_middleware
 from benzene.otel import (
@@ -259,3 +261,21 @@ def test_a_raising_sink_does_not_break_the_pipeline() -> None:
     # The invocation's own result is untouched by the failing observer.
     assert ctx.result is not None and ctx.result.status == Status.OK
     assert ctx.result.payload == {"id": 1}
+
+
+def test_a_failing_sink_is_logged_on_the_module_logger(caplog: pytest.LogCaptureFixture) -> None:
+    class BoomSink:
+        async def emit(self, event: ResponseEvent) -> None:
+            raise RuntimeError("sink is down")
+
+    async def handler(_request) -> Result:
+        return Result.ok()
+
+    pipeline = _response_pipeline(BoomSink(), handler)
+    with caplog.at_level(logging.WARNING, logger="benzene.otel.response_events"):
+        run(pipeline.handle(Context("t", {})))
+
+    # Swallowed, but never silent — and logged on the module's own `logging.getLogger(__name__)`
+    # logger, so an operator can silence or route it by module like every other logger in the port.
+    assert [record.name for record in caplog.records] == ["benzene.otel.response_events"]
+    assert "response-event sink failed" in caplog.records[0].message

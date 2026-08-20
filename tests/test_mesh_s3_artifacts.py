@@ -6,7 +6,9 @@ the lazy ``boto3`` import never fires.
 from __future__ import annotations
 
 import json
+import sys
 
+import pytest
 from benzene.mesh import MeshCollector, S3ArtifactStore, write_artifacts_to_s3
 
 _AT = "2026-08-08T00:00:00+00:00"
@@ -125,3 +127,11 @@ def test_write_artifacts_to_s3_can_also_publish_an_out_of_band_document() -> Non
     store.write("registry.json", {"services": ["orders"]})
 
     assert fake.puts["mesh/registry.json"]["document"] == {"services": ["orders"]}
+
+
+def test_missing_boto3_raises_a_teaching_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The lazy `[aws]` import must fail loudly, naming the extra, rather than surfacing as a
+    # confusing AttributeError deep inside a publish pass.
+    monkeypatch.setitem(sys.modules, "boto3", None)
+    with pytest.raises(ImportError, match=r"benzene-mesh\[aws\]"):
+        S3ArtifactStore("bucket").write("manifest.json", {"ok": True})

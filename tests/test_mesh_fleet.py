@@ -9,12 +9,15 @@ pin the real field names and — the part that matters most — each backend's t
 from __future__ import annotations
 
 import asyncio
+import sys
 from types import SimpleNamespace
 
+import pytest
 from benzene.mesh import TraceEvent
 from benzene.mesh_fleet import (
     AwsCloudMapDiscovery,
     AwsLambdaDiscovery,
+    AzureDiscovery,
     JaegerTraceMapper,
     KubernetesDiscovery,
     ServiceEndpoint,
@@ -194,6 +197,75 @@ def test_aws_lambda_discovery_custom_tag_key_and_empty_page_is_empty_list():
     assert run(AwsLambdaDiscovery(client=empty).discover()) == []
 
 
+class _FakeAzureResourceClient:
+    """A stand-in for an ``azure-mgmt-resource`` client (only the ``resources.list()`` feed used)."""
+
+    def __init__(self, resources: list[object]) -> None:
+        self.resources = SimpleNamespace(list=lambda: list(resources))
+
+
+def _azure_resource(name: str, *, tags: dict | None = None, host: str | None = None):
+    """One Azure resource as the SDK models it: a name, tags, and a ``defaultHostName``."""
+    return SimpleNamespace(name=name, tags=tags, default_host_name=host)
+
+
+def test_azure_discovery_maps_tagged_resources_to_endpoints():
+    fake = _FakeAzureResourceClient(
+        [
+            _azure_resource(
+                "orders-app",
+                tags={"benzene:service": "orders", "team": "checkout"},
+                host="orders.azurewebsites.net",
+            ),
+            # No hostname to route to → skipped, never emitted with a blank address.
+            _azure_resource("storage-account", tags={"benzene:service": "storage"}),
+        ]
+    )
+
+    endpoints = run(AzureDiscovery("sub-1", client=fake).discover())
+
+    assert endpoints == [
+        ServiceEndpoint(
+            name="orders",  # the `benzene:service` tag names the service, not the resource name
+            address="orders.azurewebsites.net",
+            metadata={"benzene:service": "orders", "team": "checkout"},
+        )
+    ]
+
+
+def test_azure_discovery_falls_back_to_the_resource_name_when_untagged():
+    # An untagged (but addressable) resource is still reachable, so it is discovered under its own
+    # resource name — the tag names a service, it does not gate membership.
+    fake = _FakeAzureResourceClient([_azure_resource("inventory", host="inventory.azurewebsites.net")])
+
+    assert run(AzureDiscovery("sub-1", client=fake).discover()) == [
+        ServiceEndpoint(name="inventory", address="inventory.azurewebsites.net", metadata={})
+    ]
+
+
+def test_azure_discovery_reads_a_custom_service_tag_and_a_dict_shaped_resource():
+    # A resource can arrive as a plain mapping (the raw REST shape) and the tag key is configurable.
+    fake = _FakeAzureResourceClient(
+        [
+            {
+                "name": "payments-app",
+                "tags": {"mesh:service": "payments"},
+                "fqdn": "payments.internal",  # the FQDN fallback when there is no defaultHostName
+            }
+        ]
+    )
+
+    assert run(AzureDiscovery("sub-1", client=fake, service_tag="mesh:service").discover()) == [
+        ServiceEndpoint(
+            name="payments", address="payments.internal", metadata={"mesh:service": "payments"}
+        )
+    ]
+
+
+def test_azure_discovery_empty_subscription_is_an_empty_list():
+    assert run(AzureDiscovery("sub-1", client=_FakeAzureResourceClient([])).discover()) == []
+
+
 class _FakeCoreV1Api:
     """A stand-in for a kubernetes ``CoreV1Api`` (only ``list_namespaced_service``)."""
 
@@ -291,3 +363,27 @@ def test_xray_mapper_uses_epoch_seconds_and_subsegment_tree():
     assert child["id"] == "2" * 16
     assert child["fault"] is True
     assert "trace_id" not in child  # subsegments inherit the segment's trace id
+
+
+# --- optional-dependency policy: a missing SDK is a teaching ImportError ------------------------
+
+
+@pytest.mark.parametrize(
+    ("build", "sdk_module", "extra"),
+    [
+        (lambda: AwsCloudMapDiscovery("ns-mesh12345"), "boto3", "aws"),
+        (lambda: AwsLambdaDiscovery(), "boto3", "aws"),
+        (lambda: AzureDiscovery("sub-1"), "azure", "azure"),
+        (lambda: KubernetesDiscovery(namespace="mesh"), "kubernetes", "kubernetes"),
+    ],
+    ids=["cloudmap", "lambda", "azure", "kubernetes"],
+)
+def test_a_missing_discovery_sdk_names_its_extra(
+    monkeypatch: pytest.MonkeyPatch, build, sdk_module: str, extra: str
+) -> None:
+    # Every adapter imports its SDK lazily; a deployment that forgot the extra must fail loudly with
+    # a message naming exactly what to install, not with a bare "No module named ..." (or worse, an
+    # empty discovery that silently reports a fleet of nothing).
+    monkeypatch.setitem(sys.modules, sdk_module, None)
+    with pytest.raises(ImportError, match=rf"benzene-mesh-fleet\[{extra}\]"):
+        run(build().discover())

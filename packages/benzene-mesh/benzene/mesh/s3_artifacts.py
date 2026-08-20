@@ -49,8 +49,18 @@ class S3ArtifactStore:
         self._client = client
 
     def _s3(self) -> Any:
+        """The S3 client, importing the optional ``[aws]`` SDK lazily on first use.
+
+        A missing SDK is a *deployment* error, not a message outcome, so it surfaces as an ImportError
+        naming the exact extra rather than being mapped to a retried ``service-unavailable`` result.
+        """
         if self._client is None:
-            import boto3  # lazy: optional [aws] dependency
+            try:
+                import boto3  # lazy: optional [aws] dependency
+            except ImportError as exc:
+                raise ImportError(
+                    "S3ArtifactStore requires boto3 — install it with 'pip install benzene-mesh[aws]'."
+                ) from exc
 
             self._client = boto3.client("s3")
         return self._client

@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import sys
+import types
 
+import pytest
 from benzene.auth import (
     JwtValidator,
     Principal,
@@ -220,3 +223,88 @@ def test_authorizer_denies_an_invalid_token() -> None:
     statement = response["policyDocument"]["Statement"][0]
     assert statement["Effect"] == "Deny"
     assert statement["Resource"] == arn
+
+
+# --- bearer scheme edges -------------------------------------------------------------------------
+
+
+def test_bearer_rejects_a_non_bearer_scheme_without_running_handler() -> None:
+    validate = static_token_validator({"abc": Principal("carol")})
+    pipeline, handler = _pipeline(bearer_token_interception(validate))
+    # A Basic credential offered where Bearer is expected is not a bearer token, even though the
+    # token part alone would have validated.
+    ctx = Context("t", {}, headers={"authorization": "Basic abc"})
+    run(pipeline.handle(ctx))
+
+    assert handler.calls == 0
+    assert ctx.result is not None and ctx.result.status == Status.UNAUTHORIZED
+
+
+def test_custom_scheme_is_matched_case_insensitively() -> None:
+    validate = static_token_validator({"t0k": Principal("erin")})
+    pipeline, handler = _pipeline(bearer_token_interception(validate, scheme="Token"))
+    ctx = Context("t", {}, headers={"authorization": "token t0k"})  # lowercased scheme still matches
+    run(pipeline.handle(ctx))
+
+    assert handler.calls == 1
+    principal = get_principal(ctx)
+    assert principal is not None and principal.name == "erin"
+
+
+# --- JwtValidator's real PyJWT path (a stubbed `jwt` module, still no PyJWT installed) -----------
+
+
+def test_decode_with_pyjwt_passes_key_algorithms_audience_and_issuer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[tuple, dict]] = []
+
+    def decode(token, key, **kwargs):
+        calls.append(((token, key), kwargs))
+        return {"sub": "erin", "aud": "orders", "iss": "https://issuer.example"}
+
+    monkeypatch.setitem(sys.modules, "jwt", types.SimpleNamespace(decode=decode))
+
+    validator = JwtValidator(
+        key="k", algorithms=("RS256",), audience="orders", issuer="https://issuer.example"
+    )
+    principal = validator.validate("header.payload.sig")  # no injected decode → the real path
+
+    # The kwargs assembly is the whole point: a typo here would only ever fail in production.
+    assert calls == [
+        (
+            ("header.payload.sig", "k"),
+            {
+                "algorithms": ["RS256"],
+                "audience": "orders",
+                "issuer": "https://issuer.example",
+            },
+        )
+    ]
+    assert principal is not None and principal.name == "erin"
+
+
+def test_decode_with_pyjwt_omits_audience_and_issuer_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    def decode(token, key, **kwargs):
+        calls.append(kwargs)
+        return {"sub": "frank"}
+
+    monkeypatch.setitem(sys.modules, "jwt", types.SimpleNamespace(decode=decode))
+
+    assert JwtValidator(key="k").validate("t") is not None
+    # Passing audience=None/issuer=None would make PyJWT *verify* against None — they must be absent.
+    assert calls == [{"algorithms": ["HS256"]}]
+
+
+def test_missing_pyjwt_surfaces_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "jwt", None)
+    validator = JwtValidator(key="k")
+    # A missing PyJWT is a deployment error, not an "invalid token": it must escape `validate`'s
+    # rejection mapper, naming the extra (and the injectable decode seam) rather than returning None.
+    with pytest.raises(ImportError, match=r"benzene-auth\[jwt\]") as raised:
+        validator.validate("header.payload.sig")
+    assert "decode" in str(raised.value)

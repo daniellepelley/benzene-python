@@ -28,8 +28,9 @@ The ``benzene:mesh:query:*`` shapes follow the reference collector and are pinne
 
 from __future__ import annotations
 
+import asyncio
 import copy
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -53,6 +54,11 @@ QUERY_TRACE_TOPIC = "benzene:mesh:query:trace"
 # The feeds a service can report, in the order they are listed in `missingFeeds`. `issues` is special:
 # it is only "missing" when a failure needs explaining (see `_missing_feeds`).
 _FEEDS = ("descriptor", "health", "traces", "issues")
+
+# How many trace events one collector retains by default — the newest N, oldest evicted. Far above any
+# fixture's or ordinary burst's event count, but bounded, so a long-lived collector's memory, snapshot
+# size, and full-scan queries stop growing with uptime.
+_DEFAULT_MAX_EVENTS = 10_000
 
 # Merged issue exemplars keep the newest few (mesh.md §4.1).
 _MAX_EXEMPLARS = 3
@@ -113,20 +119,37 @@ class MeshCollector:
     the collector restores from it on construction and writes a fresh snapshot after every mutating
     ingest, so a restarted host rehydrates the fleet it already knew. The default store keeps nothing,
     so tests and single runs behave exactly as before and pay nothing.
+
+    The trace-event log is a **bounded window**: ``max_events`` (default 10 000) newest events are
+    retained and the oldest are evicted, the way :class:`~benzene.mesh.QueueTraceExporter` bounds the
+    sending side. Everything derived from a *declaration* (the service catalog, the producer/consumer
+    graph, merged issues) is unbounded and permanent — only the raw event log, and the trace-derived
+    stats scanned out of it, are windowed.
     """
 
-    def __init__(self, *, store: CollectorStore | None = None) -> None:
+    def __init__(
+        self, *, store: CollectorStore | None = None, max_events: int = _DEFAULT_MAX_EVENTS
+    ) -> None:
         self._services: dict[str, _Service] = {}
         self._topics: set[str] = set()  # every topic ever seen (registered or traced); grows only
         self._ever_provided: set[str] = (
             set()
         )  # topics some service ever declared (for removed-topic detection)
-        self._events: list[_Event] = []
+        self._max_events = max_events
+        # Bounded: the newest `max_events` trace events, oldest evicted (see the class docstring).
+        self._events: deque[_Event] = deque(maxlen=max_events)
         # span id -> the service that emitted it. Used only for the §4.2 observed-signal (liveness,
         # drift) below — NEVER for graph membership (`_providers_of`/`_consumers_of` are declared-only).
+        # Tolerant of eviction by construction: every lookup is a `.get`, and a parent span whose event
+        # has aged out of the window simply yields no observed caller.
         self._span_owner: dict[str, str] = {}
         self._issues: dict[str, dict[str, Any]] = {}  # fingerprint -> merged issue
         self._store: CollectorStore = store or NullCollectorStore()
+        # Set while an ingest runs under `persist_off_loop`, so the blocking store write is hoisted out
+        # of the mutation and awaited on a worker thread instead of running on the event loop.
+        self._defer_save = False
+        self._save_pending = False
+        self._save_lock = asyncio.Lock()
         saved = self._store.load()
         if saved is not None:
             self.restore(saved)
@@ -264,7 +287,12 @@ class MeshCollector:
 
     # --- persistence -----------------------------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
-        """The whole catalog as a JSON-able dict — what a :class:`CollectorStore` persists."""
+        """The whole catalog as a JSON-able dict — what a :class:`CollectorStore` persists.
+
+        ``events`` holds the retained window only — at most ``max_events`` (default 10 000) newest
+        trace events, oldest first — so a snapshot has a bounded size no matter how long the collector
+        has been up. Services, the declared graph, and merged issues are complete, never windowed.
+        """
         return {
             "version": _SNAPSHOT_VERSION,
             "services": [
@@ -341,18 +369,23 @@ class MeshCollector:
             self._services[record.name] = record
         self._topics = set(snapshot.get("topics", []))
         self._ever_provided = set(snapshot.get("everProvided", []))
-        self._events = [
-            _Event(
-                trace_id=str(raw.get("traceId", "")),
-                span_id=str(raw.get("spanId", "")),
-                parent_span_id=raw.get("parentSpanId"),
-                service=str(raw.get("service", "")),
-                topic=str(raw.get("topic", "")),
-                status=str(raw.get("status", "")),
-                started_at=raw.get("startedAt"),
-            )
-            for raw in snapshot.get("events", [])
-        ]
+        # A snapshot written by a collector with a larger (or no) cap is trimmed to this one's window:
+        # a bounded deque built from an iterable keeps the *last* `maxlen` items — the newest events.
+        self._events = deque(
+            (
+                _Event(
+                    trace_id=str(raw.get("traceId", "")),
+                    span_id=str(raw.get("spanId", "")),
+                    parent_span_id=raw.get("parentSpanId"),
+                    service=str(raw.get("service", "")),
+                    topic=str(raw.get("topic", "")),
+                    status=str(raw.get("status", "")),
+                    started_at=raw.get("startedAt"),
+                )
+                for raw in snapshot.get("events", [])
+            ),
+            maxlen=self._max_events,
+        )
         # Rebuild the span-owner index from the restored events — a pure index over `_events`, not
         # itself persisted, needed again after restart for the §4.2 observed-signal derivation.
         self._span_owner = {event.span_id: event.service for event in self._events}
@@ -361,8 +394,40 @@ class MeshCollector:
         self._issues = copy.deepcopy(snapshot.get("issues", {}))
 
     def _persisted(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Write the catalog through the store after a mutating ingest, then return ``result``."""
+        """Write the catalog through the store after a mutating ingest, then return ``result``.
+
+        A store save is blocking file/S3 I/O over the *whole* catalog. Called directly — a poller
+        sweep, a batch aggregation pass, a test — that is exactly right: the write happens before the
+        ingest returns and there is no event loop to protect. Called through the registry's ingest
+        handlers, :meth:`persist_off_loop` sets ``_defer_save`` so the write is hoisted out of the
+        mutation and awaited on a worker thread instead of stalling the loop.
+        """
+        if self._defer_save:
+            self._save_pending = True
+            return result
         self._store.save(self.snapshot())
+        return result
+
+    async def persist_off_loop(
+        self, ingest: Callable[[dict[str, Any]], dict[str, Any]], body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Run one mutating ``ingest`` on the loop, then persist the catalog on a worker thread.
+
+        The mutation itself is synchronous and await-free, so concurrent ingests still apply one at a
+        time (no interleaving); only the blocking ``store.save`` moves off the event loop, where a
+        synchronous S3 PUT or fsync would otherwise block every other invocation the collector serves.
+        Saves are serialized behind a lock and snapshot *inside* it, so the last write is always the
+        latest state.
+        """
+        self._defer_save = True
+        try:
+            result = ingest(body)
+        finally:
+            self._defer_save = False
+        if self._save_pending:
+            self._save_pending = False
+            async with self._save_lock:
+                await asyncio.to_thread(self._store.save, self.snapshot())
         return result
 
     # --- queries ---------------------------------------------------------------------------
@@ -568,10 +633,10 @@ def _topic_spec(topic: dict[str, Any]) -> dict[str, Any]:
 _CollectorMethod = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-def _ingest_handler(method: _CollectorMethod) -> Handler:
+def _ingest_handler(collector: MeshCollector, method: _CollectorMethod) -> Handler:
     async def handler(request: dict[str, Any]) -> Result:
         try:
-            return Result.ok(method(request))
+            return Result.ok(await collector.persist_off_loop(method, request))
         except CollectorBadRequest as exc:
             return Result.bad_request(str(exc))
 
@@ -598,10 +663,10 @@ def collector_registry(collector: MeshCollector | None = None) -> Registry:
     """
     collector = collector or MeshCollector()
     registry = Registry()
-    registry.register(REGISTER_TOPIC, _ingest_handler(collector.ingest_register))
-    registry.register(HEARTBEAT_TOPIC, _ingest_handler(collector.ingest_heartbeat))
-    registry.register(TRACES_TOPIC, _ingest_handler(collector.ingest_traces))
-    registry.register(ISSUES_TOPIC, _ingest_handler(collector.ingest_issues))
+    registry.register(REGISTER_TOPIC, _ingest_handler(collector, collector.ingest_register))
+    registry.register(HEARTBEAT_TOPIC, _ingest_handler(collector, collector.ingest_heartbeat))
+    registry.register(TRACES_TOPIC, _ingest_handler(collector, collector.ingest_traces))
+    registry.register(ISSUES_TOPIC, _ingest_handler(collector, collector.ingest_issues))
     registry.register(QUERY_FLEET_TOPIC, _query_handler(collector.query_fleet))
     registry.register(QUERY_SERVICE_TOPIC, _query_handler(collector.query_service))
     registry.register(QUERY_TOPIC_TOPIC, _query_handler(collector.query_topic))

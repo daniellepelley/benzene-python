@@ -11,8 +11,10 @@ SQS trigger above, so it gets its own builder/fake/test-host trio below rather t
 from __future__ import annotations
 
 import base64
+import functools
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
 from benzene.core import decode_response, encode_body
 from benzene.results import Result
@@ -285,6 +287,45 @@ class SqsBatchResponse:
         return cls(batch_item_failures=list(response.get("batchItemFailures", [])))
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+_RUNNING_LOOP = "cannot be called from a running event loop"
+
+
+class _SynchronousSendError(RuntimeError):
+    """A synchronous ``send_*`` was called from inside a running event loop.
+
+    A ``RuntimeError`` subclass so it reads (and is caught) exactly like asyncio's own — only with a
+    message that says what to do instead.
+    """
+
+
+def _synchronous(method: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Turn asyncio's opaque "cannot be called from a running event loop" into a teaching error.
+
+    Every ``send_*`` below drives the app through :func:`asyncio.run`, which refuses to run inside an
+    already-running loop — so calling one from an ``async def`` test dies with a message about
+    asyncio internals rather than about the test. This names the culprit and the two ways out.
+    """
+
+    @functools.wraps(method)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        try:
+            return method(*args, **kwargs)
+        except RuntimeError as exc:
+            # A delegating ``send_*`` re-labels the inner error with the name the caller used.
+            if _RUNNING_LOOP not in str(exc) and not isinstance(exc, _SynchronousSendError):
+                raise
+            raise _SynchronousSendError(
+                f"{method.__name__}() is synchronous — call it from a plain 'def' test. "
+                "From an async test, drive the app directly: `await host._app.handle(...)`."
+            ) from exc
+
+    return wrapper
+
+
 class AwsLambdaTestHost:
     """Wraps an :class:`AwsLambdaApp` for in-memory tests of each event source."""
 
@@ -294,6 +335,7 @@ class AwsLambdaTestHost:
     def __init__(self, app: AwsLambdaApp) -> None:
         self._app = app
 
+    @_synchronous
     def send_http(
         self,
         method: str,
@@ -317,6 +359,7 @@ class AwsLambdaTestHost:
             result["statusCode"], result.get("headers", {}), result.get("body", "")
         )
 
+    @_synchronous
     def send_sqs(
         self,
         topic: str,
@@ -332,6 +375,7 @@ class AwsLambdaTestHost:
         )
         return self.send_sqs_event(event)
 
+    @_synchronous
     def send_sqs_event(self, event: dict[str, Any]) -> SqsBatchResponse:
         result = self._app.handle(event)
         assert (
@@ -339,20 +383,24 @@ class AwsLambdaTestHost:
         )  # SQS always yields a partial-batch response (never None like SNS)
         return SqsBatchResponse.from_wire(result)
 
+    @_synchronous
     def send_sns(self, topic: str, body: Any, headers: dict[str, str] | None = None) -> None:
         event = SnsEventBuilder().with_message(topic, body, headers=headers).build()
         self._app.handle(event)
 
+    @_synchronous
     def send_s3(self, bucket: str, key: str, event_name: str = "ObjectCreated:Put") -> None:
         """Deliver one S3 object-created notification (topic resolved from the host's convention)."""
         event = S3EventBuilder().with_object(bucket, key, event_name).build()
         self._app.handle(event)
 
+    @_synchronous
     def send_eventbridge(self, detail_type: str, detail: Any, source: str = "benzene") -> None:
         """Deliver one EventBridge event; the Benzene topic is the ``detail_type``."""
         event = EventBridgeEventBuilder(detail_type, source).with_detail(detail).build()
         self._app.handle(event)
 
+    @_synchronous
     def send_dynamodb(
         self,
         event_name: str,
@@ -370,6 +418,7 @@ class AwsLambdaTestHost:
         assert result is not None  # DynamoDB always yields a partial-batch response
         return SqsBatchResponse.from_wire(result)
 
+    @_synchronous
     def send_kinesis(self, body: Any, sequence_number: str | None = None) -> SqsBatchResponse:
         """Deliver one Kinesis record; returns the partial-batch response."""
         event = KinesisEventBuilder().with_record(body, sequence_number=sequence_number).build()
@@ -377,6 +426,7 @@ class AwsLambdaTestHost:
         assert result is not None  # Kinesis always yields a partial-batch response
         return SqsBatchResponse.from_wire(result)
 
+    @_synchronous
     def send_kafka(
         self,
         kafka_topic: str,
@@ -392,6 +442,7 @@ class AwsLambdaTestHost:
         )
         self._app.handle(event)
 
+    @_synchronous
     def send_invoke(
         self, topic: str, body: Any = None, headers: dict[str, str] | None = None
     ) -> Result:

@@ -449,3 +449,148 @@ def test_issues_feed_absence_flagged_only_when_a_failure_needs_explaining() -> N
     c.ingest_issues({"service": "orders", "issues": []})  # a liveness beat clears the flag
     orders = next(s for s in c.query_fleet({})["services"] if s["service"] == "orders")
     assert orders["missingFeeds"] == ["descriptor", "health"]
+
+
+# --- retention + off-loop persistence (the event log is bounded; the store save is threaded) ------
+
+
+def _trace_event(n: int, service: str = "orders", topic: str = "order:create") -> dict:
+    return {
+        "traceId": f"t{n}",
+        "spanId": f"s{n}",
+        "service": service,
+        "topic": topic,
+        "status": "ok",
+        "startedAt": f"2026-08-15T09:00:0{n}Z",
+    }
+
+
+def test_the_event_log_is_capped_at_max_events() -> None:
+    c = MeshCollector(max_events=3)
+    _register(c, "orders", ["order:create"])
+    for n in range(5):
+        c.ingest_traces({"events": [_trace_event(n)]})
+
+    # Only the newest `max_events` are retained: memory, snapshot size, and every full-scan query
+    # stop growing with uptime instead of climbing forever.
+    snapshot = c.snapshot()
+    assert [event["spanId"] for event in snapshot["events"]] == ["s2", "s3", "s4"]
+    # Within the retained window every query still answers exactly as before.
+    topic = c.query_topic({"topic": "order:create"})
+    assert topic["invocations"] == 3
+    assert topic["providers"] == ["orders"]
+    assert topic["providerActivity"] == {"orders": {"lastObservedAt": "2026-08-15T09:00:04Z"}}
+    assert c.query_trace({"traceId": "t4"})["events"] == [{"spanId": "s4", "service": "orders"}]
+
+
+def test_the_event_log_defaults_to_a_generous_cap() -> None:
+    # The default is far above any conformance fixture or ordinary burst — it bounds a long-lived
+    # collector without changing what a test or a fixture sees.
+    c = MeshCollector()
+    assert c.snapshot()["events"] == []
+    assert MeshCollector(max_events=10)._events.maxlen == 10
+    assert MeshCollector()._events.maxlen == 10_000
+
+
+def test_a_restored_collector_rebuilds_span_ownership_from_the_retained_window() -> None:
+    c = MeshCollector(max_events=4)
+    _register(c, "payments", ["payments:capture"])
+    _register(c, "orders", ["order:create"], consumes=["payments:capture"])
+    c.ingest_traces(
+        {
+            "events": [
+                _trace_event(1, "orders", "order:create"),
+                {
+                    "traceId": "t1",
+                    "spanId": "s2",
+                    "parentSpanId": "s1",
+                    "service": "payments",
+                    "topic": "payments:capture",
+                    "status": "ok",
+                    "startedAt": "2026-08-15T09:00:02Z",
+                },
+            ]
+        }
+    )
+
+    restored = MeshCollector(max_events=4)
+    restored.restore(c.snapshot())
+
+    # The span-owner index is not persisted — it is rebuilt from the retained events, so the §4.2
+    # observed-consumer signal survives a restart exactly as it did before the cap existed.
+    assert restored.query_topic({"topic": "payments:capture"}) == c.query_topic(
+        {"topic": "payments:capture"}
+    )
+    assert restored.query_topic({"topic": "payments:capture"})["consumerActivity"] == {
+        "orders": {"lastObservedAt": "2026-08-15T09:00:02Z"}
+    }
+
+
+def test_restore_honours_the_cap_and_keeps_the_newest_events() -> None:
+    source = MeshCollector()
+    _register(source, "orders", ["order:create"])
+    for n in range(5):
+        source.ingest_traces({"events": [_trace_event(n)]})
+
+    capped = MeshCollector(max_events=2)
+    capped.restore(source.snapshot())  # a snapshot written by a bigger (or uncapped) collector
+
+    assert [event["spanId"] for event in capped.snapshot()["events"]] == ["s3", "s4"]
+
+
+class _SpyToThread:
+    """A drop-in for ``asyncio.to_thread`` that records each dispatched callable, then really runs it."""
+
+    def __init__(self, real) -> None:
+        self._real = real  # the genuine asyncio.to_thread, captured before patching
+        self.dispatched: list = []
+
+    async def __call__(self, func, /, *args, **kwargs):
+        self.dispatched.append(func)
+        return await self._real(func, *args, **kwargs)
+
+
+class _RecordingStore:
+    """A duck-typed :class:`CollectorStore` that records the snapshots it was asked to save."""
+
+    def __init__(self) -> None:
+        self.saved: list[dict] = []
+
+    def load(self) -> dict | None:
+        return None
+
+    def save(self, snapshot: dict) -> None:
+        self.saved.append(snapshot)
+
+
+def test_the_ingest_handlers_persist_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _RecordingStore()
+    collector = MeshCollector(store=store)
+    app = BenzeneMessageApplication(collector_registry(collector))
+    spy = _SpyToThread(asyncio.to_thread)
+    monkeypatch.setattr(asyncio, "to_thread", spy)
+
+    response = asyncio.run(
+        app.handle(
+            {
+                "topic": "benzene:mesh:register",
+                "headers": {},
+                "body": json.dumps({"service": "orders", "topics": [{"id": "order:create"}]}),
+            }
+        )
+    )
+
+    assert response["statusCode"] == "ok"
+    # The store's file/S3 I/O is blocking: re-serializing the catalog on the event loop stalls every
+    # other invocation the collector is serving, so the save must be dispatched to a worker thread.
+    assert store.saved and store.saved[-1]["services"][0]["name"] == "orders"
+    assert store.save in spy.dispatched
+
+
+def test_a_direct_sync_ingest_still_persists_immediately() -> None:
+    # The collector is also driven synchronously (a poller sweep, a batch aggregation pass), where
+    # there is no loop to protect and no await to hang the save on — durability stays immediate.
+    store = _RecordingStore()
+    c = MeshCollector(store=store)
+    c.ingest_register({"service": "orders", "topics": [{"id": "order:create"}]})
+    assert len(store.saved) == 1

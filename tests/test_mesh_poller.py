@@ -211,3 +211,46 @@ def test_stdlib_get_reads_the_body_off_an_http_error(monkeypatch: pytest.MonkeyP
     status, body = asyncio.run(get("http://orders/benzene/health"))
     assert status == 503
     assert body == '{"isHealthy": false}'
+
+
+class _SpyToThread:
+    """A drop-in for ``asyncio.to_thread`` that records each dispatched callable, then really runs it."""
+
+    def __init__(self, real) -> None:
+        self._real = real
+        self.dispatched: list = []
+
+    async def __call__(self, func, /, *args, **kwargs):
+        self.dispatched.append(func)
+        return await self._real(func, *args, **kwargs)
+
+
+class _RecordingStore:
+    """A duck-typed :class:`~benzene.mesh.CollectorStore` recording the snapshots it was handed."""
+
+    def __init__(self) -> None:
+        self.saved: list[dict] = []
+
+    def load(self) -> dict | None:
+        return None
+
+    def save(self, snapshot: dict) -> None:
+        self.saved.append(snapshot)
+
+
+def test_a_sweep_persists_the_collector_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    apps = {"orders": _service("orders", "orders:place")}
+    store = _RecordingStore()
+    collector = MeshCollector(store=store)
+    poller = MeshPoller(
+        collector, [HttpServiceSource("orders", "http://orders", fetch=_fleet_fetch(apps))]
+    )
+    spy = _SpyToThread(asyncio.to_thread)
+    monkeypatch.setattr(asyncio, "to_thread", spy)
+
+    assert all(r.ok for r in asyncio.run(poller.poll_once()))
+
+    # A durable collector's store save is blocking file/S3 I/O over the whole catalog — a sweep must
+    # dispatch it to a worker thread rather than stalling the loop once per polled source.
+    assert store.saved and store.saved[-1]["services"][0]["name"] == "orders"
+    assert spy.dispatched.count(store.save) == 2  # one per mutating ingest (register + heartbeat)

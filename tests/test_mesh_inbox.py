@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
+import pytest
 from benzene.mesh import S3TraceInbox
 from benzene.results import Status
 
@@ -114,3 +116,14 @@ def test_send_message_failure_is_a_result_not_a_raise() -> None:
 
     assert not result.is_successful
     assert result.status == Status.SERVICE_UNAVAILABLE
+
+
+def test_missing_boto3_raises_a_teaching_import_error_instead_of_a_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A forgotten `[aws]` extra is a *deployment* error, not a send outcome: swallowed by the
+    # `except Exception` mapper it would become an endlessly retried `service-unavailable`.
+    monkeypatch.setitem(sys.modules, "boto3", None)
+    inbox = S3TraceInbox("bucket")  # no injected client → the lazy import fires
+    with pytest.raises(ImportError, match=r"benzene-mesh\[aws\]"):
+        asyncio.run(inbox.send_message("benzene:mesh:traces", {"events": []}))

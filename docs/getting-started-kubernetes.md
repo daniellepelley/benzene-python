@@ -29,6 +29,11 @@ loop, and a Kafka consumer loop together — one container image, one Kubernetes
   somewhere reachable (LocalStack and a throwaway broker via `docker compose` cover both with no
   account at all — see the [runnable example](../examples/k8s_orders)).
 
+> **Not on PyPI yet.** Until the first release the `benzene-*` names don't resolve from PyPI — this
+> guide's Dockerfile already installs them from a checkout (`COPY packages/... && pip install
+> ./packages/...`). To run the legs outside a container first, do the same locally:
+> `git clone https://github.com/daniellepelley/benzene-python && cd benzene-python && pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http -e 'packages/benzene-aws[boto3]' -e 'packages/benzene-kafka[kafka]'`
+
 ## 1. The shared domain
 
 Everything downstream depends on this one composition root — the

@@ -27,6 +27,11 @@ functions-framework --target orders_http --debug
 curl -X POST localhost:8080/orders -d '{"sku": "ABC", "quantity": 2}'   # -> 201 + publishes orders.created
 ```
 
+> **Not on PyPI yet.** `requirements.txt` names the published `benzene-*` distributions, which
+> don't resolve until the first release. Install those layers editable from the repo root first —
+> `pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http -e 'packages/benzene-gcp[pubsub]'` — and `pip install -r requirements.txt` then finds them already
+> satisfied and fetches only the third-party deps.
+
 ## Deploy
 
 ```bash

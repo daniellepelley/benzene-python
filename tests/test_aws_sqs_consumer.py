@@ -12,12 +12,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
+import benzene.aws
 import benzene.aws.sqs_consumer as sqs_consumer_module
 import pytest
-from benzene.aws import SqsConsumerApp, decode_sqs_message, run_sqs_consumer_loop
+from benzene.aws import (
+    SqsConsumerApp,
+    decode_sqs_message,
+    run_consumer_loop,
+    run_sqs_consumer_loop,
+)
 from benzene.aws.testing import RecordingSqsClient, SqsMessageBuilder
 from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
 from benzene.results import Result, Status
@@ -107,7 +114,7 @@ def test_loop_deletes_only_successful_messages() -> None:
         return polls["n"] <= 2  # one batch receive + one empty receive
 
     asyncio.run(
-        run_sqs_consumer_loop(app, client, "https://sqs.example/q", should_continue=should_continue)
+        run_consumer_loop(app, client, "https://sqs.example/q", should_continue=should_continue)
     )
     # at-least-once: the good message is deleted, the failed one is left for redelivery/DLQ redrive.
     assert client.deleted == ["r-good"]
@@ -122,7 +129,7 @@ def test_loop_with_delete_disabled_lets_the_caller_control_deletion() -> None:
     seen: list[Any] = []
 
     asyncio.run(
-        run_sqs_consumer_loop(
+        run_consumer_loop(
             app,
             client,
             "https://sqs.example/q",
@@ -154,7 +161,7 @@ def test_loop_runs_the_blocking_boto3_calls_via_to_thread(monkeypatch: pytest.Mo
     client = RecordingSqsClient(messages=[message])
 
     asyncio.run(
-        run_sqs_consumer_loop(
+        run_consumer_loop(
             app, client, "https://sqs.example/q", should_continue=lambda: bool(client.messages)
         )
     )
@@ -162,3 +169,37 @@ def test_loop_runs_the_blocking_boto3_calls_via_to_thread(monkeypatch: pytest.Mo
     # Both blocking SDK calls were dispatched off the event loop, in order (receive then delete).
     assert routed == ["receive_message", "delete_message"]
     assert client.deleted == ["r1"]
+
+
+# --- naming parity + failure logging (D8/D9) ------------------------------------------------------
+
+
+def test_the_loop_is_named_for_parity_with_the_other_consumers_and_keeps_its_old_alias() -> None:
+    # kafka/rabbitmq both expose ``run_consumer_loop``; namespacing (``benzene.aws.``) disambiguates.
+    assert run_sqs_consumer_loop is run_consumer_loop  # the old name still works, deprecated
+    assert {"run_consumer_loop", "run_sqs_consumer_loop"} <= set(benzene.aws.__all__)
+
+
+def test_a_failed_message_is_logged_for_the_operator(caplog: pytest.LogCaptureFixture) -> None:
+    # Without ``on_result`` wired, a poison message would otherwise loop invisibly.
+    async def refuse(_request: PlaceOrder) -> Result:
+        return Result.failure(Status.SERVICE_UNAVAILABLE)
+
+    app = SqsConsumerApp(_app(refuse))
+    message = (
+        SqsMessageBuilder("orders:place").with_body({"sku": "A"}).with_receipt_handle("r1").build()
+    )
+    client = RecordingSqsClient(messages=[message])
+
+    with caplog.at_level(logging.WARNING, logger="benzene.aws.sqs_consumer"):
+        asyncio.run(
+            run_consumer_loop(
+                app, client, "https://sqs.example/q", should_continue=lambda: bool(client.messages)
+            )
+        )
+
+    assert [r.name for r in caplog.records] == ["benzene.aws.sqs_consumer"]
+    logged = caplog.records[0].getMessage()
+    assert "orders:place" in logged
+    assert "service-unavailable" in logged
+    assert client.deleted == []  # still left on the queue for redelivery

@@ -7,8 +7,10 @@ request or a Pub/Sub CloudEvent — in memory, so an example's tests dogfood the
 from __future__ import annotations
 
 import base64
+import functools
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 from urllib.parse import urlencode
 
 from benzene.core import encode_body
@@ -90,6 +92,45 @@ class GcpHttpResponse:
     body: str
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+_RUNNING_LOOP = "cannot be called from a running event loop"
+
+
+class _SynchronousSendError(RuntimeError):
+    """A synchronous ``send_*`` was called from inside a running event loop.
+
+    A ``RuntimeError`` subclass so it reads (and is caught) exactly like asyncio's own — only with a
+    message that says what to do instead.
+    """
+
+
+def _synchronous(method: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Turn asyncio's opaque "cannot be called from a running event loop" into a teaching error.
+
+    Every ``send_*`` below drives the app through :func:`asyncio.run`, which refuses to run inside an
+    already-running loop — so calling one from an ``async def`` test dies with a message about
+    asyncio internals rather than about the test. This names the culprit and the two ways out.
+    """
+
+    @functools.wraps(method)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        try:
+            return method(*args, **kwargs)
+        except RuntimeError as exc:
+            # A delegating ``send_*`` re-labels the inner error with the name the caller used.
+            if _RUNNING_LOOP not in str(exc) and not isinstance(exc, _SynchronousSendError):
+                raise
+            raise _SynchronousSendError(
+                f"{method.__name__}() is synchronous — call it from a plain 'def' test. "
+                "From an async test, drive the app directly: `await host._app.handle(...)`."
+            ) from exc
+
+    return wrapper
+
+
 class GcpFunctionsTestHost:
     """Wraps a :class:`GcpFunctionsApp` for in-memory tests of both triggers."""
 
@@ -99,6 +140,7 @@ class GcpFunctionsTestHost:
     def __init__(self, app: GcpFunctionsApp) -> None:
         self._app = app
 
+    @_synchronous
     def send_http(
         self,
         method: str,
@@ -117,6 +159,7 @@ class GcpFunctionsTestHost:
         result_body, status, result_headers = self._app.handle_http(builder.build())
         return GcpHttpResponse(status, result_headers, result_body)
 
+    @_synchronous
     def send_pubsub(
         self, topic: str, body: Any = None, headers: dict[str, str] | None = None
     ) -> None:

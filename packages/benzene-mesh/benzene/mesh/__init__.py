@@ -3,7 +3,7 @@
 The mesh module turns a service into a first-class citizen of a Benzene mesh: it **describes itself**
 (the :class:`ServiceDescriptor`, derived from the handler registry, with per-topic request/response
 schemas and a content hash), **answers the reserved ``benzene:mesh`` topic** with that descriptor
-(:func:`mesh_interception`), **traces every invocation** (:func:`trace_middleware` → one
+(:func:`mesh_interception`), **traces every invocation** (:func:`trace_interception` → one
 :class:`TraceEvent` each), and **reports into a collector** over an outbound client
 (:class:`MeshFeedSender`).
 
@@ -95,6 +95,7 @@ from .trace import (
     new_span_id,
     new_trace_id,
     parse_traceparent,
+    trace_interception,
     trace_middleware,
     with_trace_propagation,
 )
@@ -164,6 +165,7 @@ __all__ = [
     "new_span_id",
     "new_trace_id",
     "parse_traceparent",
+    "trace_interception",
     "trace_middleware",
     "write_artifacts",
     "write_artifacts_to_s3",

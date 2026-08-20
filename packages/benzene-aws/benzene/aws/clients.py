@@ -18,7 +18,10 @@ Three carrying conventions, matching what each service exposes on the wire:
   (see :class:`~benzene.aws.AwsLambdaApp`'s ``"invoke"`` source, the receiving half of this).
 
 Mirrors .NET's ``Benzene.Clients.Aws.*``. ``boto3`` is an optional dependency, imported lazily, so
-the module (and its tests, which inject a fake client) load with no AWS SDK present.
+the module (and its tests, which inject a fake client) load with no AWS SDK present. A *missing*
+boto3 raises an ImportError naming the extra (``benzene-aws[boto3]``) straight out of
+``send_message`` — a forgotten extra is a deployment error, not a message outcome, so it must never
+be mapped to ``service-unavailable`` for retries and circuit breakers to hammer.
 
 Each ``send_message`` runs its blocking ``boto3`` call via :func:`asyncio.to_thread`, so an
 ``await sender.send_message(...)`` never blocks the event loop — the same rule the consumer loops
@@ -36,6 +39,24 @@ from benzene.core import decode_response, encode_body
 from benzene.results import Result, Status
 
 from .events import TOPIC_ATTRIBUTE
+
+
+def _boto3(sender: str) -> Any:
+    """Import ``boto3`` lazily, turning a missing optional dependency into a teaching error.
+
+    A missing SDK is a *deployment* error, not a message outcome: swallowed by a sender's
+    ``except Exception`` mapper it would become a ``service-unavailable`` result that retry
+    middleware and circuit breakers then hammer forever. Surfacing it as an ImportError naming the
+    exact extra fails fast and says what to install (the same guard :mod:`benzene.grpc` uses); each
+    ``send_message`` re-raises it ahead of its generic mapper.
+    """
+    try:
+        import boto3  # lazy: optional dependency
+    except ImportError as exc:
+        raise ImportError(
+            f"{sender} requires boto3 — install it with 'pip install benzene-aws[boto3]'."
+        ) from exc
+    return boto3
 
 
 def _string_attributes(topic: str, headers: dict[str, str] | None) -> dict[str, dict[str, str]]:
@@ -60,9 +81,7 @@ class SnsMessageSender:
 
     def _sns(self) -> Any:
         if self._client is None:
-            import boto3  # lazy: optional dependency
-
-            self._client = boto3.client("sns")
+            self._client = _boto3("SnsMessageSender").client("sns")
         return self._client
 
     async def send_message(
@@ -75,6 +94,8 @@ class SnsMessageSender:
                 Message=self._serialize(message),
                 MessageAttributes=_string_attributes(topic, headers),
             )
+        except ImportError:
+            raise  # a missing boto3 is a deployment error, never a service-unavailable result
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
@@ -95,9 +116,7 @@ class SqsMessageSender:
 
     def _sqs(self) -> Any:
         if self._client is None:
-            import boto3  # lazy: optional dependency
-
-            self._client = boto3.client("sqs")
+            self._client = _boto3("SqsMessageSender").client("sqs")
         return self._client
 
     async def send_message(
@@ -110,6 +129,8 @@ class SqsMessageSender:
                 MessageBody=self._serialize(message),
                 MessageAttributes=_string_attributes(topic, headers),
             )
+        except ImportError:
+            raise  # a missing boto3 is a deployment error, never a service-unavailable result
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
@@ -171,9 +192,7 @@ class EventBridgeMessageSender:
 
     def _events(self) -> Any:
         if self._client is None:
-            import boto3  # lazy: optional dependency
-
-            self._client = boto3.client("events")
+            self._client = _boto3("EventBridgeMessageSender").client("events")
         return self._client
 
     async def send_message(
@@ -191,6 +210,8 @@ class EventBridgeMessageSender:
                     }
                 ],
             )
+        except ImportError:
+            raise  # a missing boto3 is a deployment error, never a service-unavailable result
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
@@ -219,9 +240,7 @@ class KinesisMessageSender:
 
     def _kinesis(self) -> Any:
         if self._client is None:
-            import boto3  # lazy: optional dependency
-
-            self._client = boto3.client("kinesis")
+            self._client = _boto3("KinesisMessageSender").client("kinesis")
         return self._client
 
     def _partition_key(self, topic: str, headers: dict[str, str] | None) -> str:
@@ -241,6 +260,8 @@ class KinesisMessageSender:
                 Data=_embed_headers(message, headers, self._serialize),
                 PartitionKey=self._partition_key(topic, headers),
             )
+        except ImportError:
+            raise  # a missing boto3 is a deployment error, never a service-unavailable result
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
@@ -286,9 +307,7 @@ class LambdaMessageSender:
 
     def _lambda(self) -> Any:
         if self._client is None:
-            import boto3  # lazy: optional dependency
-
-            self._client = boto3.client("lambda")
+            self._client = _boto3("LambdaMessageSender").client("lambda")
         return self._client
 
     async def send_message(
@@ -305,6 +324,8 @@ class LambdaMessageSender:
 
         try:
             response = await asyncio.to_thread(self._lambda().invoke, **kwargs)
+        except ImportError:
+            raise  # a missing boto3 is a deployment error, never a service-unavailable result
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
 

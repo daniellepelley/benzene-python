@@ -24,6 +24,7 @@ dependency, exactly like :class:`~benzene.aws.clients.SqsMessageSender`.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -34,6 +35,8 @@ from benzene.core import (
     read_message_metadata,
 )
 from benzene.results import Result
+
+logger = logging.getLogger(__name__)
 
 
 def _decode_attributes(raw: dict[str, Any] | None) -> dict[str, str]:
@@ -80,7 +83,7 @@ class SqsConsumerApp:
         return Result(response["statusCode"])
 
 
-async def run_sqs_consumer_loop(
+async def run_consumer_loop(
     app: SqsConsumerApp,
     client: Any,
     queue_url: str,
@@ -93,6 +96,11 @@ async def run_sqs_consumer_loop(
 ) -> None:
     """Drive a self-hosted consumer: long-poll, dispatch each message, delete only the ones that
     succeeded.
+
+    Named for symmetry with :func:`benzene.kafka.run_consumer_loop` /
+    :func:`benzene.rabbitmq.run_consumer_loop`; ``run_sqs_consumer_loop`` remains as a deprecated
+    alias. A failed message is logged at warning level (module logger ``benzene.aws.sqs_consumer``)
+    so a poison message is visible even when the caller wires no ``on_result``.
 
     ``client`` is duck-typed (``receive_message(QueueUrl=, MaxNumberOfMessages=, WaitTimeSeconds=,
     MessageAttributeNames=)`` → ``{"Messages": [...]}``; ``delete_message(QueueUrl=, ReceiptHandle=)``).
@@ -128,3 +136,17 @@ async def run_sqs_consumer_loop(
                 await asyncio.to_thread(
                     client.delete_message, QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
                 )
+            elif not result.is_successful:
+                # Without this a poison message loops invisibly unless the caller wired ``on_result``.
+                logger.warning(
+                    "message on topic %r failed with status %s; left for redelivery",
+                    decode_sqs_message(message)["topic"],
+                    result.status,
+                )
+
+
+#: Deprecated alias for :func:`run_consumer_loop`, kept working for existing call sites.
+#:
+#: The loop was renamed for symmetry with ``benzene.kafka.run_consumer_loop`` and
+#: ``benzene.rabbitmq.run_consumer_loop`` — the package namespace already disambiguates it.
+run_sqs_consumer_loop = run_consumer_loop

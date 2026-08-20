@@ -177,6 +177,9 @@ def trace_middleware(
     routing. It joins the inbound ``traceparent`` trace when present, else starts a fresh one, and
     reads ``x-correlation-id`` for the business correlation id. Exporter failures are swallowed —
     tracing never breaks the request.
+
+    :func:`trace_interception` is the preferred name (every other middleware factory in the port is
+    ``*_interception``); ``trace_middleware`` remains a working alias for existing wiring.
     """
 
     async def middleware(context: Context, next: Next) -> None:  # noqa: A002 - spec name
@@ -238,3 +241,8 @@ class TracePropagatingMessageSender:
 def with_trace_propagation(inner: Any, **options: Any) -> TracePropagatingMessageSender:
     """Sugar for :class:`TracePropagatingMessageSender`."""
     return TracePropagatingMessageSender(inner, **options)
+
+
+#: The preferred name for :func:`trace_middleware` — every middleware factory in the port is named
+#: ``*_interception``. The two are the same object; the older ``trace_middleware`` keeps working.
+trace_interception = trace_middleware

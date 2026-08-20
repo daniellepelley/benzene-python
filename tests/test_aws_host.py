@@ -8,6 +8,7 @@ whose handler fails (which must raise so Lambda retries).
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -15,7 +16,12 @@ import pytest
 pytest.importorskip("benzene.aws")
 
 from benzene.aws import AwsLambdaApp, to_lambda_handler
-from benzene.aws.testing import ApiGatewayRequestBuilder, SnsEventBuilder, SqsEventBuilder
+from benzene.aws.testing import (
+    ApiGatewayRequestBuilder,
+    AwsLambdaTestHost,
+    SnsEventBuilder,
+    SqsEventBuilder,
+)
 from benzene.core import MessageHandlingError, Registry, message
 from benzene.http import HttpRouter, http_endpoint
 from benzene.results import Result
@@ -78,3 +84,22 @@ def test_sqs_poison_record_is_isolated_not_a_whole_batch_crash() -> None:
     response = app.handle(event)
     assert response["batchItemFailures"] == [{"itemIdentifier": "bad"}]
     assert seen == [{"ok": True}]
+
+
+# --- the sync test host, called from an async test (D10) -------------------------------------------
+
+
+def test_a_sync_send_inside_a_running_loop_teaches_how_to_drive_the_app() -> None:
+    # ``send_*`` calls asyncio.run under the hood; from an async test that dies with asyncio's
+    # opaque "cannot be called from a running event loop". Say what to do instead.
+    host = AwsLambdaTestHost(AwsLambdaApp(http_router=HttpRouter().add(echo)))
+
+    async def an_async_test() -> None:
+        host.send_http("POST", "/echo", {"name": "x"})
+
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(an_async_test())
+    detail = str(excinfo.value)
+    assert "send_http() is synchronous" in detail
+    assert "plain 'def' test" in detail
+    assert "await host._app.handle(...)" in detail

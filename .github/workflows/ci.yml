@@ -20,8 +20,8 @@ jobs:
       - name: Ruff
         run: ruff check .
       - name: Mypy
-        # Reads [tool.mypy] in pyproject: checks the ten packages as one PEP 420 namespace via
-        # mypy_path, with third-party imports ignored — no install needed.
+        # Reads [tool.mypy] in pyproject: checks all benzene-* distributions as one PEP 420
+        # namespace via mypy_path, with third-party imports ignored — no install needed.
         run: mypy
 
   test:
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install layered packages (editable) + pytest
+      - name: Install layered packages (editable) + pytest + coverage
         # Installing all local paths in one command lets pip satisfy the inter-package dependencies
         # (core -> results, http -> core, testing -> core, gcp -> core+http) from the workspace
         # rather than PyPI. This also verifies the PEP 420 namespace packaging. Every package is
@@ -64,14 +64,20 @@ jobs:
             -e packages/benzene-otel \
             -e packages/benzene-mesh-fleet \
             -e packages/benzene-codegen-client
-          pip install pytest
+          pip install pytest coverage
       - name: Conformance (dependency-free runner)
         run: python -m tests.conformance_runner
-      - name: Tests (library + examples)
+      - name: Tests (library + examples), measured
         # testpaths in pyproject.toml includes examples/, so the runnable cloud examples are built
         # and their dogfooded, in-memory tests run here as a required gate (port-quality-standards
         # §5, Tier 1 — credential-free, no cloud deploy).
-        run: pytest -q
+        # Run under the `coverage` CLI rather than pytest-cov: the plugin does not load reliably in
+        # this workspace's layout, while `coverage run -m pytest` measures the same thing.
+        run: python -m coverage run --source=packages -m pytest -q
+      - name: Coverage gate
+        # The suite measures ~94% across packages/; 93 is the floor, not the target — it fails a PR
+        # that adds a meaningful chunk of unexercised code without moving the number back up.
+        run: python -m coverage report --fail-under=93
       - name: Regenerated client stays clean (build-integration check, docs/codegen-client.md §Phase 6)
         run: |
           python examples/orders_payments_client/generate.py

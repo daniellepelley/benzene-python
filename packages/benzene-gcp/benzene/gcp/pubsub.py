@@ -7,7 +7,10 @@ Benzene headers, and the decoded ``data`` is the JSON body.
 
 Outbound: :class:`PubSubMessageSender` implements the :class:`~benzene.core.MessageSender` port over
 ``google-cloud-pubsub`` (an optional dependency, imported lazily), forwarding the header dictionary
-onto the native message attributes so correlation/trace propagation works end to end.
+onto the native message attributes so correlation/trace propagation works end to end. A *missing* SDK
+raises an ImportError naming the extra (``benzene-gcp[pubsub]``) straight out of ``send_message`` — a
+forgotten extra is a deployment error, not a message outcome, so it is never mapped to
+``service-unavailable`` for retries and circuit breakers to hammer.
 """
 
 from __future__ import annotations
@@ -64,7 +67,17 @@ class PubSubMessageSender:
 
     def _client(self) -> Any:
         if self._publisher is None:
-            from google.cloud import pubsub_v1  # lazy: optional dependency
+            try:
+                from google.cloud import pubsub_v1  # lazy: optional dependency
+            except ImportError as exc:
+                # A missing SDK is a *deployment* error, not a message outcome: swallowed by
+                # ``send_message``'s mapper it would become a ``service-unavailable`` result that
+                # retry middleware and circuit breakers then hammer forever. Fail fast, naming the
+                # extra to install (the same guard :mod:`benzene.grpc` uses).
+                raise ImportError(
+                    "PubSubMessageSender requires google-cloud-pubsub — install it with "
+                    "'pip install benzene-gcp[pubsub]'."
+                ) from exc
 
             self._publisher = pubsub_v1.PublisherClient()
         return self._publisher
@@ -85,6 +98,8 @@ class PubSubMessageSender:
             # Run the blocking publish (and its result() wait) on a worker thread so an
             # ``await send_message(...)`` never blocks the event loop.
             await asyncio.to_thread(_publish)
+        except ImportError:
+            raise  # a missing SDK is a deployment error, never a service-unavailable result
         except Exception as ex:  # a failed publish is a service-unavailable, not a crash
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()

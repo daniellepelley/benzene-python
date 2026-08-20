@@ -7,12 +7,14 @@ single-event cardinality ('one', a bare event rather than a batch list).
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 pytest.importorskip("benzene.azure")
 
 from benzene.azure import AzureFunctionsApp, event_hub_function
-from benzene.azure.testing import event_hub_event
+from benzene.azure.testing import AzureFunctionsTestHost, event_hub_event
 from benzene.core import Registry
 from benzene.results import Result
 
@@ -55,3 +57,20 @@ def test_event_hub_entry_point_accepts_a_single_event() -> None:
     )
     entry(event_hub_event("orders:created", {"id": "e2"}))  # the platform callable, single event
     assert seen[0]["id"] == "e2"
+
+
+# --- the sync test host, called from an async test (D10) -------------------------------------------
+
+
+def test_a_sync_send_inside_a_running_loop_teaches_how_to_drive_the_app() -> None:
+    host = AzureFunctionsTestHost(AzureFunctionsApp(registry=Registry().register("t", _echo)))
+
+    async def an_async_test() -> None:
+        host.send_service_bus("t", {})
+
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(an_async_test())
+    detail = str(excinfo.value)
+    assert "send_service_bus() is synchronous" in detail
+    assert "plain 'def' test" in detail
+    assert "await host._app.handle(...)" in detail

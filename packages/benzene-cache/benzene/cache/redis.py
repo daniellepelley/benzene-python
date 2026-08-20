@@ -10,6 +10,7 @@ the tests against an injected fake client — needs no SDK and no network.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from benzene.core import encode_body
@@ -19,9 +20,16 @@ def _client_from(url: str) -> Any:
     """Build a ``redis.asyncio`` client for ``url``, importing the optional SDK lazily.
 
     Isolated so the import cost — and the ``redis`` dependency — is paid only when a caller actually
-    constructs a :class:`RedisCache` from a URL rather than injecting their own client.
+    constructs a :class:`RedisCache` from a URL rather than injecting their own client. A missing SDK
+    is a *deployment* error, not a cache outcome, so it is re-raised as an ImportError naming the exact
+    extra to install (the same guard the other optional-dependency sites use).
     """
-    from redis.asyncio import Redis  # noqa: PLC0415 - lazy: optional [redis] extra
+    try:
+        from redis.asyncio import Redis  # noqa: PLC0415 - lazy: optional [redis] extra
+    except ImportError as exc:
+        raise ImportError(
+            "RedisCache requires redis — install it with 'pip install benzene-cache[redis]'."
+        ) from exc
 
     return Redis.from_url(url)
 
@@ -54,10 +62,12 @@ class RedisCache:
             await self._client.set(key, payload)
         else:
             # Sub-second TTLs use PX (milliseconds); whole seconds use EX, mirroring the .NET options.
+            # Both round *up* (never down, never to zero): Redis rejects ``px=0``/``ex=0`` outright,
+            # and a truncated TTL would expire a value earlier than the caller asked for.
             if ttl < 1:
-                await self._client.set(key, payload, px=int(ttl * 1000))
+                await self._client.set(key, payload, px=max(1, math.ceil(ttl * 1000)))
             else:
-                await self._client.set(key, payload, ex=int(ttl))
+                await self._client.set(key, payload, ex=math.ceil(ttl))
 
     async def delete(self, key: str) -> None:
         await self._client.delete(key)

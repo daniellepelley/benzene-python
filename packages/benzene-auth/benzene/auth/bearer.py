@@ -136,7 +136,19 @@ class JwtValidator:
         return Principal(name, dict(claims))
 
     def _decode_with_pyjwt(self, token: str) -> dict[str, Any]:
-        import jwt  # optional [jwt] extra — imported lazily so the package works without PyJWT
+        """Decode with PyJWT, imported lazily so the package works without the ``[jwt]`` extra.
+
+        A missing PyJWT is a *deployment* error, not a token outcome: it raises an ImportError naming
+        the exact extra (and the ``decode=`` seam that avoids needing it), which :meth:`validate`
+        deliberately re-raises past its "any bad token is ``None``" mapper.
+        """
+        try:
+            import jwt  # optional [jwt] extra — lazy so the package works without PyJWT
+        except ImportError as exc:
+            raise ImportError(
+                "JwtValidator requires PyJWT — install it with 'pip install benzene-auth[jwt]', "
+                "or inject your own decode callable (JwtValidator(decode=...))."
+            ) from exc
 
         kwargs: dict[str, Any] = {"algorithms": self._algorithms}
         if self._audience is not None:

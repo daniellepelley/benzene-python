@@ -9,9 +9,11 @@ failure.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+import pytest
 from benzene.core import (
     BenzeneMessageApplication,
     HealthChecks,
@@ -122,3 +124,43 @@ def test_report_payload_round_trips() -> None:
 
 def _reason(report, requirement_id: str) -> str:
     return next(p.reason for p in report.probes if p.id == requirement_id)
+
+
+# --- the CLI (`python -m benzene.mesh.probe <url>`) ---------------------------------------------
+
+
+def _cli_http(monkeypatch: pytest.MonkeyPatch, app: BenzeneHttpApp) -> None:
+    """Point the CLI's default HTTP call at an in-memory app — no sockets, no real URL."""
+    from benzene.mesh import probe as probe_module
+
+    monkeypatch.setattr(probe_module, "_stdlib_http", lambda **_kwargs: _client(app))
+
+
+def test_cli_exits_zero_and_prints_a_clean_report(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from benzene.mesh.probe import _main
+
+    _cli_http(monkeypatch, _profiled_app())
+    exit_code = _main(["http://svc"])
+
+    out = capsys.readouterr().out
+    assert exit_code == 0  # a clean audit is a zero exit — the CI gate a deployment can rely on
+    assert "CLEAN" in out
+    assert "R1: satisfied" in out
+
+
+def test_cli_exits_nonzero_and_reports_the_failures_for_a_bare_service(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from benzene.mesh.probe import _main
+
+    router = HttpRouter().register("POST", "/orders", "orders:place", _place, request_type=Order)
+    _cli_http(monkeypatch, BenzeneHttpApp(router))
+    exit_code = _main(["http://svc", "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1  # positively-unmet requirements fail the audit
+    verdicts = {r["id"]: r["verdict"] for r in payload["requirements"]}
+    assert verdicts["R3"] == "not-satisfied"  # /benzene/health is missing
+    assert payload["baseUrl"] == "http://svc"

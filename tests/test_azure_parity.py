@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import pytest
 
@@ -253,3 +254,40 @@ def test_event_grid_sender_maps_a_failure_to_service_unavailable() -> None:
     result = asyncio.run(EventGridMessageSender(client=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
     assert "grid down" in " ".join(result.errors)
+
+
+# --- a missing SDK is a deployment error, not a message outcome (D1) ----------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "module", "dependency", "extra", "make_sender"),
+    [
+        (
+            "QueueStorageMessageSender",
+            "azure.storage.queue",
+            "azure-storage-queue",
+            "storage",
+            lambda: QueueStorageMessageSender("https://acct.queue.core.windows.net/orders"),
+        ),
+        (
+            "EventGridMessageSender",
+            "azure.eventgrid",
+            "azure-eventgrid",
+            "eventgrid",
+            lambda: EventGridMessageSender("https://topic.example/api/events", key="k"),
+        ),
+    ],
+)
+def test_a_missing_azure_sdk_raises_a_teaching_import_error_out_of_send_message(
+    monkeypatch: pytest.MonkeyPatch, name: str, module: str, dependency: str, extra: str, make_sender
+) -> None:
+    # Swallowed by the sender's ``except Exception`` mapper, a missing extra would quietly become a
+    # service-unavailable result that retry middleware and circuit breakers hammer; it must escape.
+    monkeypatch.setitem(sys.modules, module, None)
+    monkeypatch.setitem(sys.modules, "azure.core.credentials", None)
+    with pytest.raises(ImportError) as excinfo:
+        asyncio.run(make_sender().send_message("orders:created", {"id": "1"}))
+    message = str(excinfo.value)
+    assert name in message
+    assert dependency in message
+    assert f"pip install benzene-azure[{extra}]" in message

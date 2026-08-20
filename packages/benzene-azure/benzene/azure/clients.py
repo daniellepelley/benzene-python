@@ -10,6 +10,11 @@ dependencies, imported lazily inside the methods, so the module (and its tests) 
 * :class:`EventGridMessageSender` — publishes an Event Grid event (native schema by default, or
   CloudEvents 1.0), the Benzene topic in ``eventType``/``type`` (mirrors ``Benzene.Clients.Azure``).
 
+A *missing* SDK raises an ImportError naming that class's extra (``benzene-azure[servicebus]`` /
+``[storage]`` / ``[eventgrid]``) straight out of ``send_message`` — a forgotten extra is a deployment
+error, not a message outcome, so it is never mapped to ``service-unavailable`` for retries and circuit
+breakers to hammer.
+
 Each ``send_message`` runs its blocking Azure SDK call via :func:`asyncio.to_thread`, so an
 ``await sender.send_message(...)`` never blocks the event loop (matching the consumer loops and the
 other transports' clients).
@@ -31,11 +36,37 @@ from benzene.results import Result, Status
 from .events import TOPIC_PROPERTY
 
 
+def _service_bus_message(body: str | bytes, properties: dict[str, str]) -> Any:
+    """The default :class:`ServiceBusMessageSender` ``message_factory``: the real SDK object.
+
+    A module-level function so it is exactly the seam an injected ``message_factory`` replaces —
+    the wire shape is identical either way, only the construction moves. A missing SDK is a
+    *deployment* error, not a message outcome, so it surfaces as an ImportError naming the extra
+    (the same guard :mod:`benzene.grpc` uses) rather than a ``service-unavailable`` result that
+    retry middleware and circuit breakers would hammer forever.
+    """
+    try:
+        from azure.servicebus import ServiceBusMessage  # lazy: optional dependency
+    except ImportError as exc:
+        raise ImportError(
+            "ServiceBusMessageSender requires azure-servicebus — install it with "
+            "'pip install benzene-azure[servicebus]'."
+        ) from exc
+    return ServiceBusMessage(body, application_properties=properties)
+
+
 class ServiceBusMessageSender:
     """Sends to a Service Bus queue/topic, Benzene topic carried in ``application_properties``.
 
     ``sender`` (an ``azure.servicebus.ServiceBusSender``) may be injected for testing; otherwise a
     client is created lazily from ``connection_string`` + ``entity_name``.
+
+    ``message_factory`` builds the object handed to ``send_messages`` from
+    ``(body, application_properties)``; it defaults to :func:`_service_bus_message` (the real
+    ``azure.servicebus.ServiceBusMessage``, constructed lazily so the SDK stays optional). Injecting
+    a duck-typed factory lets the egress contract — topic tagging, header propagation, serialization,
+    failure mapping — be exercised without the SDK, exactly as every other sender already is; what
+    goes on the wire is unchanged.
     """
 
     def __init__(
@@ -44,22 +75,28 @@ class ServiceBusMessageSender:
         entity_name: str | None = None,
         sender: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
+        message_factory: Callable[[str | bytes, dict[str, str]], Any] | None = None,
     ) -> None:
         self._connection_string = connection_string
         self._entity_name = entity_name
         self._sender = sender
         self._serialize = serializer or encode_body
+        self._message_factory = message_factory or _service_bus_message
 
     def _make_message(self, topic: str, message: Any, headers: dict[str, str] | None) -> Any:
-        from azure.servicebus import ServiceBusMessage  # lazy: optional dependency
-
         properties = {str(k): str(v) for k, v in (headers or {}).items()}
         properties[TOPIC_PROPERTY] = topic
-        return ServiceBusMessage(self._serialize(message), application_properties=properties)
+        return self._message_factory(self._serialize(message), properties)
 
     def _get_sender(self) -> Any:
         if self._sender is None:
-            from azure.servicebus import ServiceBusClient  # lazy: optional dependency
+            try:
+                from azure.servicebus import ServiceBusClient  # lazy: optional dependency
+            except ImportError as exc:
+                raise ImportError(
+                    "ServiceBusMessageSender requires azure-servicebus — install it with "
+                    "'pip install benzene-azure[servicebus]'."
+                ) from exc
 
             client = ServiceBusClient.from_connection_string(self._connection_string)
             self._sender = client.get_queue_sender(queue_name=self._entity_name)
@@ -72,6 +109,8 @@ class ServiceBusMessageSender:
             await asyncio.to_thread(
                 self._get_sender().send_messages, self._make_message(topic, message, headers)
             )
+        except ImportError:
+            raise  # a missing SDK is a deployment error, never a service-unavailable result
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
@@ -121,7 +160,13 @@ class QueueStorageMessageSender:
 
     def _get_client(self) -> Any:
         if self._client is None:
-            from azure.storage.queue import QueueClient  # lazy: optional dependency
+            try:
+                from azure.storage.queue import QueueClient  # lazy: optional dependency
+            except ImportError as exc:
+                raise ImportError(
+                    "QueueStorageMessageSender requires azure-storage-queue — install it with "
+                    "'pip install benzene-azure[storage]'."
+                ) from exc
 
             if self._connection_string is not None:
                 self._client = QueueClient.from_connection_string(
@@ -138,6 +183,8 @@ class QueueStorageMessageSender:
             await asyncio.to_thread(
                 self._get_client().send_message, self._make_message(topic, message, headers)
             )
+        except ImportError:
+            raise  # a missing SDK is a deployment error, never a service-unavailable result
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
@@ -205,8 +252,14 @@ class EventGridMessageSender:
 
     def _get_client(self) -> Any:
         if self._client is None:
-            from azure.core.credentials import AzureKeyCredential  # lazy: optional dependency
-            from azure.eventgrid import EventGridPublisherClient  # lazy: optional dependency
+            try:
+                from azure.core.credentials import AzureKeyCredential  # lazy: optional dependency
+                from azure.eventgrid import EventGridPublisherClient  # lazy: optional dependency
+            except ImportError as exc:
+                raise ImportError(
+                    "EventGridMessageSender requires azure-eventgrid — install it with "
+                    "'pip install benzene-azure[eventgrid]'."
+                ) from exc
 
             self._client = EventGridPublisherClient(
                 self._topic_endpoint, AzureKeyCredential(self._key)
@@ -220,6 +273,8 @@ class EventGridMessageSender:
             await asyncio.to_thread(
                 self._get_client().send, self._make_event(topic, message, headers)
             )
+        except ImportError:
+            raise  # a missing SDK is a deployment error, never a service-unavailable result
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()

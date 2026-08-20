@@ -9,6 +9,7 @@ SDK needed.
 from __future__ import annotations
 
 import asyncio
+import sys
 
 import pytest
 
@@ -62,3 +63,23 @@ def test_pubsub_sender_maps_a_publish_failure_to_service_unavailable() -> None:
     )
     assert result.status == Status.SERVICE_UNAVAILABLE
     assert "pubsub down" in " ".join(result.errors)
+
+
+# --- a missing SDK is a deployment error, not a message outcome (D1) ----------------------------
+
+
+def test_a_missing_pubsub_sdk_raises_a_teaching_import_error_out_of_send_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Without the guard the lazy ``from google.cloud import pubsub_v1`` is swallowed by the sender's
+    # ``except Exception`` mapper and every publish quietly becomes service-unavailable — which retry
+    # middleware and circuit breakers then hammer. A missing extra must escape instead.
+    monkeypatch.setitem(sys.modules, "google.cloud", None)
+    with pytest.raises(ImportError) as excinfo:
+        asyncio.run(
+            PubSubMessageSender("projects/p/topics/t").send_message("orders:created", {"id": "1"})
+        )
+    message = str(excinfo.value)
+    assert "PubSubMessageSender" in message
+    assert "google-cloud-pubsub" in message
+    assert "pip install benzene-gcp[pubsub]" in message

@@ -13,7 +13,7 @@ a Python Benzene service and a .NET/Go/TypeScript one speak the same wire contra
 same mesh.
 
 > **Status: feature-complete against the spec, with the .NET parity roadmap now closed.** Shipped as
-> eighteen layered packages — the foundations (`benzene-results`, `benzene-core`, `benzene-http`,
+> layered `benzene-*` packages — the foundations (`benzene-results`, `benzene-core`, `benzene-http`,
 > `benzene-grpc`), the transport hosts (`benzene-gcp` / `benzene-aws` / `benzene-azure`, plus
 > `benzene-kafka` and `benzene-rabbitmq`), the cross-cutting middleware (`benzene-resilience`,
 > `benzene-auth`, `benzene-cache`, `benzene-otel`, `benzene-openapi`), the mesh (`benzene-mesh` /
@@ -308,8 +308,8 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     the reserved `benzene:spec` topic is answered on any transport by `spec_interception`.
 14. **(done)** PyPI packaging — every package carries complete metadata (PEP 639 `license = "MIT"` with
     a bundled `LICENSE`, classifiers, pinned inter-package deps) and builds a clean sdist + wheel that
-    passes `twine check`. A [`release`](.github/workflows/release.yml) workflow builds all ten and
-    publishes them via **trusted publishing** (OIDC, no stored tokens) on a `vX.Y.Z` tag; see
+    passes `twine check`. A [`release`](.github/workflows/release.yml) workflow builds every
+    distribution under `packages/` and publishes them via **trusted publishing** (OIDC, no stored tokens) on a `vX.Y.Z` tag; see
     [`docs/publishing.md`](docs/publishing.md). The first publish awaits the one-time PyPI
     trusted-publisher setup and a version tag.
 15. **(done)** The mesh on real infrastructure — a Fargate **Mesh Host** (poller + collector + durable

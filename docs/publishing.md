@@ -1,6 +1,7 @@
 # Publishing the packages
 
-Benzene ships as eighteen independent distributions on PyPI (see [packages](packages.md)). They are
+Benzene ships as a set of independent `benzene-*` distributions on PyPI — one per directory under
+`packages/` (see [packages](packages.md)). They are
 released **in lockstep at one shared version** and published by the
 [`release`](../.github/workflows/release.yml) workflow using **PyPI trusted publishing** — OpenID
 Connect, so no API tokens are stored in the repository.
@@ -41,23 +42,23 @@ each version bump.
 
 Pushing a tag `vX.Y.Z` (or running the workflow manually) triggers two jobs:
 
-1. **build** — checks that all eighteen `pyproject.toml` files carry the *same* version (and, for a
+1. **build** — checks that every `packages/*/pyproject.toml` carries the *same* version (and, for a
    tag, that it equals `v<version>`), then builds an sdist + wheel for every package and runs
-   `twine check` on all thirty-six artifacts.
+   `twine check` on all of them.
 2. **publish** — uploads every artifact to PyPI from the `pypi` GitHub Environment, authenticating via
    OIDC. PyPI routes each distribution to its project and verifies the trusted-publisher identity per
    project.
 
 ## One-time maintainer setup
 
-Trusted publishing must be configured **once per project** before the first release. On PyPI, for each
-of the eighteen project names —
+Trusted publishing must be configured **once per project** before the first release. On PyPI, for
+every `benzene-*` project name — one per directory under `packages/`, today —
 
 ```
 benzene-results   benzene-core      benzene-http     benzene-grpc      benzene-mesh
 benzene-pydantic  benzene-testing   benzene-gcp      benzene-aws       benzene-azure
 benzene-kafka     benzene-rabbitmq  benzene-auth     benzene-cache     benzene-resilience
-benzene-openapi   benzene-otel      benzene-mesh-fleet
+benzene-openapi   benzene-otel      benzene-mesh-fleet benzene-codegen-client
 ```
 
 add a *pending* trusted publisher (Account → Publishing) pointing at:
@@ -76,7 +77,7 @@ optionally with required reviewers so a human approves each publish.
 
 ## Cutting a release
 
-1. Bump the version in **all eighteen** `packages/*/pyproject.toml` to the new version (they must
+1. Bump the version in **every** `packages/*/pyproject.toml` to the new version (they must
    match — the workflow enforces it). Pre-1.0, that means a prerelease identifier every time —
    `0.1.0b2`, `0.1.0b3`, … (bump the counter), or `0.1.0rc1` once the `0.1.0` line is stabilizing.
    Inter-package dependencies are pinned `>=0.0.1`, so a coordinated bump keeps the stack installable.
@@ -92,6 +93,15 @@ optionally with required reviewers so a human approves each publish.
 3. Watch the `release` workflow. On success, `pip install benzene-http==<version>` (and friends)
    resolves the new version, pulling its `benzene-*` dependencies from PyPI. A bare
    `pip install benzene-http` continues to skip it, same as every prerelease before it.
+4. **After the first successful publish only** — delete the "Not on PyPI yet" admonitions the docs
+   and examples carry beneath their first install command. They exist because `pip install benzene-*`
+   cannot succeed before that publish; once it can, they are wrong. They live in
+   `docs/getting-started.md` (two — the `benzene-core` and `benzene-http` installs),
+   `docs/getting-started-{aws,azure,google,grpc}.md`, `docs/getting-started-kubernetes.md`
+   (in *Prerequisites*), `examples/http_orders/README.md`, and `examples/gcp_orders/README.md`; the
+   related "Heads up" note in the root `README.md` and the *Published vs. local dependencies* section
+   of `templates/README.md` go at the same time. Grep for `Not on PyPI yet` and `not published to
+   PyPI yet` to catch every one.
 
 ## Trying it without publishing
 

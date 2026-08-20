@@ -29,6 +29,11 @@ here we only add the AWS host.
 pip install benzene-aws            # add [boto3] for the real outbound clients
 ```
 
+> **Not on PyPI yet.** Until the first release these names don't resolve — install the
+> `benzene-*` layers from a local checkout of this repo instead, then carry on with the guide
+> unchanged:
+> `git clone https://github.com/daniellepelley/benzene-python && cd benzene-python && pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http -e 'packages/benzene-aws[boto3]'`
+
 The distribution is **`benzene-aws`**. It depends on `benzene-core` (the pipeline and message
 handlers) and `benzene-http` (the API Gateway binding reuses the HTTP router), so a single install
 pulls in everything the inbound bindings and the in-memory test host need. `boto3` is only required
@@ -151,7 +156,8 @@ handler = to_lambda_handler(build_aws_orders_app())
 
 Point your Lambda's handler string at this attribute — `main.handler` (or `aws_orders.main.handler`
 if you package the module inside a package). That single callable dispatches by **event shape**
-([transport-bindings](https://benzene.app/docs/specification/transport-bindings)):
+([transport-bindings](https://benzene.app/docs/specification/transport-bindings)) across all nine
+sources the host binds:
 
 - an **API Gateway** event → route → topic → handler; the Benzene status maps to an HTTP status code
   and the result comes back as an API Gateway proxy response;
@@ -159,9 +165,26 @@ if you package the module inside a package). That single callable dispatches by 
   `topic` message attribute; any record whose handler doesn't succeed comes back in
   `batchItemFailures` so only *that* record is redelivered;
 - an **SNS** event → one invocation per record (topic from the `topic` attribute); SNS is
-  fire-and-forget, so there is no response — a failing handler **raises** so Lambda retries.
+  fire-and-forget, so there is no response — a failing handler **raises** so Lambda retries;
+- an **S3** object-created notification → one scope per record; no partial-batch channel, so a
+  failure raises;
+- an **EventBridge** event → a *single* event (no `Records` array), one scope; the topic is the
+  event's `detail-type`; a failure raises so the rule retries;
+- a **DynamoDB Streams** or **Kinesis Data Streams** event → one scope per record; both carry a
+  partial-batch channel, so failures come back in `batchItemFailures` keyed by sequence number;
+- a **Kafka / MSK** event → records grouped by topic-partition, one scope per record; the MSK source
+  has no partial-batch channel, so a failure raises for redelivery;
+- a **direct invoke** — a bare `{"topic", "headers", "body"}` Payload from another Lambda's
+  `lambda.invoke(...)` — → one scope; the response envelope comes straight back as the invoke's
+  response Payload.
 
-Classification happens in `benzene.aws.event_source(event)`; an event that is none of the three
+The channel-less sources (S3, EventBridge, DynamoDB, Kinesis) carry no message metadata on the wire,
+so their topic comes from an injectable convention on the host — `s3_topic=...`,
+`eventbridge_topic=...` (a fallback: EventBridge prefers the event's own `detail-type`),
+`kinesis_topic=...`, and `dynamodb_topic=None`, which means "derive it per record from `eventName`".
+See [reference/aws.md](reference/aws.md) for the full table.
+
+Classification happens in `benzene.aws.event_source(event)`; an event that is none of the nine
 raises `ValueError`.
 
 ## 5. Test every source in memory (dogfooded)
@@ -285,32 +308,37 @@ however you already do (a zip, container image, SAM, CDK, Terraform, or the cons
 
 ## 7. Supported event sources
 
-`benzene.aws` binds three Lambda event sources, all through the one function:
+`benzene.aws` binds nine Lambda event sources, all through the one function:
 
 | Source | Topic comes from | Response | On handler failure |
 | --- | --- | --- | --- |
 | **API Gateway** | the route (path → topic, via `benzene.http`) | API Gateway proxy response; Benzene status → HTTP code | error status → HTTP error code |
 | **SQS** | the `topic` message attribute | `{"batchItemFailures": [...]}` | that record's id reported for redelivery |
 | **SNS** | the `topic` message attribute | none (fire-and-forget) | raises → Lambda retries the invocation |
+| **S3** (object-created) | host convention (`s3_topic`, default `s3:object-created`) | none | raises → the notification is retried |
+| **EventBridge** | the event's `detail-type` (else `eventbridge_topic`, default `eventbridge:event`) | none | raises → the rule retries |
+| **DynamoDB Streams** | the record's `eventName` (`dynamodb:insert`), or `dynamodb_topic` | `{"batchItemFailures": [...]}` | that record's sequence number reported |
+| **Kinesis Data Streams** | host convention (`kinesis_topic`, default `kinesis:record`) | `{"batchItemFailures": [...]}` | that record's sequence number reported |
+| **Kafka / MSK** | the `topic` record header (else the record's own Kafka topic name) | none | raises → redelivery |
+| **Direct invoke** | the Payload's own `topic` field | the Benzene response envelope, verbatim | error status returned in the envelope |
 
-The topic attribute for SQS/SNS is written automatically by any Benzene outbound client
-(`SnsMessageSender` / `SqsMessageSender`), so a Benzene-to-Benzene flow needs no extra configuration.
-For SQS and SNS the message *body* is the serialized payload and message *attributes* become Benzene
-headers (`benzene.core.read_message_metadata`).
+The topic attribute for SQS/SNS/Kafka is written automatically by any Benzene outbound client
+(`SnsMessageSender` / `SqsMessageSender` / `KafkaMessageSender`), so a Benzene-to-Benzene flow needs
+no extra configuration. For those sources the message *body* is the serialized payload and message
+*attributes* become Benzene headers (`benzene.core.read_message_metadata`). The channel-less sources
+(S3, EventBridge, DynamoDB, Kinesis) carry no metadata on the wire, so their topic comes from the
+host convention shown above — configured as constructor keyword arguments on `AwsLambdaApp`.
 
-> **Compared with the .NET port:** the Python `benzene.aws` package now hosts the full set of Lambda
-> event sources — **API Gateway, SQS, SNS, S3 (object-created), EventBridge, DynamoDB Streams, Kinesis
-> Data Streams, Kafka/MSK, and direct Lambda-to-Lambda invoke** — alongside **EventBridge, Kinesis, and
-> Lambda outbound clients** (on top of the SNS/SQS senders) and a **self-hosted SQS consumer**
-> (`SqsConsumerApp` / `run_sqs_consumer_loop`) for a long-running worker or a Kubernetes Deployment that
-> polls a queue itself rather than being invoked by a Lambda event-source mapping. The channel-less
-> sources (S3, EventBridge, DynamoDB, Kinesis) take their topic from an injectable convention on the
-> host; SQS, SNS, and Kafka read it from the `topic` message attribute; a direct invoke's topic travels
-> explicitly in its `{topic, headers, body}` Payload — the one **synchronous** source besides API
-> Gateway, since `LambdaMessageSender` decodes the target's response envelope straight back into a
-> `Result`. The one .NET affordance still missing is a `UsePresetTopic` option for the attribute-carrying
-> transports — accepting messages from a **raw, non-Benzene SQS producer** that never writes a `topic`
-> attribute; here SQS/SNS still require that attribute.
+A direct invoke is the one **synchronous** source besides API Gateway: `LambdaMessageSender` decodes
+the target's response envelope straight back into a `Result`. Alongside the inbound bindings, the
+package ships **EventBridge, Kinesis, and Lambda outbound clients** (on top of the SNS/SQS senders)
+and a **self-hosted SQS consumer** (`SqsConsumerApp` / `run_consumer_loop`) for a long-running worker
+or a Kubernetes Deployment that polls a queue itself rather than being invoked by a Lambda
+event-source mapping.
+
+> **Compared with the .NET port:** the one .NET affordance still missing is a `UsePresetTopic` option
+> for the attribute-carrying transports — accepting messages from a **raw, non-Benzene SQS producer**
+> that never writes a `topic` attribute; here SQS, SNS, and Kafka still require it.
 
 ## 8. IAM / permissions
 

@@ -35,6 +35,7 @@ from benzene.mesh import (
     json_schema,
     mesh_interception,
     parse_traceparent,
+    trace_interception,
     trace_middleware,
     with_trace_propagation,
 )
@@ -371,3 +372,19 @@ def test_composed_outbound_stack_shares_one_correlation_id_across_retries() -> N
     ids = {call["x-correlation-id"] for call in calls}
     assert len(ids) == 1                                     # ONE correlation id across both attempts
     assert all(c["traceparent"].split("-")[1] == "4bf92f3577b34da6a3ce929d0e0e4736" for c in calls)
+
+
+def test_trace_interception_is_the_preferred_name_for_trace_middleware() -> None:
+    # The port names every middleware factory `*_interception`; the older `trace_middleware` name
+    # stays a working alias for wiring that already imports it.
+    assert trace_interception is trace_middleware
+
+    async def handler(_request: dict) -> Result:
+        return Result.ok()
+
+    exporter = InMemoryTraceExporter()
+    pipeline = MiddlewarePipeline().use(trace_interception(exporter, service="svc"))
+    app = BenzeneMessageApplication(Registry().register("do:thing", handler), pipeline)
+    asyncio.run(app.handle({"topic": "do:thing", "headers": {}, "body": "{}"}))
+
+    assert [event.service for event in exporter] == ["svc"]

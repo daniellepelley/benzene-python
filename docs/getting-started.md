@@ -25,6 +25,11 @@ for the return type.
 pip install benzene-core
 ```
 
+> **Not on PyPI yet.** Until the first release these names don't resolve — install the
+> `benzene-*` layers from a local checkout of this repo instead, then carry on with the guide
+> unchanged:
+> `git clone https://github.com/daniellepelley/benzene-python && cd benzene-python && pip install -e packages/benzene-results -e packages/benzene-core`
+
 Create `app.py`:
 
 ```python
@@ -86,6 +91,11 @@ Now put the same handler behind a real HTTP server. Install the HTTP binding and
 ```bash
 pip install benzene-http uvicorn
 ```
+
+> **Not on PyPI yet.** Until the first release these names don't resolve — install the
+> `benzene-*` layers from a local checkout of this repo instead, then carry on with the guide
+> unchanged:
+> `git clone https://github.com/daniellepelley/benzene-python && cd benzene-python && pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http` (then `pip install uvicorn` as above)
 
 Add an HTTP route to the handler and expose an ASGI app. Update `app.py`:
 

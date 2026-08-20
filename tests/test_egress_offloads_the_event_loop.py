@@ -15,6 +15,7 @@ five packages whose senders were moved off-loop: AWS, Kafka, RabbitMQ, GCP, Azur
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -162,13 +163,22 @@ def test_service_bus_sender_offloads_the_send(monkeypatch: pytest.MonkeyPatch) -
         def send_messages(self, message: Any) -> None:
             self.sent.append(message)
 
+    @dataclass
+    class _StubMessage:
+        """A duck-typed stand-in for ``azure.servicebus.ServiceBusMessage``."""
+
+        body: str | bytes
+        application_properties: dict[str, str]
+
     spy = _spy_on(monkeypatch)
     fake = _FakeServiceBusSender()
-    # The sender builds an azure.servicebus.ServiceBusMessage in _make_message, which needs the SDK;
-    # inject a serializer-free path by passing the fake sender and a simple body — _make_message only
-    # runs if the SDK import succeeds, so skip cleanly when azure-servicebus isn't installed.
-    pytest.importorskip("azure.servicebus")
-    result = asyncio.run(ServiceBusMessageSender(sender=fake).send_message("orders:created", {}))
+    # The wire object is normally an azure.servicebus.ServiceBusMessage; ``message_factory`` is the
+    # seam that keeps this SDK-free (the offload contract is the same either way).
+    result = asyncio.run(
+        ServiceBusMessageSender(sender=fake, message_factory=_StubMessage).send_message(
+            "orders:created", {}
+        )
+    )
 
     assert result.status == Status.OK
     assert fake.sent, "send_messages must still run"

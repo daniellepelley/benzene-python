@@ -41,6 +41,11 @@ The Google Cloud host ships as one distribution, **`benzene-gcp`**. It depends o
 pip install benzene-gcp
 ```
 
+> **Not on PyPI yet.** Until the first release these names don't resolve — install the
+> `benzene-*` layers from a local checkout of this repo instead, then carry on with the guide
+> unchanged:
+> `git clone https://github.com/daniellepelley/benzene-python && cd benzene-python && pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http -e 'packages/benzene-gcp[pubsub]'`
+
 The real Pub/Sub outbound client needs the `google-cloud-pubsub` SDK, which is an optional extra —
 add it only when you'll actually publish:
 

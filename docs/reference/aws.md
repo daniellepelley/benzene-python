@@ -81,7 +81,10 @@ handler = to_lambda_handler(app)                            # def handler(event,
   `FunctionError` in the response (the target itself faulted) or a payload that isn't a Benzene
   envelope both map to `service-unavailable`, never a crash.
 
-All five implement `benzene.core.MessageSender` and use `boto3` (a lazy, optional import). SNS/SQS have
+All five implement `benzene.core.MessageSender` and use `boto3` (a lazy, optional import — a missing
+SDK raises `ImportError: <Sender> requires boto3 — install it with 'pip install benzene-aws[boto3]'`
+out of `send_message`, deliberately *not* a `service-unavailable` result: a forgotten extra is a
+deployment error, and mapping it to a result would just feed retries and circuit breakers). SNS/SQS have
 a native attribute channel, so the Benzene topic rides in the `topic` message attribute and headers as
 attributes. EventBridge/Kinesis have *no* metadata channel, so the sender leaves the domain payload as
 the wire body and embeds headers *inside* it, under the reserved `_benzeneHeaders` key (mirrors .NET's
@@ -101,24 +104,29 @@ shape a long-running worker or a Kubernetes Deployment needs, rather than being 
 event source mapping. It mirrors `benzene.kafka`'s self-hosted consumer.
 
 ```python
-from benzene.aws import SqsConsumerApp, run_sqs_consumer_loop
+from benzene.aws import SqsConsumerApp, run_consumer_loop
 
 app = SqsConsumerApp.from_definition(definition)
-await app.handle_message(message)                      # one receive_message() dict -> Result
-await run_sqs_consumer_loop(app, client, queue_url)    # long-poll -> dispatch -> delete on success
+await app.handle_message(message)                  # one receive_message() dict -> Result
+await run_consumer_loop(app, client, queue_url)    # long-poll -> dispatch -> delete on success
 ```
 
 - `SqsConsumerApp(application)` / `.from_definition(definition)` — `handle_message(message)` decodes a
   `boto3` `receive_message()` message dict (topic from the `topic` message attribute, `MessageAttributes`
   using `StringValue`/`DataType` — **not** the Lambda-event `messageAttributes` shape) and returns the
   mapped `Result`. It never raises, so a poison message can't crash the loop.
-- `run_sqs_consumer_loop(app, client, queue_url, *, max_number_of_messages=10, wait_time_seconds=20,
+- `run_consumer_loop(app, client, queue_url, *, max_number_of_messages=10, wait_time_seconds=20,
   should_continue=..., delete=True, on_result=None)` drives a duck-typed SQS client
   (`receive_message` / `delete_message`). With `delete=True` (the default, at-least-once) a message is
   deleted only after a **successful** result, so a failed message is left on the queue individually for
   redelivery/DLQ redrive. `wait_time_seconds` defaults to 20 (SQS's maximum long-poll). The synchronous
   `boto3` calls are run via `asyncio.to_thread` so a 20-second long-poll never blocks other coroutines
-  on the event loop — the pattern that lets this consumer share a process with an HTTP server.
+  on the event loop — the pattern that lets this consumer share a process with an HTTP server. A failed
+  message is logged at warning level (`logging.getLogger("benzene.aws.sqs_consumer")`) so a poison
+  message is visible without wiring `on_result`. The loop was named `run_sqs_consumer_loop` before it
+  was renamed for symmetry with `benzene.kafka.run_consumer_loop` / `benzene.rabbitmq.run_consumer_loop`;
+  **`run_sqs_consumer_loop` remains as a deprecated alias** (both names are exported, and the package
+  namespace — `benzene.aws.run_consumer_loop` — disambiguates the short one).
 - `decode_sqs_message(message)` is the pure decode step, exposed for custom loops.
 
 ## Testing
@@ -133,6 +141,11 @@ a direct invoke needs no builder, its Payload already *is* the envelope). The pa
 `response.batch_item_failures` — mirroring how `send_http` returns a response object. `send_invoke`
 returns the decoded `Result` directly (`benzene.core.decode_response`) — the same thing a real
 `LambdaMessageSender` would resolve to on the caller's side.
+
+Every `AwsLambdaTestHost.send_*` is **synchronous** (it drives the app through `asyncio.run`), so call
+it from a plain `def` test; called from inside a running event loop it raises a teaching error naming
+the way out — `await host._app.handle(...)`. `SqsConsumerTestHost.send_sqs_consumer` is the exception:
+it is a coroutine, so `await` it.
 
 The self-hosted SQS consumer has its own harness: `SqsConsumerTestHost` (`send_sqs_consumer` → the
 mapped `Result`), the `SqsMessageBuilder` (a `receive_message()`-shaped dict, distinct from the Lambda

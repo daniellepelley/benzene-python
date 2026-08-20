@@ -10,12 +10,20 @@ Each client takes an injected fake, so this is credential-free — no boto3.
 from __future__ import annotations
 
 import asyncio
+import sys
 
 import pytest
 
 pytest.importorskip("benzene.aws")
 
-from benzene.aws import TOPIC_ATTRIBUTE, SnsMessageSender, SqsMessageSender
+from benzene.aws import (
+    TOPIC_ATTRIBUTE,
+    EventBridgeMessageSender,
+    KinesisMessageSender,
+    LambdaMessageSender,
+    SnsMessageSender,
+    SqsMessageSender,
+)
 from benzene.core import encode_body
 from benzene.results import Status, is_successful
 
@@ -88,3 +96,31 @@ def test_sqs_sender_maps_a_send_failure_to_service_unavailable() -> None:
     result = asyncio.run(SqsMessageSender("q", client=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
     assert "sqs down" in " ".join(result.errors)
+
+
+# --- a missing SDK is a deployment error, not a message outcome (D1) ----------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "make_sender"),
+    [
+        ("SnsMessageSender", lambda: SnsMessageSender("arn:topic")),
+        ("SqsMessageSender", lambda: SqsMessageSender("q-url")),
+        ("EventBridgeMessageSender", lambda: EventBridgeMessageSender("bus")),
+        ("KinesisMessageSender", lambda: KinesisMessageSender("stream")),
+        ("LambdaMessageSender", lambda: LambdaMessageSender("fn")),
+    ],
+)
+def test_a_missing_boto3_raises_a_teaching_import_error_out_of_send_message(
+    monkeypatch: pytest.MonkeyPatch, name: str, make_sender
+) -> None:
+    # Without the guard the lazy ``import boto3`` is swallowed by the sender's ``except Exception``
+    # mapper and every publish quietly becomes service-unavailable — which retry middleware and
+    # circuit breakers then hammer. A missing extra must escape as a teaching ImportError instead.
+    monkeypatch.setitem(sys.modules, "boto3", None)
+    with pytest.raises(ImportError) as excinfo:
+        asyncio.run(make_sender().send_message("orders:created", {"id": "1"}))
+    message = str(excinfo.value)
+    assert name in message
+    assert "boto3" in message
+    assert "pip install benzene-aws[boto3]" in message

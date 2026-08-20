@@ -31,6 +31,11 @@ One distribution carries the Azure Functions host and all three trigger bindings
 pip install benzene-azure            # add [servicebus] for the real outbound client
 ```
 
+> **Not on PyPI yet.** Until the first release these names don't resolve — install the
+> `benzene-*` layers from a local checkout of this repo instead, then carry on with the guide
+> unchanged:
+> `git clone https://github.com/daniellepelley/benzene-python && cd benzene-python && pip install -e packages/benzene-results -e packages/benzene-core -e packages/benzene-http -e 'packages/benzene-azure[servicebus]'`
+
 `benzene-azure` depends on `benzene-core` and `benzene-http`, so installing it pulls in everything
 the inbound bindings and the in-memory test host need. The Azure SDK is **not** a hard dependency:
 

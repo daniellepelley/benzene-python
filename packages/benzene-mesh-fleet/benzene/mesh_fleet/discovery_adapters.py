@@ -42,7 +42,13 @@ class AwsCloudMapDiscovery:
 
     def _service_discovery(self) -> Any:
         if self._client is None:
-            import boto3  # lazy: optional [aws] dependency
+            try:
+                import boto3  # lazy: optional [aws] dependency
+            except ImportError as exc:  # a missing SDK is a deployment error, not an empty fleet
+                raise ImportError(
+                    "AwsCloudMapDiscovery requires boto3 — install it with "
+                    "'pip install benzene-mesh-fleet[aws]'."
+                ) from exc
 
             self._client = boto3.client("servicediscovery")
         return self._client
@@ -94,7 +100,13 @@ class AwsLambdaDiscovery:
 
     def _lambda(self) -> Any:
         if self._client is None:
-            import boto3  # lazy: optional [aws] dependency
+            try:
+                import boto3  # lazy: optional [aws] dependency
+            except ImportError as exc:  # a missing SDK is a deployment error, not an empty fleet
+                raise ImportError(
+                    "AwsLambdaDiscovery requires boto3 — install it with "
+                    "'pip install benzene-mesh-fleet[aws]'."
+                ) from exc
 
             self._client = boto3.client("lambda")
         return self._client
@@ -147,8 +159,16 @@ class AzureDiscovery:
 
     def _resource_client(self) -> Any:
         if self._client is None:
-            from azure.identity import DefaultAzureCredential  # lazy: optional [azure] dependency
-            from azure.mgmt.resource import ResourceManagementClient
+            try:
+                from azure.identity import (  # lazy: optional [azure] dependency
+                    DefaultAzureCredential,
+                )
+                from azure.mgmt.resource import ResourceManagementClient
+            except ImportError as exc:  # a missing SDK is a deployment error, not an empty fleet
+                raise ImportError(
+                    "AzureDiscovery requires azure-identity and azure-mgmt-resource — install them "
+                    "with 'pip install benzene-mesh-fleet[azure]'."
+                ) from exc
 
             self._client = ResourceManagementClient(DefaultAzureCredential(), self._subscription_id)
         return self._client
@@ -194,7 +214,13 @@ class KubernetesDiscovery:
 
     def _core_v1(self) -> Any:
         if self._client is None:
-            from kubernetes import client, config  # lazy: optional [kubernetes] dependency
+            try:
+                from kubernetes import client, config  # lazy: optional [kubernetes] dependency
+            except ImportError as exc:  # a missing SDK is a deployment error, not an empty fleet
+                raise ImportError(
+                    "KubernetesDiscovery requires the kubernetes client — install it with "
+                    "'pip install benzene-mesh-fleet[kubernetes]'."
+                ) from exc
 
             config.load_incluster_config()
             self._client = client.CoreV1Api()

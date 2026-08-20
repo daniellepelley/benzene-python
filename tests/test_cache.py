@@ -9,8 +9,10 @@ and that TTL is passed through.
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import Any
 
+import pytest
 from benzene.cache import CacheAside, InMemoryCache, RedisCache, get_or_load
 
 
@@ -243,3 +245,37 @@ def test_redis_cache_requires_url_or_client() -> None:
         pass
     else:  # pragma: no cover - the constructor must reject an empty construction
         raise AssertionError("RedisCache() should require a url or client")
+
+
+def test_redis_cache_rounds_a_subsecond_ttl_up_to_at_least_one_millisecond() -> None:
+    fake = FakeRedis()
+    cache = RedisCache(client=fake)
+
+    # 0.4ms rounds *up* to 1ms: `px=0` is rejected by Redis ("invalid expire time"), and a TTL that
+    # was asked for must never become "no expiry at all".
+    run(cache.set("k", "v", ttl=0.0004))
+    _key, _value, ex, px = fake.set_calls[-1]
+    assert ex is None
+    assert px == 1
+
+
+def test_redis_cache_rounds_a_fractional_ttl_up_not_down() -> None:
+    fake = FakeRedis()
+    cache = RedisCache(client=fake)
+
+    # 1.9s must not silently become 1s — a truncated TTL expires the entry roughly half a second
+    # early, which is a correctness bug in the caller's cache, not a rounding detail.
+    run(cache.set("k", "v", ttl=1.9))
+    _key, _value, ex, px = fake.set_calls[-1]
+    assert ex == 2
+    assert px is None
+
+
+def test_redis_cache_missing_sdk_raises_a_teaching_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A forgotten `[redis]` extra is a deployment error: it must fail loudly at construction with a
+    # message naming the extra, never surface later as a mysterious attribute error.
+    monkeypatch.setitem(sys.modules, "redis", None)
+    with pytest.raises(ImportError, match=r"benzene-cache\[redis\]"):
+        RedisCache("redis://localhost")

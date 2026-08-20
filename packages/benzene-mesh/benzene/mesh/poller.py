@@ -141,23 +141,27 @@ class MeshPoller:
         topics = spec.get("topics", [])
         consumes = spec.get("consumes", [])
         descriptor_hash = _spec_hash(service, topics, consumes)
-        self._collector.ingest_register(
+        # `persist_off_loop` applies the ingest here and then writes the collector's store on a worker
+        # thread — a sweep of a durable collector must not stall the loop on a file/S3 write per source.
+        await self._collector.persist_off_loop(
+            self._collector.ingest_register,
             {
                 "service": service,
                 "topics": topics,
                 "consumes": consumes,
                 "descriptorHash": descriptor_hash,
-            }
+            },
         )
         # Carry the same hash on the heartbeat so the collector can match the running instance against
         # the registered contract (drift detection); the poller polls one instance per source.
-        self._collector.ingest_heartbeat(
+        await self._collector.persist_off_loop(
+            self._collector.ingest_heartbeat,
             {
                 "service": service,
                 "instanceId": source.name,
                 "health": health,
                 "descriptorHash": descriptor_hash,
-            }
+            },
         )
         return PollResult(service, ok=True)
 
