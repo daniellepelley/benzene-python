@@ -17,11 +17,6 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
     single process and Deployment
 - **[Packages & adoption levels](packages.md)** — how Benzene is split into layered PyPI packages,
   why, and which ones to install.
-- **[Publishing](publishing.md)** — how the ten packages are released to PyPI (trusted publishing).
-- **[Cloud Service Profile conformance](cloud-service-profile.md)** — how the port satisfies the
-  profile's R1–R8, mapped to the API and the test that proves each.
-- **[Mesh on AWS — plan](mesh-aws-plan.md)** — the sequenced plan for a multi-service mesh deployed to
-  AWS (thin poller, Fargate collector, reused mesh-ui, Terraform).
 
 ## Reference
 
@@ -42,7 +37,7 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 - **[`benzene.openapi`](reference/openapi.md)** — derive an OpenAPI 3.1 document from the handler registry.
 - **[`benzene.otel`](reference/otel.md)** — export the port's mesh traces through the OpenTelemetry SDK, plus a response-as-event pattern.
 - **[`benzene.mesh`](reference/mesh.md)** — self-description, tracing, and collector feeds for the mesh.
-- **[`benzene.mesh_fleet`](reference/mesh-fleet.md)** — cloud service-discovery adapters and trace-mappers (Jaeger/Tempo/X-Ray) for a fleet.
+- **[`benzene.mesh_fleet`](reference/mesh-fleet.md)** — find the services in your fleet automatically (AWS/Azure/Kubernetes registries) and send mesh traces to Jaeger, Tempo, or X-Ray.
 - **[`benzene.pydantic`](reference/pydantic.md)** — validate handler requests with pydantic models.
 - **[`benzene.testing`](reference/testing.md)** — the in-memory test host and test doubles.
 
@@ -73,6 +68,9 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 
 ## Concepts & the spec
 
+- **[Cloud Service Profile conformance](cloud-service-profile.md)** — how this port satisfies the
+  profile's R1–R8, mapped to the API and the test that proves each.
+
 Benzene Python is faithful to the language-neutral specification. The authoritative documents live
 in the main Benzene repository:
 
@@ -85,10 +83,17 @@ in the main Benzene repository:
 
 ## Status
 
-The core, the inbound HTTP binding, the gRPC binding, the three cloud hosts (GCP, AWS, Azure — each
-multi-transport with egress), the mesh module (self-description, tracing, and collector feeds),
-payload/handler versioning (header fallback, HTTP `/v{version}/` segment, opt-in `highest_version`
-selection, the casting-handler pattern, and transparent casting), and the Cloud Service Profile's
-well-known HTTP surfaces (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`) are implemented and
-conformance-green. Every language-neutral conformance fixture passes; the remaining work is publishing
-to PyPI — see the [roadmap](../README.md#roadmap).
+All nineteen packages are published to PyPI as **pre-release betas** (`0.1.0b…` — for early testing,
+not production; `pip install benzene-core benzene-http` works today, see
+[Publishing](publishing.md)). The core, the inbound HTTP binding, the gRPC binding, the three cloud
+hosts (GCP, AWS, Azure — each multi-transport with egress), the mesh module (self-description,
+tracing, and collector feeds), payload/handler versioning, and the Cloud Service Profile's well-known
+HTTP surfaces (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`) are implemented, and every
+language-neutral conformance fixture passes — see the [roadmap](../README.md#roadmap).
+
+## Project internals (maintainers)
+
+- **[Publishing](publishing.md)** — how the nineteen packages are released to PyPI (lockstep
+  versioning, trusted publishing).
+- **[Mesh on AWS — plan](mesh-aws-plan.md)** — an internal planning document: the sequenced plan for
+  a multi-service mesh deployed to AWS (thin poller, Fargate collector, reused mesh-ui, Terraform).

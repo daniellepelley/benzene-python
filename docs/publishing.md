@@ -1,6 +1,6 @@
 # Publishing the packages
 
-Benzene ships as eighteen independent distributions on PyPI (see [packages](packages.md)). They are
+Benzene ships as nineteen independent distributions on PyPI (see [packages](packages.md)). They are
 released **in lockstep at one shared version** and published by the
 [`release`](../.github/workflows/release.yml) workflow using **PyPI trusted publishing** — OpenID
 Connect, so no API tokens are stored in the repository.
@@ -41,9 +41,9 @@ each version bump.
 
 Pushing a tag `vX.Y.Z` (or running the workflow manually) triggers two jobs:
 
-1. **build** — checks that all eighteen `pyproject.toml` files carry the *same* version (and, for a
+1. **build** — checks that all nineteen `pyproject.toml` files carry the *same* version (and, for a
    tag, that it equals `v<version>`), then builds an sdist + wheel for every package and runs
-   `twine check` on all thirty-six artifacts.
+   `twine check` on all thirty-eight artifacts.
 2. **publish** — uploads every artifact to PyPI from the `pypi` GitHub Environment, authenticating via
    OIDC. PyPI routes each distribution to its project and verifies the trusted-publisher identity per
    project.
@@ -51,13 +51,13 @@ Pushing a tag `vX.Y.Z` (or running the workflow manually) triggers two jobs:
 ## One-time maintainer setup
 
 Trusted publishing must be configured **once per project** before the first release. On PyPI, for each
-of the eighteen project names —
+of the nineteen project names —
 
 ```
 benzene-results   benzene-core      benzene-http     benzene-grpc      benzene-mesh
 benzene-pydantic  benzene-testing   benzene-gcp      benzene-aws       benzene-azure
 benzene-kafka     benzene-rabbitmq  benzene-auth     benzene-cache     benzene-resilience
-benzene-openapi   benzene-otel      benzene-mesh-fleet
+benzene-openapi   benzene-otel      benzene-mesh-fleet   benzene-codegen-client
 ```
 
 add a *pending* trusted publisher (Account → Publishing) pointing at:
@@ -76,10 +76,11 @@ optionally with required reviewers so a human approves each publish.
 
 ## Cutting a release
 
-1. Bump the version in **all eighteen** `packages/*/pyproject.toml` to the new version (they must
+1. Bump the version in **all nineteen** `packages/*/pyproject.toml` to the new version (they must
    match — the workflow enforces it). Pre-1.0, that means a prerelease identifier every time —
    `0.1.0b2`, `0.1.0b3`, … (bump the counter), or `0.1.0rc1` once the `0.1.0` line is stabilizing.
-   Inter-package dependencies are pinned `>=0.0.1`, so a coordinated bump keeps the stack installable.
+   Inter-package dependency floors name a prerelease (`>=0.1.0b1`, see above) — raise them with
+   each bump so the stack stays installable.
    Only drop the prerelease suffix (ship a bare `X.Y.Z`) for an actual 1.0-and-beyond stable release,
    deliberately decided, not as a default.
 2. Commit, then tag and push:
