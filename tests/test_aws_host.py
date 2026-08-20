@@ -80,3 +80,18 @@ def test_sqs_poison_record_is_isolated_not_a_whole_batch_crash() -> None:
     assert response is not None
     assert response["batchItemFailures"] == [{"itemIdentifier": "bad"}]
     assert seen == [{"ok": True}]
+
+
+def test_sqs_does_not_nack_an_application_defined_status_the_handler_marked_successful() -> None:
+    # wire-contracts.md 1.2: isSuccessful is authoritative and MUST be preferred over anything
+    # derived from the status text. Classifying "cache-warm" by string alone makes it a failure,
+    # and SQS then redelivers a message the handler said it had handled - forever.
+    async def handler(request: dict) -> Result:
+        return Result.set("cache-warm", {"entries": 12}, successful=True)
+
+    app = AwsLambdaApp(registry=Registry().register("warm", handler))
+    event = SqsEventBuilder().with_message("warm", {}, message_id="m1").build()
+
+    response = app.handle(event)
+    assert response is not None
+    assert response["batchItemFailures"] == []

@@ -37,6 +37,7 @@ from .envelope import (
     encode_response,
     error_payload,
     resolve_version,
+    successful_from,
 )
 from .errors import MessageHandlingError
 from .handler import Handler, HandlerDefinition, definition_of, infer_request_type, message
@@ -173,6 +174,7 @@ __all__ = [
     "message",
     "message_router",
     "resolve_version",
+    "successful_from",
     "to_camel",
     "to_jsonable",
     "to_request",

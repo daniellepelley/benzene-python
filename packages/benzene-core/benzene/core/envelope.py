@@ -160,6 +160,27 @@ def encode_response(result: Result[Any] | None) -> dict[str, Any]:
     }
 
 
+def successful_from(envelope: Mapping[str, Any]) -> bool:
+    """Whether a response envelope reports success — the receiver's side of section 1.2.
+
+    ``isSuccessful`` is REQUIRED on a response envelope and is **authoritative**: a receiver MUST
+    prefer it over any classification it derives from ``statusCode`` text. That is not a nicety.
+    An application-defined status is outside the shared vocabulary, so it means nothing to a
+    receiver classifying by string alone — ``is_successful`` calls every such status a failure. A
+    handler answering ``Result.set("cache-warm", report, successful=True)`` would then have its
+    success read back as a failure by every peer: a Lambda-to-Lambda invoke returning a failed
+    Result, SQS nacking the message, Pub/Sub redelivering it forever, gRPC answering ``Internal``.
+
+    The fallback to the status class covers a sender that predates the member — an older peer, or a
+    port that has not adopted it yet — where deriving from the status is the best available answer.
+    An explicit ``false`` is honoured as a failure, so ``is not None`` rather than truthiness.
+    """
+    stated = envelope.get("isSuccessful")
+    if stated is None:
+        return is_successful(str(envelope.get("statusCode") or ""))
+    return bool(stated)
+
+
 def decode_response(response: Mapping[str, Any]) -> Result[Any]:
     """The inverse of :func:`encode_response`: a response envelope ``{statusCode, headers, body}``
     back into a :class:`~benzene.results.Result`.
@@ -174,23 +195,35 @@ def decode_response(response: Mapping[str, Any]) -> Result[Any]:
     back into the result's ``errors`` tuple, falling back to ``detail`` as a single opaque message when
     the producer sent no ``errors``; a body that isn't valid JSON becomes ``unexpected-error`` rather
     than raising, matching this envelope's "never crash the caller" rule everywhere else.
+
+    The envelope's ``isSuccessful`` decides whether this is a success (:func:`successful_from`),
+    never the status text, so an application-defined status carried on a result the sender marked
+    successful decodes back as a success instead of a failure.
     """
     status = response.get("statusCode") or Status.UNEXPECTED_ERROR
     body = response.get("body") or ""
+    # The sender's own classification wins over anything derived from the status text, and rides
+    # onto the Result so it survives the decode rather than being re-derived by every later reader.
+    # Only a *divergence* is recorded: when the envelope agrees with the status class - the
+    # overwhelming case - the Result keeps the derived default and looks exactly as it did before,
+    # so the override stays a signal that something unusual was stated rather than noise on every
+    # decoded result.
+    successful = successful_from(response)
+    stated = None if successful == is_successful(status) else successful
     if not body:
-        return Result(status, None)
+        return Result(status, None, successful=stated)
 
     try:
         parsed = json.loads(body)
     except (ValueError, TypeError):
         return Result.unexpected_error(f"response body is not valid JSON: {body!r}")
 
-    if not is_successful(status) and isinstance(parsed, dict) and _looks_like_problem(parsed):
+    if not successful and isinstance(parsed, dict) and _looks_like_problem(parsed):
         # errors, when present, is authoritative and ordered (section 1.3); detail stands in only
         # when it is absent. problem_errors is that rule, shared with every other decode site.
-        return Result(status, None, problem_errors(parsed))
+        return Result(status, None, problem_errors(parsed), successful=stated)
 
-    return Result(status, parsed)
+    return Result(status, parsed, successful=stated)
 
 
 def _looks_like_problem(parsed: dict[str, Any]) -> bool:
