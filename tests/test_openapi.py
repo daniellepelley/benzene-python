@@ -101,28 +101,80 @@ def test_success_and_failure_responses_present() -> None:
     assert responses["200"]["content"]["application/json"]["schema"]["$ref"] == (
         "#/components/schemas/OrdersPlaceResponse"
     )
-    # Every failure status is mapped to its HTTP code and shares the BenzeneError body.
+    # Every failure status is mapped to its HTTP code and shares the one problem-details body,
+    # served as application/problem+json — the media type the HTTP binding actually sets (§4.1).
     expected_codes = {str(to_http(status)) for status in FAILURE_STATUSES}
     assert expected_codes <= set(responses)
     for code in expected_codes:
-        assert responses[code]["content"]["application/json"]["schema"]["$ref"] == (
-            "#/components/schemas/BenzeneError"
+        assert responses[code]["content"]["application/problem+json"]["schema"]["$ref"] == (
+            "#/components/schemas/BenzeneProblem"
         )
+        assert "application/json" not in responses[code]["content"]
+
+
+def test_the_problem_schema_is_the_document_the_port_actually_emits() -> None:
+    # wire-contracts.md 1.3 WITHDREW the {status: string, detail: string} shape this component used
+    # to advertise: `status` is RFC 9457's integer HTTP code, and the Benzene status travels as
+    # `benzeneStatus`. What a caller receives is what benzene.core.error_payload builds plus 4.1's
+    # HTTP additions, so that is what the document must promise.
+    schemas = openapi_document(_registry())["components"]["schemas"]
+    problem = schemas["BenzeneProblem"]
+
+    assert problem["properties"]["status"]["type"] == "integer"
+    assert problem["properties"]["benzeneStatus"]["type"] == "string"
+    assert sorted(problem["required"]) == ["benzeneStatus", "status"]
+    assert set(problem["properties"]) >= {"type", "title", "detail", "instance", "errors"}
+
+    # errors is the authoritative, ordered array of structured errors — not prose to split.
+    assert problem["properties"]["errors"]["items"]["$ref"] == (
+        "#/components/schemas/BenzeneError"
+    )
+    assert schemas["BenzeneError"]["required"] == ["message"]
+    assert set(schemas["BenzeneError"]["properties"]) == {"message", "field", "code"}
+
+
+def test_the_advertised_problem_schema_matches_a_real_failure_response() -> None:
+    # The check that keeps the two from drifting again: run a real failure through the HTTP binding
+    # and hold its body against what the document promises.
+    import json
+
+    from benzene.http.app import http_problem_response
+    from benzene.results import BenzeneError, Result
+
+    response = http_problem_response(
+        Result.failure("validation-error", BenzeneError("no sku", field="sku", code="required"))
+    )
+    body = json.loads(response.body)
+    problem = openapi_document(_registry())["components"]["schemas"]["BenzeneProblem"]
+
+    assert response.headers["content-type"] == "application/problem+json"
+    assert set(body) <= set(problem["properties"])  # no member the document does not describe
+    assert set(problem["required"]) <= set(body)  # every member it calls required is there
+    assert set(body["errors"][0]) <= set(
+        openapi_document(_registry())["components"]["schemas"]["BenzeneError"]["properties"]
+    )
+
+
+def _refs(node: object) -> list[str]:
+    """Every ``$ref`` anywhere in the document — including the ones nested inside a component."""
+    if isinstance(node, dict):
+        found = [node["$ref"]] if isinstance(node.get("$ref"), str) else []
+        return found + [ref for value in node.values() for ref in _refs(value)]
+    if isinstance(node, list):
+        return [ref for item in node for ref in _refs(item)]
+    return []
 
 
 def test_all_refs_resolve_to_components() -> None:
     document = openapi_document(_registry())
     schema_names = set(document["components"]["schemas"])
 
-    for path_item in document["paths"].values():
-        operation = path_item["post"]
-        refs = [operation["requestBody"]["content"]["application/json"]["schema"]["$ref"]]
-        for response in operation["responses"].values():
-            refs.append(response["content"]["application/json"]["schema"]["$ref"])
-        for ref in refs:
-            prefix = "#/components/schemas/"
-            assert ref.startswith(prefix)
-            assert ref[len(prefix) :] in schema_names
+    refs = _refs(document)
+    assert refs  # a walk that found nothing would pass vacuously
+    for ref in refs:
+        prefix = "#/components/schemas/"
+        assert ref.startswith(prefix)
+        assert ref[len(prefix) :] in schema_names
 
 
 def test_versioned_topics_get_distinct_paths_and_ids() -> None:

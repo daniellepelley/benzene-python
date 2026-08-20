@@ -22,7 +22,8 @@ the single invoke base the wire binding actually multiplexes them through.
 of the topic's request/response type — the same 2020-12 subset the spec and descriptor embed (OpenAPI
 3.1 adopts the 2020-12 dialect, so the schemas drop in unchanged). Failure responses map the Benzene
 failure statuses to HTTP codes through the port's own :func:`benzene.http.to_http` table and share one
-``BenzeneError`` problem-details component (``{status, detail}``, wire-contracts §1.3).
+``BenzeneProblem`` component: the RFC 9457 problem document this port actually emits
+(:func:`benzene.core.error_payload` plus §4.1's HTTP additions), served as ``application/problem+json``.
 
 **Deterministic output.** As with :class:`~benzene.core.ServiceSpec`, the document is built in a stable
 order — topics sorted by ``(id, version)``, paths and component-schema keys sorted lexicographically,
@@ -44,16 +45,52 @@ from benzene.results import FAILURE_STATUSES
 OPENAPI_VERSION = "3.1.0"
 
 #: Component name of the shared problem-details failure body every failure response references.
-_ERROR_SCHEMA_NAME = "BenzeneError"
+_ERROR_SCHEMA_NAME = "BenzeneProblem"
 
-#: The Benzene failure envelope (``benzene.core.error_payload`` — wire-contracts §1.3).
+#: Component name of one entry in the problem document's ``errors`` array.
+_ERROR_ITEM_SCHEMA_NAME = "BenzeneError"
+
+#: The media type an RFC 9457 problem document is served as over HTTP (wire-contracts §4.1).
+PROBLEM_MEDIA_TYPE = "application/problem+json"
+
+#: One structured error (``benzene.results.BenzeneError`` — wire-contracts §1.3). ``message`` is the
+#: only member always present; ``field`` (the producer's property path) and ``code`` (its rule
+#: identifier) are emitted when the producer knew them and omitted when it did not.
+_ERROR_ITEM_SCHEMA: Schema = {
+    "type": "object",
+    "properties": {
+        "message": {"type": "string"},
+        "field": {"type": "string"},
+        "code": {"type": "string"},
+    },
+    "required": ["message"],
+}
+
+#: The RFC 9457 problem document a failure carries (``benzene.core.error_payload`` — wire-contracts
+#: §1.3 — with the two additions §4.1 requires of an HTTP failure, which is what this document
+#: describes: the integer ``status`` equal to the code actually sent, and the problem media type).
+#:
+#: ``status`` is RFC 9457's **integer** HTTP code. The shape this component used to advertise put
+#: the Benzene status *string* in a member of that name — the collision §1.3 withdrew, and which
+#: this port resolved by renaming that member to ``benzeneStatus``. Only ``benzeneStatus`` and
+#: ``status`` are required: ``type``/``title`` are absent for an application-defined status the
+#: framework has no registry URI for, ``detail`` and ``instance`` are optional on an
+#: application-authored document (``Result.problem``), and ``errors`` appears only when there are any.
 _ERROR_SCHEMA: Schema = {
     "type": "object",
     "properties": {
-        "status": {"type": "string"},
+        "type": {"type": "string", "format": "uri"},
+        "title": {"type": "string"},
+        "status": {"type": "integer"},
         "detail": {"type": "string"},
+        "instance": {"type": "string"},
+        "benzeneStatus": {"type": "string"},
+        "errors": {
+            "type": "array",
+            "items": {"$ref": f"#/components/schemas/{_ERROR_ITEM_SCHEMA_NAME}"},
+        },
     },
-    "required": ["status", "detail"],
+    "required": ["benzeneStatus", "status"],
 }
 
 
@@ -79,7 +116,10 @@ def openapi_document(
     definitions = sorted(registry.definitions(), key=lambda d: (d.topic, d.version))
 
     paths: dict[str, Any] = {}
-    schemas: dict[str, Schema] = {_ERROR_SCHEMA_NAME: dict(_ERROR_SCHEMA)}
+    schemas: dict[str, Schema] = {
+        _ERROR_SCHEMA_NAME: dict(_ERROR_SCHEMA),
+        _ERROR_ITEM_SCHEMA_NAME: dict(_ERROR_ITEM_SCHEMA),
+    }
     used_operation_ids: set[str] = set()
 
     for definition in definitions:
@@ -161,18 +201,24 @@ def _responses(response_name: str) -> dict[str, Any]:
         "200": {"description": "ok", "content": _json_content(response_name)}
     }
     # Every Benzene failure status → its HTTP code (benzene.http.to_http), ordered by code so the
-    # block is deterministic; each shares the one BenzeneError problem-details body.
+    # block is deterministic; each shares the one BenzeneProblem body, served under the problem
+    # media type the HTTP binding actually sets (§4.1) rather than plain application/json.
     for code, status in sorted({(to_http(status), status) for status in FAILURE_STATUSES}):
         responses[str(code)] = {
             "description": status,
-            "content": _json_content(_ERROR_SCHEMA_NAME),
+            "content": _content(PROBLEM_MEDIA_TYPE, _ERROR_SCHEMA_NAME),
         }
     return responses
 
 
 def _json_content(schema_name: str) -> dict[str, Any]:
     """An ``application/json`` Media Type object referencing a component schema by name."""
-    return {"application/json": {"schema": {"$ref": f"#/components/schemas/{schema_name}"}}}
+    return _content("application/json", schema_name)
+
+
+def _content(media_type: str, schema_name: str) -> dict[str, Any]:
+    """A Media Type object under ``media_type`` referencing a component schema by name."""
+    return {media_type: {"schema": {"$ref": f"#/components/schemas/{schema_name}"}}}
 
 
 def _schema_name(topic: str, version: str, role: str) -> str:

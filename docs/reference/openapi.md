@@ -95,8 +95,16 @@ Every operation's `requestBody` and success response `$ref` a component in `comp
 value is exactly `benzene.core.json_schema` of the topic's request/response type — the same 2020-12
 subset the spec and descriptor embed, with wire-naming (`orderId`) property names and `required`
 tracking the caller's obligation. Failure responses map the Benzene failure statuses to HTTP codes
-through `benzene.http.to_http` and share one `BenzeneError` problem-details component
-(`{status, detail}`, the wire-contract failure envelope), ordered by HTTP code.
+through `benzene.http.to_http` and share one `BenzeneProblem` component — the RFC 9457 problem
+document this port actually emits (`benzene.core.error_payload` plus the two additions §4.1 requires
+of an HTTP failure: the integer `status` equal to the code being sent, and the
+`application/problem+json` media type) — ordered by HTTP code. Its `errors` array `$ref`s a
+`BenzeneError` component, one structured error each (`message`, and `field`/`code` when the producer
+knew them).
+
+Note that `status` there is RFC 9457's **integer HTTP code**. The Benzene status string travels as
+`benzeneStatus`: wire-contracts.md §1.3 withdrew the earlier `{status: string, detail: string}` shape
+precisely because that member name collided with RFC 9457's own.
 
 ### Deterministic output
 
@@ -126,8 +134,8 @@ registry always yields an identical, diff-friendly dict.
         "responses": {
           "200": { "description": "ok", "content": { "application/json": {
             "schema": { "$ref": "#/components/schemas/OrdersPlaceResponse" } } } },
-          "400": { "description": "bad-request", "content": { "application/json": {
-            "schema": { "$ref": "#/components/schemas/BenzeneError" } } } }
+          "400": { "description": "bad-request", "content": { "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/BenzeneProblem" } } } }
           // ... one entry per failure status, ordered by HTTP code
         }
       }
@@ -135,9 +143,20 @@ registry always yields an identical, diff-friendly dict.
   },
   "components": {
     "schemas": {
+      // The RFC 9457 problem document a failure carries. `status` is RFC 9457's integer HTTP
+      // code; the Benzene status travels as `benzeneStatus`.
+      "BenzeneProblem": { "type": "object",
+        "properties": {
+          "type": { "type": "string", "format": "uri" }, "title": { "type": "string" },
+          "status": { "type": "integer" }, "detail": { "type": "string" },
+          "instance": { "type": "string" }, "benzeneStatus": { "type": "string" },
+          "errors": { "type": "array",
+            "items": { "$ref": "#/components/schemas/BenzeneError" } } },
+        "required": ["benzeneStatus", "status"] },
       "BenzeneError": { "type": "object",
-        "properties": { "status": { "type": "string" }, "detail": { "type": "string" } },
-        "required": ["status", "detail"] },
+        "properties": { "message": { "type": "string" }, "field": { "type": "string" },
+          "code": { "type": "string" } },
+        "required": ["message"] },
       "OrdersPlaceRequest": { "type": "object", "properties": {
         "sku": { "type": "string" }, "quantity": { "type": "integer" } },
         "required": ["sku", "quantity"] },
