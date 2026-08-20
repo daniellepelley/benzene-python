@@ -102,6 +102,8 @@ their reasons in `UNRUN_FIXTURES` — see the [roadmap](../README.md#roadmap).
 
 - **[Publishing](publishing.md)** — how the nineteen packages are released to PyPI (lockstep
   versioning, trusted publishing).
-- **[Mesh on AWS — plan](mesh-aws-plan.md)** — an internal planning document: the sequenced plan for
-  a multi-service mesh deployed to AWS (thin poller, Fargate collector, reused mesh-ui, Terraform),
-  built and verified live; only its CI automation is still open.
+- **[Mesh on AWS — plan](../work/archive/mesh-aws-plan.md)** *(archived)* — the sequenced plan for
+  a multi-service mesh deployed to AWS (thin poller, Fargate collector, reused mesh-ui, Terraform).
+  Actioned: see [`deploy/mesh/README.md`](../deploy/mesh/README.md) and the `Deploy Mesh (AWS)`
+  workflow; the one remainder (OIDC for that workflow) is in
+  [`work/remaining-items.md`](../work/remaining-items.md).

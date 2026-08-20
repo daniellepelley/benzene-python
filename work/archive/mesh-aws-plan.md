@@ -1,3 +1,5 @@
+> ARCHIVED 2026-08-20: actioned; `deploy/mesh/` (Terraform + Fargate collector + Lambda fleet, runbook in `deploy/mesh/README.md`) shipped, and — beyond this plan's own status text — Phase 4's CI automation shipped too (`.github/workflows/deploy-mesh.yml` + `destroy-mesh.yml`). The one live remainder (move those workflows from static keys to OIDC role assumption) is tracked in `work/remaining-items.md`.
+
 # Plan: a Benzene-Python mesh, deployed and working in AWS
 
 The goal: a multi-service Benzene-Python mesh deployed to AWS that matches the scope of the .NET

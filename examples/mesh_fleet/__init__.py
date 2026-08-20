@@ -7,7 +7,8 @@ single call is made (mesh.md §4); the trace context propagating across the hops
 declared edges' invocation/error stats — exactly what a deployed mesh shows, here with no cloud so it
 runs as a test.
 
-See ``docs/mesh-aws-plan.md`` for how this fleet maps onto AWS (Lambda services + a Fargate collector).
+See ``deploy/mesh/README.md`` for how this fleet maps onto AWS (Lambda services + a Fargate
+collector); the original plan is archived at ``work/archive/mesh-aws-plan.md``.
 """
 
 from __future__ import annotations

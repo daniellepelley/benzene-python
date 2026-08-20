@@ -10,7 +10,7 @@ directory ships it as a container (`collector/`) and the Terraform to run it on 
 > the static UI serving are unit-tested — `collector/tests`, `fleet/tests`, `tests/test_mesh_artifacts`).
 > One `terraform apply` stands up the whole mesh: the fleet on Lambda + the collector on Fargate, wired
 > together, **and the [Mesh UI](#the-mesh-ui) served from the collector** at `/mesh-ui/`. See
-> [`docs/mesh-aws-plan.md`](../../docs/mesh-aws-plan.md).
+> the archived plan, [`work/archive/mesh-aws-plan.md`](../../work/archive/mesh-aws-plan.md).
 
 ## What gets created
 
