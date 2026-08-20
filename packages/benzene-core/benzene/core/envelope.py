@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from benzene.results import BenzeneError, Result, Status, is_successful
+from benzene.results import Result, Status, is_successful, problem_errors
 from benzene.results.problems import problem_title, problem_type
 
 from .context import Context
@@ -186,22 +186,9 @@ def decode_response(response: Mapping[str, Any]) -> Result[Any]:
         return Result.unexpected_error(f"response body is not valid JSON: {body!r}")
 
     if not is_successful(status) and isinstance(parsed, dict) and _looks_like_problem(parsed):
-        # errors, when present, is authoritative and ordered (section 1.3). Only when it is absent
-        # does detail stand in, and then as ONE opaque message: splitting it on ", " was withdrawn
-        # by the RFC 9457 revision because error messages contain commas.
-        raw_errors = parsed.get("errors")
-        if isinstance(raw_errors, list):
-            # Each entry is decoded whole, not flattened to its message: a peer that sent a field
-            # and a code went to the trouble of knowing them, and a client that re-raises or
-            # re-renders the failure should still have them.
-            errors = tuple(
-                BenzeneError.coerce(item if isinstance(item, (dict, str)) else str(item))
-                for item in raw_errors
-            )
-            return Result(status, None, tuple(e for e in errors if e.message))
-
-        detail = parsed.get("detail") or ""
-        return Result(status, None, (BenzeneError(detail),) if detail else ())
+        # errors, when present, is authoritative and ordered (section 1.3); detail stands in only
+        # when it is absent. problem_errors is that rule, shared with every other decode site.
+        return Result(status, None, problem_errors(parsed))
 
     return Result(status, parsed)
 

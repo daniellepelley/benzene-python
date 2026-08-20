@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any, TypeAlias
 
 from benzene.core import encode_body
-from benzene.results import Result, is_successful
+from benzene.results import Result, is_successful, problem_errors
 
 from .status import from_http
 
@@ -87,8 +87,13 @@ def _reply_to_result(reply: HttpReply) -> Result:
     parsed = _parse(reply.body)
     if is_successful(status):
         return Result(status, parsed)
-    detail = parsed.get("detail") if isinstance(parsed, dict) else None
-    return Result.failure(status, detail) if detail else Result.failure(status)
+    # The peer's problem document (section 1.3): errors is authoritative and ordered when present,
+    # detail stands in only when it is absent. This used to read detail alone, which threw away the
+    # authoritative half - and with it any field and code the peer had gone to the trouble of
+    # sending. Same rule as the envelope decoder, from the same function.
+    if not isinstance(parsed, dict):
+        return Result.failure(status)
+    return Result.failure(status, *problem_errors(parsed))
 
 
 def _parse(body: str) -> Any:

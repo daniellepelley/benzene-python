@@ -14,6 +14,30 @@ from .status import Status, is_successful
 T = TypeVar("T")
 
 
+def problem_errors(document: Mapping[str, Any]) -> tuple[BenzeneError, ...]:
+    """The structured errors of a peer's problem document, in wire-contracts.md section 1.3's order
+    of precedence.
+
+    ``errors``, when present, is **authoritative and ordered**. Only when it is absent does
+    ``detail`` stand in, and then as ONE opaque message - splitting it on ``", "`` was withdrawn by
+    the RFC 9457 revision, because error messages contain commas.
+
+    One function rather than the rule written out at each decode site: the envelope decoder had it
+    right and the HTTP client read only ``detail``, so a peer's ``errors`` array - the authoritative
+    half - was dropped depending on which client you happened to call through.
+    """
+    raw_errors = document.get("errors")
+    if isinstance(raw_errors, list):
+        decoded = tuple(
+            BenzeneError.coerce(item if isinstance(item, (dict, str)) else str(item))
+            for item in raw_errors
+        )
+        return tuple(error for error in decoded if error.message)
+
+    detail = document.get("detail") or ""
+    return (BenzeneError(str(detail)),) if detail else ()
+
+
 #: What every failure factory accepts: a plain message, a structured error, or the mapping the wire
 #: decoder produces. One parameter type rather than a parallel set of ``*_with`` factories - Python
 #: takes the union where a language without overloads has to add a second function per status.

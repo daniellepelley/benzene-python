@@ -37,6 +37,41 @@ def test_failure_response_maps_status_and_detail() -> None:
     assert result.messages == ("no such order",)
 
 
+def test_failure_response_carries_the_peer_structured_errors() -> None:
+    """errors is authoritative when present (section 1.3), and each entry arrives whole.
+
+    This client used to read `detail` alone, so a peer that had gone to the trouble of saying which
+    field failed and which rule rejected it had both dropped one hop later - by the same framework
+    that had just taught its handlers to send them.
+    """
+    reply = HttpReply(
+        422,
+        json.dumps(
+            {
+                "benzeneStatus": "validation-error",
+                "detail": "sku is required",
+                "errors": [{"message": "sku is required", "field": "sku", "code": "missing"}],
+            }
+        ),
+    )
+
+    result = asyncio.run(_sender(reply).send_message("orders:place", {}))
+
+    assert result.status == "validation-error"
+    assert len(result.errors) == 1
+    assert (result.errors[0].field, result.errors[0].code) == ("sku", "missing")
+
+
+def test_failure_response_falls_back_to_detail_as_one_opaque_message() -> None:
+    """And specifically does NOT split it on ", " - a rule RFC 9457's revision withdrew, because
+    error messages contain commas."""
+    reply = HttpReply(400, json.dumps({"benzeneStatus": "bad-request", "detail": "one, two"}))
+
+    result = asyncio.run(_sender(reply).send_message("orders:place", {}))
+
+    assert result.messages == ("one, two",)
+
+
 def test_it_forwards_headers_and_the_topic() -> None:
     captured: dict = {}
     asyncio.run(
