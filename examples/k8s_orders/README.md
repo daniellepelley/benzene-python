@@ -21,17 +21,30 @@ gives you all three from one composition root, one image, one Deployment.
 
 | Path | What it is |
 |---|---|
-| `app.py` | the one entry point - builds all three apps (`build_http_orders_app`/`build_sqs_orders_app`/`build_kafka_orders_app`, reused unmodified from their own examples) and runs uvicorn + both consumer loops together via `asyncio.gather` |
+| `app.py` | the one entry point - builds all three apps (`build_http_orders_app`/`build_sqs_orders_app`/`build_kafka_orders_app`, reused unmodified from their own examples) and runs uvicorn + both consumer loops together via `run_legs`, which gathers them and winds every leg down when the first one exits |
+| `tests/` | in-memory tests - the wind-down logic driven directly through `run_legs`, plus one order through each of the three front doors (no uvicorn, no broker, no queue) |
 | `Dockerfile` | one image installing `benzene-http`+`uvicorn`, `benzene-aws[boto3]`, and `benzene-kafka[kafka]` together |
 | `k8s/` | one Deployment + Service + a kustomize base, pointed at a real SQS queue pair and Kafka cluster via env vars - no bundled infra |
 | `compose/` | `docker-compose.yml` - LocalStack (SQS) + a throwaway Kafka broker + the one service, for a credential-free local run |
 
 `app.py`'s own module docstring explains the one thing worth knowing before copying this pattern:
-both `run_consumer_loop`s (`benzene.aws`'s and `benzene.kafka`'s) run their
-`boto3`/`confluent-kafka` calls via
-`asyncio.to_thread` internally, specifically so they can share an event loop with uvicorn without
-starving it — see [Getting Started: Benzene on
+both `run_consumer_loop`s (`benzene.aws`'s and `benzene.kafka`'s — same name, hence the import
+aliases) run their `boto3`/`confluent-kafka` calls via `asyncio.to_thread` internally, specifically
+so they can share an event loop with uvicorn without starving it — see [Getting Started: Benzene on
 Kubernetes](../../docs/getting-started-kubernetes.md) for why that matters.
+
+## Run the tests (no cluster, no cloud, no broker)
+
+```bash
+pytest examples/k8s_orders
+```
+
+Two things are worth testing here and both are covered without any of the three transports actually
+running: the **wind-down contract** — one leg crashing sets the shared stop, tells uvicorn to exit,
+and still propagates a non-zero exit for Kubernetes to restart — driven straight through
+`run_legs` with duck-typed legs; and the **shared-domain claim**, one order pushed through each of
+the three front doors via `create_test_host(OrdersStartUp)` with only the outbound edge faked, the
+same setup every other example's suite uses.
 
 ## Run it locally (no Kubernetes, no cloud account)
 

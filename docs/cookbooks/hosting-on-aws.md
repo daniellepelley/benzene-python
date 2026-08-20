@@ -3,6 +3,10 @@
 Host one set of Benzene handlers on AWS Lambda across **three event sources** — API Gateway, SQS,
 and SNS — and publish events back out over SNS. One function, one pipeline, the handlers unchanged.
 
+(Three is this recipe's scope, not the host's limit: `benzene.aws` also binds S3, EventBridge,
+DynamoDB Streams, Kinesis, Kafka/MSK, and direct Lambda-to-Lambda invoke through the same function —
+see [Getting Started: AWS §7](../getting-started-aws.md#7-supported-event-sources).)
+
 ## Prerequisites
 
 - Python 3.10+

@@ -18,9 +18,10 @@ same mesh.
 > `benzene-kafka` and `benzene-rabbitmq`), the cross-cutting middleware (`benzene-resilience`,
 > `benzene-auth`, `benzene-cache`, `benzene-otel`, `benzene-openapi`), the mesh (`benzene-mesh` /
 > `benzene-mesh-fleet`), and the adapters and tooling (`benzene-pydantic`, `benzene-testing`,
-> `benzene-codegen-client`) — that pass **every language-neutral conformance fixture**. Core, the inbound + outbound HTTP and gRPC bindings, the three
-> cloud hosts (each multi-transport with egress, AWS now spanning eight Lambda event sources plus a
-> self-hosted SQS consumer), the Kafka and RabbitMQ transports, the mesh module (descriptor, tracing,
+> `benzene-codegen-client`) — that pass **every language-neutral conformance fixture**. Core, the
+> inbound + outbound HTTP and gRPC bindings, the three cloud hosts (each multi-transport with egress,
+> AWS now spanning the full set of Lambda event sources plus a self-hosted SQS consumer), the Kafka
+> and RabbitMQ transports, the mesh module (descriptor, tracing,
 > collector) and its fleet discovery/trace-mappers, resilience policies (circuit breaker, bulkhead, rate
 > limiting, idempotency, sagas), authentication (Basic / JWT / OAuth2 bearer), cache-aside caching,
 > OpenTelemetry trace export, OpenAPI 3.1 generation, payload versioning (headers, route segment,
