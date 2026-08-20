@@ -1,4 +1,4 @@
-# Getting Started: Benzene on Kubernetes
+# Getting started: Benzene on Kubernetes
 
 This guide takes you from an empty folder to **one Benzene composition root, reached over HTTP, SQS,
 and Kafka, hosted in a single Python process**. That's deliberately more than "deploy an ASGI app to

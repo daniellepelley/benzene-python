@@ -17,6 +17,16 @@ here we only add the AWS host.
 > hosted on Lambda, with dogfooded tests that push a native API Gateway, SQS, and SNS event through
 > the real bindings. Read it alongside this page.
 
+## What you'll build
+
+One Lambda function hosting one set of order handlers, behind three event sources:
+
+- **HTTP** — `POST /orders` places an order (API Gateway → Lambda).
+- **SQS and SNS** — one `orders:created` subscriber answers the event from either source.
+- **Egress** — placing an order publishes `orders:created` back out over SNS.
+
+All of it runs in memory first — the deploy sketch comes last.
+
 ## Prerequisites
 
 - **Python 3.10+**, `pip`, and a virtual environment (see [Getting started](getting-started.md)).

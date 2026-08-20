@@ -3,6 +3,19 @@
 Build a small Benzene service in Python — from an empty folder to a running HTTP endpoint — and see
 how the layered packages let you adopt exactly as much of Benzene as you need.
 
+Three words carry the whole model, and this guide uses them throughout:
+
+- A **handler** is a plain `async` function: request in, `Result` out. It never sees a transport.
+- A **`Result`** describes the outcome — a status from a shared vocabulary (`ok`, `created`,
+  `not-found`, …) plus an optional payload — instead of an exception or an HTTP code.
+- A **topic** is the name a message is addressed to (`say:hello`), and it — not a URL or a queue —
+  is what routes a message to its handler. HTTP routes, queue subscriptions, and gRPC methods all
+  resolve to a topic.
+
+Everything else is wiring those three onto transports. (The full definitions live in the
+language-neutral [core-concepts spec](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/core-concepts.md);
+you won't need it to follow along.)
+
 ## Prerequisites
 
 - **Python 3.10+**
@@ -237,9 +250,7 @@ same `OrdersStartUp`.
 Worth asking honestly: a bare route on FastAPI, Flask, or Starlette —
 `@app.get("/greet/{name}") def greet(name: str): return {"greeting": f"Hello {name}"}` — does the
 same job as steps 1–4 above in one line, no `benzene-core`/`benzene-http` install. For an HTTP-only
-service that never talks to anything else, that line does the same job this guide's four steps do, and
-you don't need Benzene to get it — a real ASGI framework already gives HTTP everything Benzene's
-envelope gives it here.
+service that never talks to anything else, you don't need Benzene.
 
 The payoff shows up the moment this same handler needs a **second** entry point — a queue another team
 publishes to, a Kafka topic, a batch job that used to call this endpoint but really just wants to drop

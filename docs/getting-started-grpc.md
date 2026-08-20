@@ -18,6 +18,13 @@ It builds on the base tutorial: read [Getting started](getting-started.md) first
 > served over gRPC, with dogfooded tests that drive the real binding in memory and one test that
 > pushes a message through a live `grpc.Server` + channel. Read it alongside this page.
 
+## What you'll build
+
+- A **gRPC server** serving every registered topic (`orders:place`, `orders:get`, …) as one generic
+  unary method — one `add_benzene_handler` call, no route table.
+- **Egress** — placing an order publishes `orders:created` through an outbound `MessageSender`.
+- A **client** call over `GrpcMessageSender`, plus in-memory tests and one live-socket round trip.
+
 ## Prerequisites
 
 - **Python 3.10+**, `pip`, and a virtual environment (see [Getting started](getting-started.md)).

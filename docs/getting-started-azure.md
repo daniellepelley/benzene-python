@@ -11,6 +11,17 @@ domain wiring are the *same* objects on Azure as on your laptop; only the host t
 Azure Functions' triggers is Azure-specific. This is the same layered adoption story as
 [Getting started](getting-started.md), one level up — you add a host, not a rewrite.
 
+## What you'll build
+
+One Function App hosting one set of order handlers, behind three triggers:
+
+- **HTTP** — `POST /orders` places an order.
+- **Service Bus and Event Hub** — one `orders:created` subscriber answers the event from either
+  trigger.
+- **Egress** — placing an order publishes `orders:created` back out over Service Bus.
+
+All of it runs in memory first — local runs and the deploy come at the end.
+
 ## Prerequisites
 
 - **[Getting started](getting-started.md)** — you should already understand a handler, `@message` /
