@@ -28,13 +28,34 @@ async def place(order: PlaceOrder) -> Result:
 ```
 
 `@validated(Model)` validates the decoded body into `Model` **before** your handler runs. A
-`pydantic.ValidationError` becomes a `validation-error` `Result` that names each bad field, so a
-malformed request never reaches your handler and never crashes the pipeline:
+`pydantic.ValidationError` becomes a `validation-error` `Result` carrying one structured error per
+bad field, so a malformed request never reaches your handler and never crashes the pipeline.
 
-```python
-# POST {"quantity": "not-an-int"}  ->  status "validation-error"
-#   detail: "sku: Field required, quantity: Input should be a valid integer, ..."
+pydantic already knows, per failure, the message, the field it came from and the rule that rejected
+it, and all three cross into the RFC 9457 problem document unchanged — `loc` becomes `field` and
+pydantic's `type` becomes `code`:
+
+```jsonc
+// POST {"quantity": "not-an-int"}  ->  status "validation-error"
+{
+  "type": "https://benzene.app/problems/validation-error",
+  "title": "Validation failed",
+  "detail": "Field required, Input should be a valid integer, unable to parse string as an integer",
+  "benzeneStatus": "validation-error",
+  "errors": [
+    { "message": "Field required", "field": "sku", "code": "missing" },
+    { "message": "Input should be a valid integer, unable to parse string as an integer",
+      "field": "quantity", "code": "int_parsing" }
+  ]
+}
 ```
+
+That is the difference between an error a UI can attach to the right input and one it can only
+print. `detail` remains the messages joined, for a caller that logs a single line.
+
+`benzene.pydantic.validation_errors(exc)` exposes the same mapping directly if you validate
+somewhere other than a handler boundary; `format_validation_errors(exc)` still returns the flat
+`"field: message"` strings.
 
 A pydantic model returned as a success payload is serialized by `benzene.core`'s wire mapper
 (`model_dump(by_alias=True)`). Unlike a dataclass — whose fields the mapper auto-camelCases — a
