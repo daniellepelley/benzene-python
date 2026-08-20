@@ -26,11 +26,17 @@ await sender.send_message("orders:created", order, headers={"x-correlation-id": 
 - **Consumer** — the Benzene topic comes from the `topic` header carried in the delivery's AMQP
   `properties.headers` (the cross-port convention); the other headers are the Benzene headers (UTF-8),
   the body is the JSON body. One delivery is one scope; there is **no response channel**, so the result
-  is acknowledge/log only — `run_consumer_loop` acks the delivery on success (at-least-once) and nacks a
-  failed one for redelivery. A poison delivery can never crash the loop.
+  is acknowledge/log only — `run_consumer_loop(app, channel, queue=...)` (the queue name is required)
+  acks the delivery on success (at-least-once), requeues a **transient** failure
+  (`service-unavailable`/`timeout`/`too-many-requests`) for redelivery, and nacks any other failure with
+  `requeue=False` so a poison delivery leaves the queue instead of spinning the loop — declare the queue
+  with an `x-dead-letter-exchange` and the broker routes those drops there. An empty queue backs off for
+  `idle_sleep` seconds (default 1.0) instead of busy-polling. A poison delivery can never crash the loop.
 - **Outbound** — `RabbitMqMessageSender` implements the `benzene.core.MessageSender` port over
   `pika` (optional extra), forwarding the header dictionary onto the AMQP `properties.headers` so
-  correlation/trace propagation rides across the hop.
+  correlation/trace propagation rides across the hop. Connection *and* publish run on a worker thread
+  under one lock, because a pika channel is not thread-safe; a missing `pika` raises a teaching
+  `ImportError` naming `pip install "benzene-rabbitmq[rabbitmq]"` rather than failing every publish.
 
 The binding is duck-typed against `pika`, so decode, dispatch, and publish are exercised in memory with
 fakes — no broker, no SDK. Test through `benzene.rabbitmq.testing` (a native-delivery builder + a test

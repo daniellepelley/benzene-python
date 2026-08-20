@@ -8,7 +8,9 @@ one configured exchange, header-routed (the single-stream, header-routed pattern
 clients use too). Mirrors .NET's ``Benzene.RabbitMq``.
 
 The ``pika`` client is an optional dependency imported lazily; inject any object exposing
-``basic_publish(exchange, routing_key, body, properties)`` to test without a broker.
+``basic_publish(exchange, routing_key, body, properties)`` to test without a broker. A *missing* pika
+is a deployment error, not a message outcome — the lazy import raises a teaching :class:`ImportError`
+naming the extra rather than turning every publish into a ``service-unavailable`` result.
 """
 
 from __future__ import annotations
@@ -37,9 +39,16 @@ class RabbitMqMessageSender:
 
     ``exchange`` / ``routing_key`` are the physical AMQP destination every Benzene message is published
     to. A ``channel`` may be injected (tests, or a shared client); otherwise a ``pika`` blocking
-    connection is opened lazily from ``host`` on first use. The AMQP ``properties.headers`` carry the
-    Benzene headers plus the ``topic`` header, so a downstream consumer resolves the Benzene topic
-    header-first, exactly as the inbound binding does.
+    connection is opened lazily from ``host`` on first use — *inside* the worker thread, since opening
+    it is blocking network I/O that must not run on the event loop. The AMQP ``properties.headers``
+    carry the Benzene headers plus the ``topic`` header, so a downstream consumer resolves the Benzene
+    topic header-first, exactly as the inbound binding does.
+
+    A ``pika`` connection and its channels are **not thread-safe**, and every publish runs on a worker
+    thread: concurrent ``send_message`` calls would otherwise interleave AMQP frames on the one shared
+    channel. An :class:`asyncio.Lock` is therefore held across lazy client creation *and* the publish,
+    so one sender issues one publish at a time (use several senders — hence several channels — for
+    parallel throughput).
     """
 
     def __init__(
@@ -56,10 +65,23 @@ class RabbitMqMessageSender:
         self._channel = channel
         self._host = host
         self._serialize = serializer or encode_body
+        #: Serializes client creation + publish: one pika channel, many ``to_thread`` workers.
+        self._lock = asyncio.Lock()
 
     def _client(self) -> Any:
+        """Return the channel, opening the blocking pika connection on first use (worker thread only).
+
+        Called from inside the threaded publish — ``pika.BlockingConnection`` is a blocking network
+        round-trip and must never run on the event loop — and always under :attr:`_lock`.
+        """
         if self._channel is None:
-            import pika  # lazy: optional dependency
+            try:
+                import pika  # lazy: optional dependency
+            except ImportError as exc:  # a forgotten extra is a deployment error, not a send outcome
+                raise ImportError(
+                    "RabbitMqMessageSender requires pika — install it with "
+                    "'pip install benzene-rabbitmq[rabbitmq]'."
+                ) from exc
 
             connection = pika.BlockingConnection(
                 pika.ConnectionParameters(host=self._host or "localhost")
@@ -82,18 +104,26 @@ class RabbitMqMessageSender:
         amqp_headers: dict[str, str] = {str(k): str(v) for k, v in (headers or {}).items()}
         amqp_headers[TOPIC_HEADER] = topic
         data = self._serialize(message).encode("utf-8")
+        properties = self._properties(amqp_headers)
 
-        try:
+        def _publish() -> None:
+            # Connect (first call) and publish on the worker thread: both are blocking pika network
+            # calls, so an ``await send_message(...)`` never stalls the event loop.
             channel = self._client()
-            # ``basic_publish`` is a blocking pika network call; run it on a worker thread so an
-            # ``await send_message(...)`` never blocks the event loop (matching the consumer loop).
-            await asyncio.to_thread(
-                channel.basic_publish,
+            channel.basic_publish(
                 exchange=self._exchange,
                 routing_key=self._routing_key,
                 body=data,
-                properties=self._properties(amqp_headers),
+                properties=properties,
             )
+
+        try:
+            # One channel is not thread-safe: hold the lock across creation + publish so two workers
+            # never interleave frames on it.
+            async with self._lock:
+                await asyncio.to_thread(_publish)
+        except ImportError:
+            raise  # a missing pika is a deployment error, not a per-message failure result
         except Exception as ex:  # a publish failure is service-unavailable, never a crash
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()

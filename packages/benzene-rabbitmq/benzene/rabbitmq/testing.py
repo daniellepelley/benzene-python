@@ -81,13 +81,17 @@ class RecordingRabbitMqChannel:
     Deliveries acked via :meth:`basic_ack` / nacked via :meth:`basic_nack` append their delivery tag to
     :attr:`acked` / :attr:`nacked`, and outbound :meth:`basic_publish` calls are recorded on
     :attr:`published`, so a test can assert the loop's at-least-once behaviour (a failed delivery is
-    *not* acked) and the sender's forwarded headers without a broker.
+    *not* acked) and the sender's forwarded headers without a broker. :attr:`nacks` carries the full
+    nack — ``{"delivery_tag": ..., "requeue": ...}`` — to tell a requeued delivery (transient failure)
+    from one dropped to the queue's dead-letter exchange (a final failure); this replay channel serves
+    each delivery once either way.
     """
 
     deliveries: list[FakeRabbitMqMessage] = field(default_factory=list)
     published: list[dict[str, Any]] = field(default_factory=list)
     acked: list[int] = field(default_factory=list)
     nacked: list[int] = field(default_factory=list)
+    nacks: list[dict[str, Any]] = field(default_factory=list)
 
     def basic_get(self, queue: str = "", *, auto_ack: bool = False) -> tuple[Any, Any, Any]:
         if self.deliveries:
@@ -102,6 +106,7 @@ class RecordingRabbitMqChannel:
         self, *, delivery_tag: int, multiple: bool = False, requeue: bool = True
     ) -> None:
         self.nacked.append(delivery_tag)
+        self.nacks.append({"delivery_tag": delivery_tag, "requeue": requeue})
 
     def basic_publish(
         self,
