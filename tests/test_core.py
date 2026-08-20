@@ -266,7 +266,7 @@ def test_decode_response_round_trips_failure_errors() -> None:
     envelope = encode_response(Result.bad_request("sku is required", "quantity must be positive"))
     result = decode_response(envelope)
     assert result.status == Status.BAD_REQUEST
-    assert result.errors == ("sku is required", "quantity must be positive")
+    assert result.messages == ("sku is required", "quantity must be positive")
 
 
 def test_decode_response_treats_a_malformed_body_as_unexpected_error_not_a_crash() -> None:

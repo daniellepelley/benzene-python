@@ -9,7 +9,7 @@ Mirrors .NET's ``Benzene.Results`` plus the status vocabulary from ``Benzene.Abs
 
 from __future__ import annotations
 
-from .result import Result, result_with_errors
+from .result import BenzeneError, ErrorLike, ProblemDetails, Result, result_with_errors
 from .status import (
     FAILURE_STATUSES,
     KNOWN_STATUSES,
@@ -19,8 +19,11 @@ from .status import (
 )
 
 __all__ = [
+    "BenzeneError",
+    "ErrorLike",
     "FAILURE_STATUSES",
     "KNOWN_STATUSES",
+    "ProblemDetails",
     "Result",
     "SUCCESS_STATUSES",
     "Status",

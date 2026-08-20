@@ -48,7 +48,7 @@ def test_failure_factory_sets_status_and_errors(status: str, factory) -> None:
     result = factory("boom")
     assert result.status == status
     assert not result.is_successful
-    assert result.errors == ("boom",)
+    assert result.messages == ("boom",)
     assert result.payload is None
 
 

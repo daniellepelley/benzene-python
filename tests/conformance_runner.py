@@ -30,7 +30,9 @@ from benzene.core import (
     read_message_metadata,
     resolve_version,
 )
+from benzene.core.envelope import encode_response
 from benzene.http import from_http, to_http
+from benzene.http.app import _to_http_response, http_problem_response
 from benzene.mesh import (
     InMemoryTraceExporter,
     MeshCollector,
@@ -41,11 +43,13 @@ from benzene.mesh import (
     parse_traceparent,
     trace_middleware,
 )
-from benzene.results import is_successful
+from benzene.results import Result, is_successful
+from benzene.results.problems import problem_http_status, problem_title, problem_type
 
 from .canonical_handlers import (
     register_canonical,
     register_canonical_outbound,
+    register_canonical_with_problem,
     register_with_panic,
 )
 
@@ -120,25 +124,60 @@ def run_http_mapping() -> list[str]:
     return failures
 
 
+def envelope_case_failures(response: dict, expected: dict, name: str) -> list[str]:
+    """Check one response against one envelope case's expectations (the envelope case format).
+
+    The single place the envelope case format is implemented. There used to be two - this runner and
+    the parametrized pytest test beside it - and they had drifted: both skipped ``isSuccessful`` and
+    ``bodyExclude``, so all 17 cases' success-signal assertions and all 11 withdrawn-member
+    assertions were passing without being checked, and the port really was omitting ``isSuccessful``
+    from every response envelope. Two similar loops is how that happens; there is now one.
+    """
+    failures: list[str] = []
+
+    if response["statusCode"] != expected["statusCode"]:
+        failures.append(
+            f"envelope[{name}]: statusCode {response['statusCode']!r}, expected {expected['statusCode']!r}"
+        )
+
+    # isSuccessful is required and authoritative (section 1.2), so it is checked exactly against the
+    # envelope's own member - never inferred from the status, which is the whole point of it.
+    if "isSuccessful" in expected:
+        if "isSuccessful" not in response:
+            failures.append(
+                f"envelope[{name}]: isSuccessful is absent, expected {expected['isSuccessful']} "
+                "stated outright (section 1.2 requires it)"
+            )
+        elif response["isSuccessful"] != expected["isSuccessful"]:
+            failures.append(
+                f"envelope[{name}]: isSuccessful {response['isSuccessful']}, "
+                f"expected {expected['isSuccessful']}"
+            )
+
+    if "headers" in expected and not _is_subset(expected["headers"], response.get("headers", {})):
+        failures.append(f"envelope[{name}]: headers {response.get('headers')} !⊇ {expected['headers']}")
+
+    if "body" in expected:
+        actual_body = json.loads(response["body"]) if response["body"] else {}
+        if not _is_subset(expected["body"], actual_body):
+            failures.append(f"envelope[{name}]: body {actual_body} !⊇ {expected['body']}")
+        # bodyExclude names members that MUST NOT appear. Asserting only that the new members are
+        # present would pass just as happily for a writer that also still emits a withdrawn one,
+        # which is exactly what this guards (section 1.3's `status` rename).
+        for member in expected.get("bodyExclude", []):
+            if member in actual_body:
+                failures.append(f"envelope[{name}]: body must not contain {member!r}: {actual_body}")
+
+    return failures
+
+
 def run_envelope_cases() -> list[str]:
     failures: list[str] = []
     app = _app()
     data = _load("envelope-cases.json")
-    for case in data["cases"]:
+    for case in _cases(data, "cases", "envelope-cases", failures):
         response = asyncio.run(app.handle(case["request"]))
-        expected = case["expected"]
-        name = case["name"]
-
-        if response["statusCode"] != expected["statusCode"]:
-            failures.append(
-                f"envelope[{name}]: statusCode {response['statusCode']!r}, expected {expected['statusCode']!r}"
-            )
-        if "headers" in expected and not _is_subset(expected["headers"], response.get("headers", {})):
-            failures.append(f"envelope[{name}]: headers {response.get('headers')} !⊇ {expected['headers']}")
-        if "body" in expected:
-            actual_body = json.loads(response["body"]) if response["body"] else {}
-            if not _is_subset(expected["body"], actual_body):
-                failures.append(f"envelope[{name}]: body {actual_body} !⊇ {expected['body']}")
+        failures += envelope_case_failures(response, case["expected"], case["name"])
     return failures
 
 
@@ -425,11 +464,131 @@ def run_contract_hash_cases() -> list[str]:
     return failures
 
 
+def run_problem_details() -> list[str]:
+    """problem-details-cases.json (wire-contracts.md 1.3, 3.1, 4.1) - three independent groups.
+
+    ``registry`` and ``envelopeCases`` are required for the Benzene Core claim; ``httpRules`` is
+    required for each HTTP binding a port ships, and this port ships ``benzene.http``, so all three
+    run. The fixture was vendored here for some time with nothing reading it.
+    """
+    failures: list[str] = []
+    data = _load("problem-details-cases.json")
+
+    # --- registry: this port's own table against the fixture's rows, no message to build ---------
+    registry = data.get("registry", {})
+    if "registry" not in data:
+        failures.append("problem-details: fixture has no 'registry' - the runner and the fixture have drifted")
+    for row in _cases(registry, "rows", "problem-details.registry", failures):
+        status = row["benzeneStatus"]
+        if problem_type(status) != row["type"]:
+            failures.append(
+                f"problem-details[registry {status}]: type {problem_type(status)!r}, expected {row['type']!r}"
+            )
+        if problem_http_status(status) != row["httpStatus"]:
+            failures.append(
+                f"problem-details[registry {status}]: httpStatus {problem_http_status(status)}, "
+                f"expected {row['httpStatus']}"
+            )
+        # Title wording is never asserted (conformance/README.md); its presence is - a row with no
+        # title is a row that has fallen out of the table.
+        if not problem_title(status):
+            failures.append(f"problem-details[registry {status}]: no registry title")
+
+    # An application-defined failure status has no row at all, and falls to the 4.1 unknown row.
+    unknown = registry.get("unknownStatus", {})
+    app_defined = "insufficient-funds"
+    if problem_type(app_defined) is not None:
+        failures.append(
+            f"problem-details[unknownStatus]: type {problem_type(app_defined)!r} for an "
+            "application-defined status, expected none"
+        )
+    if problem_title(app_defined) is not None:
+        failures.append(
+            f"problem-details[unknownStatus]: title {problem_title(app_defined)!r} for an "
+            "application-defined status, expected none"
+        )
+    if "httpStatus" not in unknown:
+        failures.append(
+            "problem-details: fixture has no 'registry.unknownStatus.httpStatus' - "
+            "the runner and the fixture have drifted"
+        )
+    elif problem_http_status(app_defined) != unknown["httpStatus"]:
+        failures.append(
+            f"problem-details[unknownStatus]: httpStatus {problem_http_status(app_defined)}, "
+            f"expected {unknown['httpStatus']}"
+        )
+
+    # --- envelopeCases: exactly the envelope case format, so exactly the same checker ------------
+    app = BenzeneMessageApplication(register_canonical_with_problem(Registry()))
+    for case in _cases(data, "envelopeCases", "problem-details", failures):
+        response = asyncio.run(app.handle(case["request"]))
+        failures += envelope_case_failures(response, case["expected"], case["name"])
+
+    # --- httpRules: the response line and the document's status member must agree ----------------
+    rules = data.get("httpRules", {})
+    if "httpRules" not in data:
+        failures.append("problem-details: fixture has no 'httpRules' - the runner and the fixture have drifted")
+    for case in _cases(rules, "failureCases", "problem-details.httpRules", failures):
+        status, expected_http = case["benzeneStatus"], case["httpStatus"]
+        response = http_problem_response(Result.failure(status, "boom"))
+        name = f"httpRules {status}"
+
+        if response.status_code != expected_http:
+            failures.append(f"problem-details[{name}]: HTTP {response.status_code}, expected {expected_http}")
+        content_type = (response.headers or {}).get("content-type")
+        if content_type != "application/problem+json":
+            failures.append(f"problem-details[{name}]: content-type {content_type!r}, expected application/problem+json")
+
+        document = json.loads(response.body)
+        if document.get("status") != expected_http:
+            failures.append(
+                f"problem-details[{name}]: document status {document.get('status')!r}, expected {expected_http}"
+            )
+        # The two MUST come from the same mapping (4.1), so they can never disagree.
+        if document.get("status") != response.status_code:
+            failures.append(
+                f"problem-details[{name}]: document status {document.get('status')!r} disagrees with "
+                f"the response status {response.status_code}"
+            )
+        if document.get("benzeneStatus") != status:
+            failures.append(
+                f"problem-details[{name}]: benzeneStatus {document.get('benzeneStatus')!r}, expected {status!r}"
+            )
+
+    success = rules.get("successCase")
+    if success is None:
+        failures.append(
+            "problem-details: fixture has no 'httpRules.successCase' - the runner and the fixture have drifted"
+        )
+    else:
+        response = _to_http_response(encode_response(Result.ok({"applied": success["benzeneStatus"]})))
+        if response.status_code != success["httpStatus"]:
+            failures.append(
+                f"problem-details[httpRules success]: HTTP {response.status_code}, expected {success['httpStatus']}"
+            )
+        content_type = (response.headers or {}).get("content-type", "")
+        if not content_type.startswith(success["contentType"]):
+            failures.append(
+                f"problem-details[httpRules success]: content-type {content_type!r}, "
+                f"expected {success['contentType']!r}"
+            )
+        body = json.loads(response.body) if response.body else {}
+        for member in ("type", "title", "status", "benzeneStatus", "errors"):
+            if member in body:
+                failures.append(
+                    f"problem-details[httpRules success]: a success body must carry no problem "
+                    f"member, found {member!r}"
+                )
+
+    return failures
+
+
 def run_all() -> list[str]:
     return (
         run_status_vocabulary()
         + run_http_mapping()
         + run_envelope_cases()
+        + run_problem_details()
         + run_transport_metadata()
         + run_mesh_descriptor()
         + run_mesh_trace()

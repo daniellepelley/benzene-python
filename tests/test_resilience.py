@@ -71,7 +71,7 @@ def test_breaker_opens_after_consecutive_failures_and_rejects_fast() -> None:
     # Now open: the next call is rejected without touching the inner sender.
     rejected = run(guarded.send_message("t", {}))
     assert rejected.status == Status.SERVICE_UNAVAILABLE
-    assert "circuit breaker is open" in rejected.errors[0]
+    assert "circuit breaker is open" in rejected.messages[0]
     assert sender.calls == 3  # unchanged — fast reject, no inner call
 
 

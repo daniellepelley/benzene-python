@@ -15,10 +15,11 @@ from benzene.core import BenzeneMessageApplication, Registry
 from .canonical_handlers import register_canonical
 from .conformance_runner import (
     CONFORMANCE_DIR,
-    _is_subset,
+    envelope_case_failures,
     run_contract_document_cases,
     run_contract_hash_cases,
     run_http_mapping,
+    run_problem_details,
     run_status_vocabulary,
 )
 
@@ -29,6 +30,15 @@ def test_status_vocabulary_conforms() -> None:
 
 def test_http_status_mapping_conforms() -> None:
     assert run_http_mapping() == []
+
+
+def test_problem_details_cases_conform() -> None:
+    """problem-details-cases.json: the registry, the envelope cases, and the HTTP signalling rules.
+
+    Required for the Benzene Core claim (registry + envelopeCases) and for the HTTP binding this
+    port ships (httpRules). The fixture was vendored here with nothing reading it.
+    """
+    assert run_problem_details() == []
 
 
 def test_contract_document_cases_conform() -> None:
@@ -46,13 +56,13 @@ def _envelope_cases() -> list:
 
 @pytest.mark.parametrize("case", _envelope_cases(), ids=lambda c: c["name"])
 def test_envelope_case(case: dict) -> None:
+    """One test per case, but the assertions come from the shared checker.
+
+    This used to re-implement the envelope case format, and its copy had fallen behind: it never
+    checked ``isSuccessful`` or ``bodyExclude``. Delegating means a case format the runner learns is
+    a case format this sees too.
+    """
     app = BenzeneMessageApplication(register_canonical(Registry()))
     response = asyncio.run(app.handle(case["request"]))
-    expected = case["expected"]
 
-    assert response["statusCode"] == expected["statusCode"]
-    if "headers" in expected:
-        assert _is_subset(expected["headers"], response["headers"])
-    if "body" in expected:
-        actual = json.loads(response["body"]) if response["body"] else {}
-        assert _is_subset(expected["body"], actual)
+    assert envelope_case_failures(response, case["expected"], case["name"]) == []

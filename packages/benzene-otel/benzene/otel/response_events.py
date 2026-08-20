@@ -123,7 +123,7 @@ def response_event_interception(
             version=context.version or None,
             correlation_id=context.headers.get(CORRELATION_ID_HEADER),
             payload=result.payload if include_payload else None,
-            errors=result.errors,
+            errors=result.messages,
         )
         # Lossy by contract: a failing sink must never break the invocation it observes.
         try:

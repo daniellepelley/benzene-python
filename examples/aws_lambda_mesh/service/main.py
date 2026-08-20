@@ -47,7 +47,7 @@ def lambda_handler_for(service: ServiceLambda):
                         logger.warning(
                             "trace push to the mesh's S3 inbox failed: %s (%s)",
                             push.status,
-                            "; ".join(push.errors) or "no detail",
+                            "; ".join(push.messages) or "no detail",
                         )
         return result
 

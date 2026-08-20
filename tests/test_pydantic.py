@@ -50,8 +50,32 @@ def test_default_is_applied_by_the_model() -> None:
 def test_invalid_request_becomes_validation_error_naming_the_fields() -> None:
     response = _run('{"quantity": "not-an-int"}')  # sku missing + quantity wrong type
     assert response["statusCode"] == "validation-error"
+
+    # The bad fields are named in the structured errors, not glued into detail's prose. pydantic
+    # already knows the location and the rule for each failure, so they travel as `field` and `code`
+    # (the same rule .NET's FluentValidation adapter follows: the validator's message verbatim, its
+    # property name and error code beside it, never reworded into one string).
+    errors = json.loads(response["body"])["errors"]
+    assert [error["field"] for error in errors] == ["sku", "quantity"]
+    assert [error["code"] for error in errors] == ["missing", "int_parsing"]
+    assert all(error["message"] for error in errors)
+
+    # detail is still the messages joined, for a caller that only logs one line.
     detail = json.loads(response["body"])["detail"]
-    assert "sku" in detail and "quantity" in detail  # both bad fields named
+    assert detail == ", ".join(error["message"] for error in errors)
+
+
+def test_structured_validation_errors_survive_a_round_trip() -> None:
+    """A client decoding the response gets the field and code back, not just prose."""
+    from benzene.core.envelope import decode_response
+
+    result = decode_response(_run('{"quantity": "not-an-int"}'))
+
+    assert result.status == "validation-error"
+    assert [(error.field, error.code) for error in result.errors] == [
+        ("sku", "missing"),
+        ("quantity", "int_parsing"),
+    ]
 
 
 def test_the_handler_never_sees_an_invalid_request() -> None:

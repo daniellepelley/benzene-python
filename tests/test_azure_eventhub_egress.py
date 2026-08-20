@@ -72,4 +72,4 @@ def test_event_hub_sender_maps_a_send_failure_to_service_unavailable() -> None:
 
     result = asyncio.run(EventHubMessageSender(producer=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
-    assert "hub down" in " ".join(result.errors)
+    assert "hub down" in " ".join(result.messages)

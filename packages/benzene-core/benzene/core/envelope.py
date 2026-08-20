@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from benzene.results import Result, Status, is_successful
+from benzene.results import BenzeneError, Result, Status, is_successful
 from benzene.results.problems import problem_title, problem_type
 
 from .context import Context
@@ -109,6 +109,12 @@ def error_payload(result: Result[Any]) -> dict[str, Any]:
     RFC 9457's own integer member. That collision was resolved by rename, not by dropping the RFC
     alignment: the Benzene status now travels as ``benzeneStatus``.
     """
+    # An application-authored document is emitted verbatim (Result.problem). Deriving one from the
+    # status instead would overwrite the application's own `type` URI with the registry URI, which
+    # is the entire reason for authoring it.
+    if result.problem_document is not None:
+        return result.problem_document.to_payload()
+
     problem: dict[str, Any] = {}
 
     type_uri = problem_type(result.status)
@@ -116,13 +122,14 @@ def error_payload(result: Result[Any]) -> dict[str, Any]:
         problem["type"] = type_uri
         problem["title"] = problem_title(result.status)
 
-    problem["detail"] = ", ".join(result.errors)
+    problem["detail"] = ", ".join(result.messages)
     problem["benzeneStatus"] = result.status
 
     # Authoritative and ordered when present (section 1.3): this replaces the withdrawn "recover
     # errors by splitting detail on ', '" rule, which was never safe - messages contain commas.
+    # Each error is emitted whole, so a field and a code the producer knew reach the caller.
     if result.errors:
-        problem["errors"] = [{"message": message} for message in result.errors]
+        problem["errors"] = [error.to_payload() for error in result.errors]
 
     return problem
 
@@ -136,9 +143,21 @@ def encode_response(result: Result[Any] | None) -> dict[str, Any]:
     if result.is_successful:
         body = "" if result.payload is None else json.dumps(to_jsonable(result.payload))
     else:
+        # The envelope is the failure signal, and the body IS the problem document (section 1.3),
+        # so say so on the way out rather than leaving a reader to sniff the shape.
+        headers["content-type"] = "application/problem+json"
         body = json.dumps(error_payload(result))
 
-    return {"statusCode": result.status, "headers": headers, "body": body}
+    # isSuccessful is REQUIRED (section 1.2) and is the authoritative signal: a receiver MUST prefer
+    # it over anything it derives from statusCode text. That matters most for an application-defined
+    # status, which is outside the shared vocabulary and means nothing to a receiver classifying by
+    # string alone - exactly the case where omitting this member makes a success look like a failure.
+    return {
+        "statusCode": result.status,
+        "isSuccessful": result.is_successful,
+        "headers": headers,
+        "body": body,
+    }
 
 
 def decode_response(response: Mapping[str, Any]) -> Result[Any]:
@@ -172,14 +191,17 @@ def decode_response(response: Mapping[str, Any]) -> Result[Any]:
         # by the RFC 9457 revision because error messages contain commas.
         raw_errors = parsed.get("errors")
         if isinstance(raw_errors, list):
+            # Each entry is decoded whole, not flattened to its message: a peer that sent a field
+            # and a code went to the trouble of knowing them, and a client that re-raises or
+            # re-renders the failure should still have them.
             errors = tuple(
-                str(item.get("message", "")) if isinstance(item, dict) else str(item)
+                BenzeneError.coerce(item if isinstance(item, (dict, str)) else str(item))
                 for item in raw_errors
             )
-            return Result(status, None, tuple(e for e in errors if e))
+            return Result(status, None, tuple(e for e in errors if e.message))
 
         detail = parsed.get("detail") or ""
-        return Result(status, None, (detail,) if detail else ())
+        return Result(status, None, (BenzeneError(detail),) if detail else ())
 
     return Result(status, parsed)
 

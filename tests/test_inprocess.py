@@ -75,7 +75,7 @@ def test_sender_handler_failure_surfaces_status_and_detail() -> None:
     result = asyncio.run(sender.send_message("billing:reject", {}))
 
     assert result.status == "bad-request"
-    assert result.errors == ("nope",)
+    assert result.messages == ("nope",)
 
 
 def test_fanout_dispatches_to_every_target_concurrently() -> None:

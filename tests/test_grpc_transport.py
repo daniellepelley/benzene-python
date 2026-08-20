@@ -63,7 +63,7 @@ def test_failure_maps_status_and_detail() -> None:
     with _serving(_orders_app()) as channel:
         result = asyncio.run(GrpcMessageSender(channel).send_message("orders:place", {}))
     assert result.status == "bad-request"          # -> gRPC InvalidArgument, trailer says bad-request
-    assert "sku is required" in " ".join(result.errors)
+    assert "sku is required" in " ".join(result.messages)
 
 
 def test_not_found_round_trip() -> None:

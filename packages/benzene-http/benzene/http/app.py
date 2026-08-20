@@ -285,11 +285,18 @@ def _to_http_response(envelope: Mapping[str, Any]) -> HttpResponse:
     peer, or an empty body) is passed through untouched rather than guessed at.
     """
     status = envelope.get("statusCode") or ""
-    http_status = to_http(status)
+    # isSuccessful is authoritative and MUST be preferred over anything derived from the status
+    # text (section 1.2). It is what distinguishes a health report answered with
+    # service-unavailable - a 503 for the probe, but a body that is the report and not a problem
+    # document - from an ordinary failure at the same status. Falling back to the status class
+    # covers a sender that predates the member.
+    stated = envelope.get("isSuccessful")
+    successful = is_successful(status) if stated is None else bool(stated)
+    http_status = to_http(status, successful)
     headers = dict(envelope.get("headers") or {})
     body = envelope.get("body") or ""
 
-    if is_successful(status) or not body:
+    if successful or not body:
         return HttpResponse(status_code=http_status, headers=headers, body=body)
 
     try:

@@ -77,7 +77,7 @@ def test_sns_sender_maps_a_publish_failure_to_service_unavailable() -> None:
 
     result = asyncio.run(SnsMessageSender("arn", client=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
-    assert "sns down" in " ".join(result.errors)
+    assert "sns down" in " ".join(result.messages)
 
 
 def test_sqs_sender_maps_a_send_failure_to_service_unavailable() -> None:
@@ -87,4 +87,4 @@ def test_sqs_sender_maps_a_send_failure_to_service_unavailable() -> None:
 
     result = asyncio.run(SqsMessageSender("q", client=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
-    assert "sqs down" in " ".join(result.errors)
+    assert "sqs down" in " ".join(result.messages)

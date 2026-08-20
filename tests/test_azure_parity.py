@@ -199,7 +199,7 @@ def test_queue_storage_sender_maps_a_failure_to_service_unavailable() -> None:
 
     result = asyncio.run(QueueStorageMessageSender(client=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
-    assert "queue down" in " ".join(result.errors)
+    assert "queue down" in " ".join(result.messages)
 
 
 class _FakeEventGridClient:
@@ -252,4 +252,4 @@ def test_event_grid_sender_maps_a_failure_to_service_unavailable() -> None:
 
     result = asyncio.run(EventGridMessageSender(client=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
-    assert "grid down" in " ".join(result.errors)
+    assert "grid down" in " ".join(result.messages)

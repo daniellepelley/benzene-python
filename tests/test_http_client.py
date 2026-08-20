@@ -34,7 +34,7 @@ def test_failure_response_maps_status_and_detail() -> None:
     reply = HttpReply(404, '{"status": "not-found", "detail": "no such order"}')
     result = asyncio.run(_sender(reply).send_message("orders:get", {"id": "x"}))
     assert result.status == "not-found"
-    assert result.errors == ("no such order",)
+    assert result.messages == ("no such order",)
 
 
 def test_it_forwards_headers_and_the_topic() -> None:

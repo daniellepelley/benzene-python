@@ -390,7 +390,7 @@ def test_casting_handler_passes_a_failure_through_unchanged() -> None:
         response_to=OrderPlacedV1,
     )
     result = asyncio.run(handler(PlaceOrderV1(sku="A", count=1)))
-    assert result.status == "bad-request" and result.errors == ("nope",)
+    assert result.status == "bad-request" and result.messages == ("nope",)
 
 
 def test_casting_handler_does_not_downcast_a_failure_payload() -> None:
