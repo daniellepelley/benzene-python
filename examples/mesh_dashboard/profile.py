@@ -60,6 +60,8 @@ def descriptor_with_profile() -> ServiceDescriptor:
     """Derive the service descriptor with its self-assessed profile attached (mesh.md §2)."""
     report = self_check()
     definition = build_profiled_definition()
+    # AppDefinition.registry is optional - an HTTP-only app has none - so narrow it before deriving.
+    assert definition.registry is not None
     return ServiceDescriptor.derive(
         definition.registry,
         ServiceInfo(service="orders", service_version="1.0.0", profile=report.to_profile()),

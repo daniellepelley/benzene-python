@@ -39,6 +39,7 @@ def test_message_only_app_answers_http_with_501() -> None:
     app = AwsLambdaApp(registry=Registry().register("t", echo))  # no HTTP router
     event = ApiGatewayRequestBuilder("GET", "/echo").build()
     response = app.handle(event)
+    assert response is not None
     assert response["statusCode"] == 501
 
 
@@ -76,5 +77,6 @@ def test_sqs_poison_record_is_isolated_not_a_whole_batch_crash() -> None:
     # The whole batch must not crash: only the poison record is reported for redelivery, and the
     # good record is still processed (partial-batch response, not an all-or-nothing failure).
     response = app.handle(event)
+    assert response is not None
     assert response["batchItemFailures"] == [{"itemIdentifier": "bad"}]
     assert seen == [{"ok": True}]

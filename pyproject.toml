@@ -62,6 +62,13 @@ files = [
     "packages/benzene-codegen-client/benzene",
     "deploy/mesh/collector",
     "deploy/mesh/fleet",
+    # The tests and the examples too. Type errors cluster in test code - it is where the awkward
+    # shapes live - and checking only the packages meant the checker never saw the code that
+    # exercises them. Pointing it here surfaced two annotations that made the framework awkward to
+    # use (ServiceOverride, Handler) and a variable in the conformance runner bound to two different
+    # types in one function; none of that is visible from the packages alone.
+    "tests",
+    "examples",
 ]
 check_untyped_defs = true
 warn_redundant_casts = true

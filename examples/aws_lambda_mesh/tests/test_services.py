@@ -109,6 +109,7 @@ def test_payments_joins_the_inbound_trace_and_forwards_it_downstream() -> None:
 
     # The invocation itself was recorded, parented on the inbound span — exactly what a pushed trace
     # batch hands the mesh's collector to derive "payments consumes payments:capture".
+    assert host.scope is not None
     exporter = host.scope.get_service(QueueTraceExporter)
     events = exporter.drain()
     assert len(events) == 1
@@ -119,7 +120,9 @@ def test_payments_joins_the_inbound_trace_and_forwards_it_downstream() -> None:
     assert event.parent_span_id == "b" * 16
     # The span this handler ran as is what the outbound sends above are parented on.
     for sent in sender.sent:
-        _, parent_span_id = parse_traceparent(sent.headers["traceparent"])
+        parsed = parse_traceparent(sent.headers["traceparent"])
+        assert parsed is not None, "the outbound header must be a valid traceparent"
+        _, parent_span_id = parsed
         assert parent_span_id == event.span_id
 
 

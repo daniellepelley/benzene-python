@@ -63,6 +63,7 @@ def _fleet_fetch(apps: dict[str, BenzeneHttpApp]):
 
     async def fetch(url: str) -> tuple[int, str]:
         parts = urlsplit(url)
+        assert parts.hostname is not None
         app = apps[parts.hostname]
         response = await app.handle("GET", parts.path)
         return response.status_code, response.body
@@ -157,7 +158,7 @@ def test_a_down_service_is_a_failed_result_not_a_broken_sweep() -> None:
 
     results = {r.service: r for r in asyncio.run(poller.poll_once())}
     assert results["orders"].ok is True
-    assert results["down"].ok is False and "refused" in results["down"].error
+    assert results["down"].ok is False and "refused" in (results["down"].error or "")
     # the healthy service still made it into the fleet despite its neighbour being down
     assert {s["service"] for s in collector.query_fleet({})["services"]} == {"orders"}
 

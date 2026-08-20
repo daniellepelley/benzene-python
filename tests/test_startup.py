@@ -47,6 +47,8 @@ class GreetStartUp(BenzeneStartUp):
 
 
 def _greet(definition: AppDefinition, name: str) -> dict:
+    # AppDefinition.registry is optional - an HTTP-only app has none - so a caller narrows it.
+    assert definition.registry is not None
     host = InMemoryBenzeneHost(definition.registry)
     response = asyncio.run(host.send_message("greet", {"name": name}))
     assert response["statusCode"] == Status.OK

@@ -129,7 +129,7 @@ def test_format_validation_errors_is_readable() -> None:
     from pydantic import ValidationError
 
     try:
-        M(n="x")
+        M(n="x")  # type: ignore[arg-type]  # the wrong type IS the test
     except ValidationError as exc:
         messages = format_validation_errors(exc)
         assert len(messages) == 1

@@ -10,6 +10,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from benzene.codegen_client import (
@@ -103,7 +104,9 @@ def test_topic_client_with_allof_and_oneof_generates_valid_importable_python() -
     # Valid Python: parses and actually imports/executes without error.
     ast.parse(generated.source)
 
-    namespace: dict[str, object] = {}
+    # Any, not object: this namespace is populated by exec'ing generated source, so what it holds is
+    # exactly what the test is about to assert - classes to issubclass and instantiate.
+    namespace: dict[str, Any] = {}
     exec(compile(generated.source, "<generated:closure:compose>", "exec"), namespace)  # noqa: S102
 
     # D is a bare oneOf (E | F) with no properties of its own -> a Union type alias, not a class.

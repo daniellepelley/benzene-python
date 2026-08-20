@@ -24,7 +24,7 @@ from benzene.core import (
     resolve_version,
 )
 from benzene.core.registry import _natural_key
-from benzene.results import Result
+from benzene.results import BenzeneError, Result
 
 
 def _app() -> BenzeneMessageApplication:
@@ -305,11 +305,20 @@ def test_schema_casters_chain_multiple_steps_by_bfs() -> None:
 def test_schema_casters_prefer_a_direct_cast_over_a_chain() -> None:
 
     calls: list[str] = []
+
+    def via_chain(v0: PlaceOrderV0) -> PlaceOrderV1:
+        calls.append("chain")
+        return PlaceOrderV1(v0.sku)
+
+    def via_direct(v0: PlaceOrderV0) -> PlaceOrderV2:
+        calls.append("direct")
+        return PlaceOrderV2(v0.sku)
+
     casters = (
         SchemaCasters()
-        .cast_between(PlaceOrderV0, PlaceOrderV1, lambda v0: (calls.append("chain"), PlaceOrderV1(v0.sku))[1])
+        .cast_between(PlaceOrderV0, PlaceOrderV1, via_chain)
         .cast_between(PlaceOrderV1, PlaceOrderV2, lambda v1: PlaceOrderV2(v1.sku, v1.count))
-        .cast_between(PlaceOrderV0, PlaceOrderV2, lambda v0: (calls.append("direct"), PlaceOrderV2(v0.sku))[1])
+        .cast_between(PlaceOrderV0, PlaceOrderV2, via_direct)
     )
     casters.cast(PlaceOrderV0(sku="A"), PlaceOrderV2)
     assert calls == ["direct"]  # the one-step edge wins over the two-step path
@@ -398,7 +407,7 @@ def test_casting_handler_does_not_downcast_a_failure_payload() -> None:
     # A failure that happens to carry a payload of an uncastable type: since encode_response never
     # serialises a failure payload, casting_handler must leave it alone rather than raise NoCastPathError.
     async def rejects(_request: PlaceOrderV2) -> Result:
-        return Result(status="bad-request", payload={"unmapped": True}, errors=("nope",))
+        return Result(status="bad-request", payload={"unmapped": True}, errors=(BenzeneError("nope"),))
 
     handler = casting_handler(
         rejects,

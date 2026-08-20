@@ -49,8 +49,10 @@ def test_registry_version_selection() -> None:
         return Result.ok("v2")
 
     registry = Registry().register("t", v1).register("t", v2, version="2")
-    assert registry.find("t").handler is v1  # no version -> unversioned
-    assert registry.find("t", "2").handler is v2  # exact version match
+    assert (unversioned := registry.find("t")) is not None
+    assert unversioned.handler is v1  # no version -> unversioned
+    assert (versioned := registry.find("t", "2")) is not None
+    assert versioned.handler is v2  # exact version match
     assert registry.find("t", "9") is None  # no fuzzy fallback
 
 

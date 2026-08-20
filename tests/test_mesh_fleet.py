@@ -149,7 +149,7 @@ class _FakeLambdaClient:
 
 
 def test_aws_lambda_discovery_filters_by_tag_and_paginates():
-    pages = [
+    pages: list[list[dict[str, object]]] = [
         [
             {"FunctionName": "orders", "FunctionArn": "arn:orders", "Runtime": "python3.12"},
             {"FunctionName": "untagged", "FunctionArn": "arn:untagged", "Runtime": "python3.12"},
