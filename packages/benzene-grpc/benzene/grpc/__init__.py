@@ -7,8 +7,9 @@ Two layers, installed together and used apart:
   one gRPC code. Dependency-free — it maps to and from gRPC status-code *names*, never ``grpcio``.
 * the **transport binding** over ``grpcio``: :class:`~benzene.grpc.server.BenzeneGrpcHandler` /
   :func:`~benzene.grpc.server.add_benzene_handler` serve every topic as a generic unary method, and
-  :class:`~benzene.grpc.client.GrpcMessageSender` calls one. Needs the ``[transport]`` extra; the
-  names above import as stubs that raise a pointed ``ImportError`` without it.
+  :class:`~benzene.grpc.client.GrpcMessageSender` calls one; a failure's structured errors
+  cross as a ``google.rpc.BadRequest`` on the ``GRPC_DETAILS_TRAILER``. Needs the ``[transport]``
+  extra; the names above import as stubs that raise a pointed ``ImportError`` without it.
 
 ::
 
@@ -21,6 +22,7 @@ namespace. Mirrors .NET's ``Benzene.Grpc``.
 
 from __future__ import annotations
 
+from .details import GRPC_DETAILS_TRAILER
 from .status import BENZENE_STATUS_TRAILER, from_grpc, to_grpc
 
 # The server/client transport needs grpcio (the [transport] extra); the mapping above never does.
@@ -50,6 +52,7 @@ else:
 
 __all__ = [
     "BENZENE_STATUS_TRAILER",
+    "GRPC_DETAILS_TRAILER",
     "BenzeneGrpcHandler",
     "GrpcMessageSender",
     "add_benzene_handler",

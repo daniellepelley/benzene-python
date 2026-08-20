@@ -4,7 +4,9 @@ A Benzene gRPC server is a **generic** gRPC handler: it dispatches by method nam
 *is* the Benzene topic (the ``grpc`` topic source is "method"). Each unary call carries the message
 ``body`` as its bytes and the Benzene headers as request metadata; the response carries the mapped
 ``StatusCode`` and — always, success or failure — a ``benzene-status`` trailer with the raw status
-verbatim, so the exact status survives the codes that collapse to one gRPC code.
+verbatim, so the exact status survives the codes that collapse to one gRPC code. A **failure** also
+carries a ``grpc-status-details-bin`` trailer with the problem's structured errors as a
+``google.rpc.BadRequest`` (§4.2), because gRPC discards the body of a non-OK call.
 
     server = grpc.server(ThreadPoolExecutor(max_workers=8))
     add_benzene_handler(server, BenzeneMessageApplication(registry))
@@ -23,10 +25,12 @@ from benzene.core import (
     application_from,
     successful_from,
 )
+from benzene.results import problem_errors
 
 import grpc
 
 from .codes import status_to_code
+from .details import details_trailer
 from .status import BENZENE_STATUS_TRAILER
 
 #: The gRPC method-path prefix; the segment after it is the Benzene topic.
@@ -73,7 +77,7 @@ class BenzeneGrpcHandler(grpc.GenericRpcHandler):
             self._application.handle({"topic": topic, "headers": headers, "body": body})
         )
         status = response["statusCode"]
-        context.set_trailing_metadata(((BENZENE_STATUS_TRAILER, status),))
+        trailers: list[tuple[str, str | bytes]] = [(BENZENE_STATUS_TRAILER, status)]
         # isSuccessful is authoritative (wire-contracts.md 1.2) and is exactly what section 4.2's
         # mapping needs for an **application-defined** status: one the handler marked successful is
         # OK, not Internal. Classifying from the status text instead would answer Internal to a
@@ -83,19 +87,35 @@ class BenzeneGrpcHandler(grpc.GenericRpcHandler):
         # sets no code and no details, whatever route it took there.
         code = status_to_code(status, successful_from(response))
         if code is not grpc.StatusCode.OK:
+            problem = _problem(response)
+            detail = _detail(response, problem)
             context.set_code(code)
-            context.set_details(_detail(response))
+            context.set_details(detail)
+            # gRPC drops the body of a non-OK call, so the problem document's structured errors
+            # would die here (section 4.2: they map onto google.rpc.BadRequest instead).
+            # problem_errors is the shared section 1.3 decoder, so what goes on the trailer is what
+            # an HTTP caller reads off the body. code.value is (number, name) - the numeric half is
+            # what a google.rpc.Status carries.
+            rich = details_trailer(code.value[0], detail, problem_errors(problem))
+            if rich is not None:
+                trailers.append(rich)
+        context.set_trailing_metadata(tuple(trailers))
         return response["body"].encode("utf-8")
 
 
-def _detail(response: dict[str, Any]) -> str:
+def _problem(response: dict[str, Any]) -> dict[str, Any]:
+    """The failed response's body parsed as a problem document, or ``{}`` if it isn't one."""
     body = response.get("body") or ""
     try:
         parsed = json.loads(body) if body else {}
     except (ValueError, TypeError):
-        return str(response["statusCode"])
-    if isinstance(parsed, dict) and parsed.get("detail"):
-        return str(parsed["detail"])
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _detail(response: dict[str, Any], problem: dict[str, Any]) -> str:
+    if problem.get("detail"):
+        return str(problem["detail"])
     return str(response["statusCode"])
 
 

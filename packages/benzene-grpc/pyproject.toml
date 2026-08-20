@@ -26,8 +26,12 @@ classifiers = [
 dependencies = ["benzene-core>=0.1.0b1"]
 
 [project.optional-dependencies]
-# Only the server/client transport needs grpcio; the status mapping is dependency-free.
-transport = ["grpcio>=1.60"]
+# Only the server/client transport needs grpcio; the status mapping is dependency-free. grpcio-status
+# brings the google.rpc messages (via googleapis-common-protos) the transport packs into the
+# grpc-status-details-bin trailer for structured errors — wire-contracts.md 4.2. Both stay in the
+# extra: benzene/grpc/status.py imports neither, and the details trailer degrades to "attach nothing,
+# read nothing" if the protos are absent.
+transport = ["grpcio>=1.60", "grpcio-status>=1.60"]
 
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"

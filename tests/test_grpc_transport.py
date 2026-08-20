@@ -17,8 +17,15 @@ from benzene.core import (  # noqa: E402
     Registry,
     message,
 )
-from benzene.grpc import GrpcMessageSender, add_benzene_handler  # noqa: E402
-from benzene.results import Result  # noqa: E402
+from benzene.grpc import (  # noqa: E402
+    BENZENE_STATUS_TRAILER,
+    GRPC_DETAILS_TRAILER,
+    GrpcMessageSender,
+    add_benzene_handler,
+    method_for,
+)
+from benzene.grpc.details import DETAILS_SUPPORTED  # noqa: E402
+from benzene.results import BenzeneError, Result  # noqa: E402
 
 
 @message("orders:place")
@@ -104,3 +111,108 @@ def test_an_application_defined_status_marked_successful_round_trips_as_a_succes
     assert result.status == "cache-warm"
     assert result.is_successful
     assert result.payload == {"entries": 12}
+
+
+# --- structured errors over the grpc-status-details-bin trailer (wire-contracts.md 4.2) ----------
+
+needs_details = pytest.mark.skipif(
+    not DETAILS_SUPPORTED,
+    reason="structured gRPC details need googleapis-common-protos (the [transport] extra)",
+)
+
+
+@message("orders:submit")
+async def submit(request: dict) -> Result:
+    # Two errors that differ in the one thing a flattened detail string cannot carry: the field.
+    return Result.validation_error(
+        BenzeneError("sku is required", field="sku", code="missing"),
+        BenzeneError("quantity must be positive", field="quantity", code="greater_than"),
+    )
+
+
+@message("orders:cancel")
+async def cancel(request: dict) -> Result:
+    # A failure with nothing structured at all: no errors, so no detail either.
+    return Result.failure("conflict")
+
+
+def _details_app() -> BenzeneMessageApplication:
+    return BenzeneMessageApplication(Registry().add(submit).add(cancel).add(place))
+
+
+def _raw_trailers(channel, topic: str, body: bytes = b"{}"):
+    """The trailing metadata of a call, as a dict — the wire itself, not the client's reading of it."""
+    invoke = channel.unary_unary(method_for(topic))
+    try:
+        _, call = invoke.with_call(body)
+    except grpc.RpcError as exc:
+        return dict(exc.trailing_metadata() or ())
+    return dict(call.trailing_metadata() or ())
+
+
+@needs_details
+def test_structured_errors_survive_the_grpc_hop_with_their_fields() -> None:
+    # The bug this covers: gRPC discards the body of a non-OK call, so a problem document's `errors`
+    # reached the caller as one opaque prose string and the field a validator knew was gone.
+    with _serving(_details_app()) as channel:
+        result = asyncio.run(GrpcMessageSender(channel).send_message("orders:submit", {}))
+    assert result.status == "validation-error"
+    assert [(error.message, error.field) for error in result.errors] == [
+        ("sku is required", "sku"),
+        ("quantity must be positive", "quantity"),
+    ]
+    # `code` is deliberately not carried: section 4.2 does not say where it goes, and three ports
+    # each inventing a home for it is the divergence the spec exists to prevent.
+    assert all(error.code is None for error in result.errors)
+
+
+@needs_details
+def test_the_details_trailer_is_a_conformant_google_rpc_status() -> None:
+    # A peer that isn't Benzene reads this trailer with the stock reader, which rejects a
+    # google.rpc.Status whose code or message disagrees with the call's own - so this asserts the
+    # shape is interoperable, not merely round-trippable by our own client.
+    rpc_status = pytest.importorskip("grpc_status.rpc_status")
+    error_details_pb2 = pytest.importorskip("google.rpc.error_details_pb2")
+
+    with _serving(_details_app()) as channel:
+        invoke = channel.unary_unary(method_for("orders:submit"))
+        with pytest.raises(grpc.RpcError) as caught:
+            invoke.with_call(b"{}")
+        status = rpc_status.from_call(caught.value)
+
+    assert status.code == grpc.StatusCode.INVALID_ARGUMENT.value[0]
+    assert status.message == "sku is required, quantity must be positive"
+    bad_request = error_details_pb2.BadRequest()
+    assert status.details[0].Unpack(bad_request)
+    assert [(v.field, v.description) for v in bad_request.field_violations] == [
+        ("sku", "sku is required"),
+        ("quantity", "quantity must be positive"),
+    ]
+
+
+@needs_details
+def test_a_failure_without_structured_errors_falls_back_to_the_message_alone() -> None:
+    with _serving(_details_app()) as channel:
+        result = asyncio.run(GrpcMessageSender(channel).send_message("orders:cancel", {}))
+    assert result.status == "conflict"
+    # No BadRequest to read, so the client keeps exactly the behaviour it had: the call's details
+    # string as one message-only error, with no invented field.
+    assert result.messages == ("conflict",)
+    assert result.errors[0].field is None
+
+
+def test_a_success_attaches_no_details_trailer() -> None:
+    # The trailer is a failure-only concern; a success carries benzene-status and nothing more.
+    with _serving(_details_app()) as channel:
+        trailers = _raw_trailers(channel, "orders:place", b'{"sku": "ABC"}')
+    assert trailers.get(BENZENE_STATUS_TRAILER) == "created"
+    assert GRPC_DETAILS_TRAILER not in trailers
+
+
+@needs_details
+def test_a_failure_attaches_both_trailers() -> None:
+    with _serving(_details_app()) as channel:
+        trailers = _raw_trailers(channel, "orders:submit")
+    # The benzene-status trailer keeps working unchanged alongside the new one.
+    assert trailers[BENZENE_STATUS_TRAILER] == "validation-error"
+    assert isinstance(trailers[GRPC_DETAILS_TRAILER], bytes)
