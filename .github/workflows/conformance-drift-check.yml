@@ -8,6 +8,10 @@ name: conformance-drift-check
 # The check runs both ways on purpose. A vendored fixture that has drifted is the obvious half; a
 # canonical fixture MISSING from the snapshot is the half that actually bites, because a runner
 # cannot notice a fixture it was never given.
+#
+# What this job does NOT check is that a vendored fixture is ever actually OPENED by a runner —
+# byte-identical and unrun looks exactly like byte-identical and green. That half lives in
+# tests/conformance_runner.py's run_fixture_coverage().
 
 on:
   push:
@@ -35,6 +39,7 @@ jobs:
           git -C /tmp/benzene sparse-checkout set docs/specification/conformance
           mkdir -p /tmp/canonical
           cp /tmp/benzene/docs/specification/conformance/*.json /tmp/canonical/
+          cp /tmp/benzene/docs/specification/conformance/README.md /tmp/canonical/
 
       - name: Diff vendored snapshot against canonical
         run: |
@@ -60,10 +65,19 @@ jobs:
               fail=1
             fi
           done
+          # The README is vendored too, and is not decoration: it is what says which fixtures are
+          # *conditional* on a capability, which is the authority tests/conformance_runner.py's
+          # UNRUN_FIXTURES cites for each fixture it deliberately does not run. A drifted copy of it
+          # is a stale reason for skipping a check.
+          if ! diff -u /tmp/canonical/README.md conformance/README.md > /tmp/diff.txt; then
+            echo "::error file=conformance/README.md::Vendored conformance README has drifted from benzene canonical"
+            cat /tmp/diff.txt
+            fail=1
+          fi
           if [ "$fail" -ne 0 ]; then
             echo ""
             echo "Conformance fixtures have drifted from the canonical benzene spec."
-            echo "Re-vendor: cp <benzene>/docs/specification/conformance/*.json conformance/"
+            echo "Re-vendor: cp <benzene>/docs/specification/conformance/*.json <benzene>/docs/specification/conformance/README.md conformance/"
             echo "and update conformance/SPEC_VERSION to the new benzene commit."
             exit 1
           fi

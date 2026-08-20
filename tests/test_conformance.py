@@ -18,6 +18,8 @@ from .conformance_runner import (
     envelope_case_failures,
     run_contract_document_cases,
     run_contract_hash_cases,
+    run_fixture_coverage,
+    run_grpc_status_mapping,
     run_http_mapping,
     run_problem_details,
     run_status_vocabulary,
@@ -39,6 +41,25 @@ def test_problem_details_cases_conform() -> None:
     port ships (httpRules). The fixture was vendored here with nothing reading it.
     """
     assert run_problem_details() == []
+
+
+def test_grpc_status_mapping_conforms() -> None:
+    """grpc-status-mapping.json, from the runner rather than only from tests/test_grpc.py.
+
+    The mapping is dependency-free, so there was never a reason for the runner to be the one place
+    that skipped it — and while it did, CI printed CONFORMANCE PASSED having not checked it.
+    """
+    assert run_grpc_status_mapping() == []
+
+
+def test_every_vendored_fixture_is_claimed_by_a_runner() -> None:
+    """A fixture nobody opens is byte-perfect, green, and checking nothing.
+
+    The drift check guards each fixture's bytes against canonical and guards that a canonical
+    fixture is not missing from the snapshot; neither notices a vendored fixture that is never
+    loaded. Two mesh fixtures sat in exactly that state.
+    """
+    assert run_fixture_coverage() == []
 
 
 def test_contract_document_cases_conform() -> None:
