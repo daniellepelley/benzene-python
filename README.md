@@ -13,7 +13,7 @@ a Python Benzene service and a .NET/Go/TypeScript one speak the same wire contra
 same mesh.
 
 > **Status: feature-complete against the spec, with the .NET parity roadmap now closed.** Shipped as
-> eighteen layered packages — the foundations (`benzene-results`, `benzene-core`, `benzene-http`,
+> nineteen layered packages — the foundations (`benzene-results`, `benzene-core`, `benzene-http`,
 > `benzene-grpc`), the transport hosts (`benzene-gcp` / `benzene-aws` / `benzene-azure`, plus
 > `benzene-kafka` and `benzene-rabbitmq`), the cross-cutting middleware (`benzene-resilience`,
 > `benzene-auth`, `benzene-cache`, `benzene-otel`, `benzene-openapi`), the mesh (`benzene-mesh` /
@@ -27,9 +27,9 @@ same mesh.
 > selectors, casting-handler, transparent casting), health checks, and the Cloud Service Profile's
 > well-known HTTP surfaces (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`) are all implemented.
 > Each package
-> builds a `twine`-clean sdist + wheel and a trusted-publishing [`release`](.github/workflows/release.yml)
-> workflow is in place; the first PyPI publish awaits the one-time trusted-publisher setup and a version
-> tag ([`docs/publishing.md`](docs/publishing.md)). See the [roadmap](#roadmap).
+> builds a `twine`-clean sdist + wheel and ships from a trusted-publishing
+> [`release`](.github/workflows/release.yml) workflow; `0.1.0b1` is on PyPI
+> ([`docs/publishing.md`](docs/publishing.md)). See the [roadmap](#roadmap).
 
 ## Layered packages — install only what you use
 
@@ -143,10 +143,12 @@ reason — `copier update`: a generated project records its answers in `.copier-
 the templates improve you re-run `copier update` inside your project and pull the changes in
 (three-way-merged against your edits).
 
-> **Heads up:** a generated `pyproject.toml` depends on the real `benzene-*` package names, which are
-> **not published to PyPI yet**. Until they are, install the `benzene-*` deps from a local checkout of
-> this repo first (editable) and then install the generated project with `--no-deps` — the generated
-> `README.md` and [`templates/README.md`](templates/README.md) spell out the exact recipe.
+> **Heads up:** a generated `pyproject.toml` depends on the real `benzene-*` package names. Those
+> resolve from PyPI (`0.1.0b1`), so a plain `pip install -e .` works — but pre-1.0 that is a
+> prerelease, and it will not carry anything merged since the last tag. To build against this
+> checkout instead, install the `benzene-*` deps from it (editable) and then install the generated
+> project with `--no-deps` — the generated `README.md` and
+> [`templates/README.md`](templates/README.md) spell out the exact recipe.
 
 See [`templates/README.md`](templates/README.md) for the full question list, the transport details,
 and the local-install recipe.
@@ -180,12 +182,16 @@ packages/
   benzene-pydantic/        benzene/pydantic/        (pydantic request validation)
   benzene-testing/         benzene/testing/         (in-memory test host + fakes)
   benzene-codegen-client/  benzene/codegen_client/  (Contract Document -> typed client, benzene-codegen CLI)
-conformance/         language-neutral spec fixtures (shared)
-examples/            runnable multi-transport cloud examples, each dogfood-tested
+conformance/         vendored snapshot of the language-neutral spec fixtures (+ SPEC_VERSION)
 tests/               cross-package tests + the dependency-free conformance runner
+examples/            runnable multi-transport demos, each dogfood-tested (collected by pytest)
+templates/           Copier project templates (inert Jinja, not collected)
+deploy/mesh/         the Fargate Mesh Host + Terraform
 docs/                guides, reference, and the package rationale
-examples/            runnable demos, including the codegen-client dogfood example
 ```
+
+`AGENTS.md` (and its `CLAUDE.md` pointer) is the working guide for AI coding tools — layout, how to
+run the suite and the conformance runner, and the rules the fixtures are held to.
 
 ## Developing
 
@@ -241,23 +247,32 @@ API. None touch the wire envelope, status vocabulary, or HTTP mapping (the inter
 
 The language-neutral fixtures from the spec live in [`conformance/`](conformance/) and run two ways
 — the dependency-free `python -m tests.conformance_runner`, and granular pytest cases. **Every
-language-neutral fixture is green**: status vocabulary, HTTP + gRPC status mappings, the envelope,
-transport metadata, and all four mesh fixtures (descriptor, trace, collector, issues). Passing these plus the live cross-language
+fixture that applies to this port is green**: status vocabulary, HTTP + gRPC status mappings, the
+envelope, problem details, transport metadata, the contract document and its hash, and four of the
+six mesh fixtures (descriptor, trace, collector, issues). The other two —
+`mesh-service-version-cases.json` and `mesh-version-order-cases.json` — are conditional fixtures the
+canonical `conformance/README.md` requires only of a collector claiming service-version identity
+(mesh §2.4) or a port that orders service versions (§2.5); this port implements neither, and says so
+in `UNRUN_FIXTURES` in `tests/conformance_runner.py`, where a check fails if any *other* vendored
+fixture goes unrun. Passing these plus the live cross-language
 interop checks (send/receive the envelope against a
 running .NET Benzene service) is what "conformant" means — see the spec's
 [porting guide §3](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/porting-guide.md).
 
 ## Roadmap
 
-> **Every language-neutral conformance fixture is green** — status vocabulary, HTTP + gRPC status
-> mappings, the envelope, transport metadata, and all four mesh fixtures (descriptor, trace, collector,
-> issues) — and a first transport binding has shipped for HTTP, all three clouds, gRPC, and Kafka,
-> inbound and outbound. Conformance-green is the whole story for items 1–18 below; it is **not** the
-> same claim as transport-surface or feature parity with the other three ports. `benzene-dotnet` binds
-> roughly three times as many transports and ships circuit breaker, bulkhead, auth, and caching that
-> this port doesn't yet — see "Closing the .NET parity gap" below, which exists specifically to track
-> that difference and is scoped directly off a cross-language capability audit, not off this port's own
-> (already-complete) original plan.
+> **Every conformance fixture that applies to this port is green** — status vocabulary, HTTP + gRPC
+> status mappings, the envelope, problem details, transport metadata, the contract document and its
+> hash, and four of the six mesh fixtures (descriptor, trace, collector, issues); the remaining two
+> are conditional on mesh §2.4/§2.5 capabilities this port does not implement, recorded in
+> `UNRUN_FIXTURES`. A transport binding has shipped for HTTP, all three clouds, gRPC, Kafka and
+> RabbitMQ, inbound and outbound. Conformance-green is the whole story for items 1–18 below; it is
+> **not** the same claim as transport-surface parity with the other three ports. `benzene-dotnet`
+> still binds roughly three times as many transports — see "Closing the .NET parity gap" below, which
+> exists specifically to track that difference and is scoped directly off a cross-language capability
+> audit, not off this port's own (already-complete) original plan. The middleware half of that gap is
+> closed: circuit breaker, bulkhead, auth and caching ship here now (items 23–25,
+> `benzene-resilience`, `benzene-auth`, `benzene-cache`).
 
 1. **(done)** Wire contracts + core model + `BenzeneMessage` envelope, conformance-green.
 2. **(done)** An HTTP inbound binding end-to-end (ASGI), including the status-code mapping.
@@ -309,10 +324,12 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     the reserved `benzene:spec` topic is answered on any transport by `spec_interception`.
 14. **(done)** PyPI packaging — every package carries complete metadata (PEP 639 `license = "MIT"` with
     a bundled `LICENSE`, classifiers, pinned inter-package deps) and builds a clean sdist + wheel that
-    passes `twine check`. A [`release`](.github/workflows/release.yml) workflow builds all ten and
-    publishes them via **trusted publishing** (OIDC, no stored tokens) on a `vX.Y.Z` tag; see
-    [`docs/publishing.md`](docs/publishing.md). The first publish awaits the one-time PyPI
-    trusted-publisher setup and a version tag.
+    passes `twine check`. A [`release`](.github/workflows/release.yml) workflow builds all nineteen
+    and publishes them via **trusted publishing** (OIDC, no stored tokens) on a `vX.Y.Z` tag; see
+    [`docs/publishing.md`](docs/publishing.md). `0.1.0b1` is published and installs from PyPI
+    (verified 2026-08-14). One step is still outstanding before the *next* tag: the pending trusted
+    publisher for `benzene-codegen-client`, added after that release, has to be registered on PyPI
+    or the publish fails for every package at once.
 15. **(done)** The mesh on real infrastructure — a Fargate **Mesh Host** (poller + collector + durable
     EFS-backed store) and a demo fleet on Lambda, stood up by one dispatchable `terraform apply`
     ([`deploy/mesh`](deploy/mesh)). It projects the catalog into the cross-language **mesh-ui** read-model

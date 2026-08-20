@@ -1,11 +1,19 @@
 """``benzene.grpc`` — the gRPC edge of the Benzene wire contract.
 
-Ships the Benzene ↔ gRPC **status mapping** (wire-contracts.md §4.2): :func:`to_grpc` /
-:func:`from_grpc` and the ``benzene-status`` trailer rule that preserves the exact status across the
-codes that collapse to one gRPC code. This is the foundation of a gRPC transport binding; the
-server/client transport over ``grpcio`` builds on top and is the next step.
+Two layers, installed together and used apart:
 
-    pip install benzene-grpc
+* the **status mapping** (wire-contracts.md §4.2): :func:`to_grpc` / :func:`from_grpc` and the
+  ``benzene-status`` trailer rule that preserves the exact status across the codes that collapse to
+  one gRPC code. Dependency-free — it maps to and from gRPC status-code *names*, never ``grpcio``.
+* the **transport binding** over ``grpcio``: :class:`~benzene.grpc.server.BenzeneGrpcHandler` /
+  :func:`~benzene.grpc.server.add_benzene_handler` serve every topic as a generic unary method, and
+  :class:`~benzene.grpc.client.GrpcMessageSender` calls one. Needs the ``[transport]`` extra; the
+  names above import as stubs that raise a pointed ``ImportError`` without it.
+
+::
+
+    pip install benzene-grpc              # the mapping alone
+    pip install "benzene-grpc[transport]" # + the server/client binding
 
 Depends on ``benzene-core``. Contributes the ``benzene.grpc`` subpackage to the shared ``benzene``
 namespace. Mirrors .NET's ``Benzene.Grpc``.

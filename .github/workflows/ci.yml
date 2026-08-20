@@ -20,7 +20,7 @@ jobs:
       - name: Ruff
         run: ruff check .
       - name: Mypy
-        # Reads [tool.mypy] in pyproject: checks the ten packages as one PEP 420 namespace via
+        # Reads [tool.mypy] in pyproject: checks the nineteen packages as one PEP 420 namespace via
         # mypy_path, with third-party imports ignored — no install needed.
         run: mypy
 

@@ -5,7 +5,7 @@ back on the way in. Several Benzene statuses collapse to one gRPC code (all succ
 so a gRPC server MUST also attach a ``benzene-status`` **trailer** carrying the raw status string
 verbatim — and a client, seeing that trailer, uses it in preference to re-deriving from the code. This
 module is the mapping tables plus that trailer rule; the gRPC *transport* binding (server/client over
-``grpcio``) builds on top and is the next step.
+``grpcio``) builds on top, in :mod:`benzene.grpc.server` and :mod:`benzene.grpc.client`.
 
 gRPC status codes are represented by their canonical **names** (``"OK"``, ``"InvalidArgument"``, …) as
 strings, so the mapping needs no ``grpcio`` dependency — a transport binding translates these to

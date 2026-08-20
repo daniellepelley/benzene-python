@@ -79,21 +79,26 @@ in the main Benzene repository:
 - [wire-contracts](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/wire-contracts.md)
   — the message envelope, the status vocabulary, and the HTTP status mapping.
 - [transport-bindings](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/transport-bindings.md)
-  — what a transport binding must satisfy (the HTTP binding is the first one ported here).
+  — what a transport binding must satisfy. Nine bindings here satisfy it: HTTP, gRPC, the three
+  cloud hosts, Kafka, RabbitMQ, the self-hosted SQS consumer, and in-process dispatch.
 
 ## Status
 
 All nineteen packages are published to PyPI as **pre-release betas** (`0.1.0b…` — for early testing,
 not production; `pip install benzene-core benzene-http` works today, see
-[Publishing](publishing.md)). The core, the inbound HTTP binding, the gRPC binding, the three cloud
-hosts (GCP, AWS, Azure — each multi-transport with egress), the mesh module (self-description,
-tracing, and collector feeds), payload/handler versioning, and the Cloud Service Profile's well-known
-HTTP surfaces (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`) are implemented, and every
-language-neutral conformance fixture passes — see the [roadmap](../README.md#roadmap).
+[Publishing](publishing.md)). The core, the inbound + outbound HTTP and gRPC bindings, the three
+cloud hosts (GCP, AWS, Azure — each multi-transport with egress), the Kafka and RabbitMQ transports,
+the mesh module (self-description, tracing, and collector feeds), the cross-cutting middleware
+(resilience, auth, caching, OpenTelemetry, OpenAPI), payload/handler versioning, and the Cloud
+Service Profile's well-known HTTP surfaces (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`)
+are implemented and conformance-green. Every conformance fixture that applies to this port passes —
+two of the fourteen are conditional on mesh capabilities this port does not implement, recorded with
+their reasons in `UNRUN_FIXTURES` — see the [roadmap](../README.md#roadmap).
 
 ## Project internals (maintainers)
 
 - **[Publishing](publishing.md)** — how the nineteen packages are released to PyPI (lockstep
   versioning, trusted publishing).
 - **[Mesh on AWS — plan](mesh-aws-plan.md)** — an internal planning document: the sequenced plan for
-  a multi-service mesh deployed to AWS (thin poller, Fargate collector, reused mesh-ui, Terraform).
+  a multi-service mesh deployed to AWS (thin poller, Fargate collector, reused mesh-ui, Terraform),
+  built and verified live; only its CI automation is still open.

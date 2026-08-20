@@ -149,19 +149,41 @@ response = await app.handle(
 The message version is read inbound from the first present header in `VERSION_HEADER_NAMES` —
 `benzene-version` (the canonical `VERSION_HEADER`, written outbound), then `version`, then `x-version`
 (versioning.md §2) — via `resolve_version(headers)`. Helpers `encode_response(result)` and
-`error_payload(result)` produce the response envelope and the problem-details error body
-(`{"status", "detail"}`) respectively; `decode_response(response)` is the inverse — a response envelope
-back into a `Result` — for any transport whose reply *is* the Benzene envelope verbatim rather than a
-translated status code (an in-process dispatch, a direct AWS Lambda invoke of another Benzene
-function, or a bespoke caller speaking the wire envelope directly).
+`error_payload(result)` produce the response envelope and the RFC 9457 problem document that is a
+failure's body (`{type, title, detail, benzeneStatus, errors[]}` — see
+[`benzene.results`](results.md#problem-details-on-the-wire-wire-contracts-13); RFC 9457's integer
+`status` is added only by an HTTP binding). `decode_response(response)` is the inverse — a response
+envelope back into a `Result` — for any transport whose reply *is* the Benzene envelope verbatim
+rather than a translated status code (an in-process dispatch, a direct AWS Lambda invoke of another
+Benzene function, or a bespoke caller speaking the wire envelope directly).
 
 ```python
 from benzene.core import decode_response, encode_response
 from benzene.results import Result
 
 envelope = encode_response(Result.bad_request("sku is required"))
+# {"statusCode": "bad-request", "isSuccessful": False, "headers": {...}, "body": "..."}
 result = decode_response(envelope)
-# Result(status="bad-request", payload=None, errors=("sku is required",))
+# Result(status="bad-request", payload=None, errors=(BenzeneError("sku is required"),))
+```
+
+### `isSuccessful` is the receiver's signal, not the status text
+
+The response envelope carries `isSuccessful`, and wire-contracts §1.2 makes it **authoritative**: a
+receiver MUST prefer it over anything it derives from `statusCode`. `successful_from(envelope)` is
+that rule — it reads the stated member, and falls back to the status class only for a sender that
+predates it (an older peer, or a port that has not adopted it).
+
+This matters for an application-defined status, which is outside the shared vocabulary and so means
+nothing to a receiver classifying by string alone. Every transport binding here reads it, which is
+what makes `Result.set(status, payload, successful=True)` survive the round trip instead of being
+nacked by SQS, redelivered by Pub/Sub, or answered as gRPC `Internal`.
+
+```python
+from benzene.core import successful_from
+
+successful_from({"statusCode": "cache-warm", "isSuccessful": True})   # True  — stated
+successful_from({"statusCode": "created"})                            # True  — derived (older peer)
 ```
 
 ## Composition root

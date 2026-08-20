@@ -124,9 +124,10 @@ app = BenzeneHttpApp(
   when healthy and `503` when not. The full aggregate is returned either way (it is run directly, so an
   unhealthy report survives — the envelope drops a failure payload). Enabled by passing `health`.
   Note the two health faces differ on failure: this HTTP surface returns the full aggregate on `503`,
-  while the transport-neutral `benzene:healthcheck` envelope reply carries the standard failure body
-  `{status, detail}` (an unhealthy `Result` is `service-unavailable`, and the envelope drops its
-  payload). Both name the failing checks; the HTTP surface additionally keeps the per-check breakdown.
+  while the transport-neutral `benzene:healthcheck` envelope reply carries the standard failure body —
+  the RFC 9457 problem document (`{type, title, detail, benzeneStatus, errors[]}`, wire-contracts
+  §1.3) — because an unhealthy `Result` is `service-unavailable` and the envelope drops its payload.
+  Both name the failing checks; the HTTP surface additionally keeps the per-check breakdown.
 - **`GET /benzene/spec`** (R5) — the derived [`ServiceSpec`](core.md#service-spec): `{service, topics}`
   with each topic's request/response JSON schema, projected from the registry (never hand-written).
   Enabled by passing `spec` (a `ServiceSpec` or a callable returning one).
