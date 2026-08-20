@@ -69,6 +69,27 @@ def _app() -> BenzeneMessageApplication:
     return BenzeneMessageApplication(register_canonical(Registry()))
 
 
+def _cases(data: dict, key: str, fixture: str, failures: list[str]) -> list:
+    """The fixture's list under ``key``, recording a failure if the fixture has no such key.
+
+    ``data.get(key, [])`` iterates nothing when the key is absent, so a runner that loops over it
+    checks nothing and reports no failures - indistinguishable from a clean pass. That is not a
+    hypothetical: the Go and TypeScript descriptor runners each spent the whole producer/consumer
+    role inversion reading a hash-property key the canonical fixture had renamed, silently asserting
+    nothing while CI stayed green. These fixtures are vendored snapshots of a canonical set that
+    other people rename, so the runner is the only thing positioned to notice the drift.
+
+    An empty list that the fixture really does carry is fine and iterates as before; it is the
+    absent key that is a defect.
+    """
+    if key not in data:
+        failures.append(
+            f"{fixture}: fixture has no {key!r} - the runner and the fixture have drifted"
+        )
+        return []
+    return data[key]
+
+
 def run_status_vocabulary() -> list[str]:
     failures: list[str] = []
     data = _load("status-vocabulary.json")
@@ -85,14 +106,14 @@ def run_http_mapping() -> list[str]:
     failures: list[str] = []
     data = _load("http-status-mapping.json")
     # forward: benzene status -> HTTP code (code carried as a string in the fixture)
-    for case in data.get("forward", []):
+    for case in _cases(data, "forward", "http-status-mapping", failures):
         # isSuccessful only distinguishes the two '<unknown>' rows (see the fixture's description);
         # for a known status it is absent and the default failure treatment is irrelevant.
         got, expected = to_http(case["from"], case.get("isSuccessful")), int(case["to"])
         if got != expected:
             failures.append(f"benzene->http: {case['from']!r} -> {got}, expected {expected}")
     # reverse: HTTP code -> benzene status
-    for case in data.get("reverse", []):
+    for case in _cases(data, "reverse", "http-status-mapping", failures):
         got, expected = from_http(int(case["from"])), case["to"]
         if got != expected:
             failures.append(f"http->benzene: {case['from']} -> {got!r}, expected {expected!r}")
@@ -300,9 +321,9 @@ def run_transport_metadata() -> list[str]:
         if "version" in expected and resolve_version(headers) != expected["version"]:
             failures.append(f"metadata[{name}]: version {resolve_version(headers)!r}, expected {expected['version']!r}")
 
-    for case in data.get("metadataCases", []):
+    for case in _cases(data, "metadataCases", "transport-metadata", failures):
         check(case, MetadataKeys())
-    for case in data.get("overrideCases", []):
+    for case in _cases(data, "overrideCases", "transport-metadata", failures):
         check(case, MetadataKeys(topic=case["metadataKeys"]["topic"]))
     return failures
 
@@ -313,7 +334,7 @@ def run_contract_document_cases() -> list[str]:
     data = _load("contract-document-cases.json")
     documents = {doc_id: parse_document(raw) for doc_id, raw in data["documents"].items()}
 
-    for case in data.get("parseCases", []):
+    for case in _cases(data, "parseCases", "contract-document", failures):
         name = case["name"]
         document = documents[case["documentRef"]]
 
@@ -362,7 +383,7 @@ def run_contract_document_cases() -> list[str]:
             if "version" in expected_event and actual_event.version != expected_event["version"]:
                 failures.append(f"parseCases[{name}]: event {actual_event.topic} version mismatch")
 
-    for case in data.get("topicScopeCases", []):
+    for case in _cases(data, "topicScopeCases", "contract-document", failures):
         name = case["name"]
         document = documents[case["documentRef"]]
         options = case.get("options", {})
@@ -376,7 +397,7 @@ def run_contract_document_cases() -> list[str]:
         if actual_topics != expected_topics:
             failures.append(f"topicScopeCases[{name}]: {actual_topics} != {expected_topics}")
 
-    for case in data.get("schemaClosureCases", []):
+    for case in _cases(data, "schemaClosureCases", "contract-document", failures):
         name = case["name"]
         document = documents[case["documentRef"]]
         request = document.find_request(case["topic"])
