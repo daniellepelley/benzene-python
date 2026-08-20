@@ -89,8 +89,8 @@ def test_breaker_half_opens_after_timeout_and_closes_on_success() -> None:
     assert breaker.state is CircuitState.OPEN
 
     clock.advance(10)  # reset window elapsed → half-open on next read
-    # noqa-for-mypy: the assert above narrows breaker.state to OPEN, and a type checker cannot see
-    # that advancing the clock re-reads it. The state genuinely changes; the narrowing is the fiction.
+    # The assert above narrows breaker.state to OPEN, and a type checker cannot see that advancing
+    # the clock re-reads it. The state genuinely changes; the narrowing is the fiction.
     assert breaker.state is CircuitState.HALF_OPEN  # type: ignore[comparison-overlap]
 
     # The probe succeeds → circuit closes and normal traffic resumes.

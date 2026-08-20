@@ -13,6 +13,8 @@ import pytest
 
 pytest.importorskip("pydantic")
 
+from typing import Any
+
 from benzene.core import BenzeneMessageApplication, Registry, message  # noqa: E402
 from benzene.pydantic import format_validation_errors, validated  # noqa: E402
 from benzene.results import Result  # noqa: E402
@@ -129,7 +131,12 @@ def test_format_validation_errors_is_readable() -> None:
     from pydantic import ValidationError
 
     try:
-        M(n="x")  # type: ignore[arg-type]  # the wrong type IS the test
+        # The wrong type IS the test, so it is handed over as Any. Written inline as `M(n="x")` it
+        # needs a `# type: ignore` that fires only where pydantic is installed - and CI's lint job
+        # does not install it, so the ignore reads as unused there and warn_unused_ignores fails the
+        # build. `dict[str, Any]` is an error in neither environment, which is what makes it stable.
+        invalid: dict[str, Any] = {"n": "x"}
+        M(**invalid)
     except ValidationError as exc:
         messages = format_validation_errors(exc)
         assert len(messages) == 1
