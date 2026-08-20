@@ -151,7 +151,8 @@ handler = to_lambda_handler(build_aws_orders_app())
 
 Point your Lambda's handler string at this attribute — `main.handler` (or `aws_orders.main.handler`
 if you package the module inside a package). That single callable dispatches by **event shape**
-([transport-bindings](https://benzene.app/docs/specification/transport-bindings)):
+([transport-bindings](https://benzene.app/docs/specification/transport-bindings)). For the three
+sources this guide wires:
 
 - an **API Gateway** event → route → topic → handler; the Benzene status maps to an HTTP status code
   and the result comes back as an API Gateway proxy response;
@@ -161,8 +162,9 @@ if you package the module inside a package). That single callable dispatches by 
 - an **SNS** event → one invocation per record (topic from the `topic` attribute); SNS is
   fire-and-forget, so there is no response — a failing handler **raises** so Lambda retries.
 
-Classification happens in `benzene.aws.event_source(event)`; an event that is none of the three
-raises `ValueError`.
+Classification happens in `benzene.aws.event_source(event)`, which also recognises the S3,
+EventBridge, DynamoDB Streams, Kinesis, Kafka/MSK, and direct-invoke shapes (section 7); an event
+that matches none of them raises `ValueError`.
 
 ## 5. Test every source in memory (dogfooded)
 
@@ -285,7 +287,9 @@ however you already do (a zip, container image, SAM, CDK, Terraform, or the cons
 
 ## 7. Supported event sources
 
-`benzene.aws` binds three Lambda event sources, all through the one function:
+`benzene.aws` binds **nine** Lambda event sources — API Gateway, SQS, SNS, S3, EventBridge, DynamoDB
+Streams, Kinesis, Kafka/MSK, and direct invoke — all through the one function; the
+[`benzene.aws` reference](reference/aws.md#overview) covers each. The three this guide uses:
 
 | Source | Topic comes from | Response | On handler failure |
 | --- | --- | --- | --- |
@@ -356,9 +360,9 @@ execution-role IAM to receive requests.
   `FakeMessageSender` via `create_test_host(OrdersStartUp).with_services(...)` instead.
 - **`ModuleNotFoundError: No module named 'boto3'` at first publish** — `boto3` is an optional extra.
   Install `benzene-aws[boto3]` and include it in your deployment bundle.
-- **`ValueError: Unrecognised Lambda event` at runtime** — the payload wasn't API Gateway, SQS, or
-  SNS shaped. Check the trigger wiring; a test event pasted in the console must match one of the real
-  event shapes (use the `*EventBuilder`s as a reference).
+- **`ValueError: Unrecognised Lambda event` at runtime** — the payload matched none of the nine
+  supported event shapes. Check the trigger wiring; a test event pasted in the console must match one
+  of the real event shapes (use the `*EventBuilder`s as a reference).
 - **SQS/SNS message never routes to a handler** — the topic is read from the `topic` message
   *attribute*, not the body. Confirm the producer sets it (Benzene clients do automatically) and that
   a handler is registered for that topic. An unknown topic yields `not-found`, which for SQS surfaces
