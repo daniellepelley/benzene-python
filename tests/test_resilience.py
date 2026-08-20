@@ -19,6 +19,7 @@ from benzene.resilience import (
     Saga,
     circuit_breaker_interception,
     idempotency,
+    idempotency_interception,
     rate_limit_interception,
     with_bulkhead,
     with_circuit_breaker,
@@ -133,6 +134,135 @@ def test_breaker_records_and_reraises_exceptions() -> None:
     except RuntimeError:
         pass
     assert breaker.state is CircuitState.OPEN  # the fault counted toward tripping
+
+
+def test_half_open_admits_exactly_one_probe() -> None:
+    """Half-open is a single-probe state: a second caller is rejected while the probe is in flight."""
+    clock = ManualClock()
+    breaker = CircuitBreaker(failure_threshold=1, reset_timeout=10, clock=clock)
+    ran = {"n": 0}
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail() -> Result:
+        return Result.service_unavailable("down")
+
+    async def probe() -> Result:
+        ran["n"] += 1
+        entered.set()
+        await release.wait()
+        return Result.ok()
+
+    async def second_caller() -> Result:  # pragma: no cover - must never run
+        ran["n"] += 1
+        return Result.ok()
+
+    async def scenario() -> Result:
+        await breaker.execute(fail)  # opens at t=0
+        clock.advance(10)  # the window elapsed → the next call is admitted as the probe
+        probing = asyncio.create_task(breaker.execute(probe))
+        await entered.wait()  # the probe is parked inside the breaker
+        rejected = await breaker.execute(second_caller)
+        release.set()
+        await probing
+        return rejected
+
+    rejected = run(scenario())
+    assert rejected.status == Status.SERVICE_UNAVAILABLE
+    assert "circuit breaker is open" in rejected.errors[0]
+    assert ran["n"] == 1  # only the probe ran; the second caller's work never started
+    assert breaker.state is CircuitState.CLOSED  # the probe succeeded → closed
+
+
+def test_breaker_releases_the_probe_when_it_is_cancelled() -> None:
+    """A cancelled probe must not wedge the breaker into rejecting 100% of traffic."""
+    clock = ManualClock()
+    breaker = CircuitBreaker(failure_threshold=1, reset_timeout=10, clock=clock)
+    entered = asyncio.Event()
+
+    async def fail() -> Result:
+        return Result.service_unavailable("down")
+
+    async def parked_probe() -> Result:  # pragma: no cover - cancelled, never returns
+        entered.set()
+        await asyncio.Event().wait()  # never set: the task is cancelled instead
+        return Result.ok()
+
+    async def ok() -> Result:
+        return Result.ok()
+
+    async def scenario() -> Result:
+        await breaker.execute(fail)  # opens at t=0
+        clock.advance(10)
+        probing = asyncio.create_task(breaker.execute(parked_probe))
+        await entered.wait()
+        probing.cancel()
+        await asyncio.gather(probing, return_exceptions=True)
+        # The probe proved nothing: back to open with a fresh window, not stuck half-open.
+        assert breaker.state is CircuitState.OPEN
+        clock.advance(10)
+        return await breaker.execute(ok)
+
+    assert run(scenario()).is_successful  # admitted again — not wedged
+    assert breaker.state is CircuitState.CLOSED
+
+
+def test_breaker_ignores_a_stale_success_from_before_it_tripped() -> None:
+    """An in-flight call admitted while closed must not erase an open window it predates."""
+    clock = ManualClock()
+    breaker = CircuitBreaker(failure_threshold=2, reset_timeout=10, clock=clock)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_ok() -> Result:
+        entered.set()
+        await release.wait()
+        return Result.ok()
+
+    async def fail() -> Result:
+        return Result.service_unavailable("down")
+
+    async def trip_while_the_slow_call_is_in_flight() -> None:
+        await entered.wait()
+        await breaker.execute(fail)
+        await breaker.execute(fail)  # threshold reached → open
+        assert breaker.state is CircuitState.OPEN
+        release.set()
+
+    async def scenario() -> None:
+        await asyncio.gather(breaker.execute(slow_ok), trip_while_the_slow_call_is_in_flight())
+
+    run(scenario())
+    assert breaker.state is CircuitState.OPEN  # the stale success is ignored
+
+
+def test_breaker_ignores_a_stale_failure_while_open() -> None:
+    """A stale failure must not re-trip the breaker and silently extend the open window."""
+    clock = ManualClock()
+    breaker = CircuitBreaker(failure_threshold=1, reset_timeout=10, clock=clock)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_fail() -> Result:
+        entered.set()
+        await release.wait()
+        return Result.timeout("slow")
+
+    async def fail() -> Result:
+        return Result.service_unavailable("down")
+
+    async def trip_while_the_slow_call_is_in_flight() -> None:
+        await entered.wait()
+        await breaker.execute(fail)  # opens at t=0
+        clock.advance(5)  # halfway through the open window
+        release.set()
+
+    async def scenario() -> None:
+        await asyncio.gather(breaker.execute(slow_fail), trip_while_the_slow_call_is_in_flight())
+
+    run(scenario())
+    clock.advance(5)  # t=10: the window opened at t=0 has now fully elapsed
+    assert breaker.state is CircuitState.HALF_OPEN  # not pushed out to t=15 by the stale failure
 
 
 def test_breaker_interception_short_circuits_the_pipeline() -> None:
@@ -332,6 +462,135 @@ def test_idempotency_passes_keyless_messages_through() -> None:
     assert runs["n"] == 2  # nothing to dedupe on → both ran
 
 
+def test_idempotency_runs_the_handler_once_for_concurrent_duplicates() -> None:
+    """Two deliveries of one key in flight at once: the handler runs once, the twin gets a conflict."""
+    store = InMemoryIdempotencyStore()
+    runs = {"n": 0}
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(_request) -> Result:
+        runs["n"] += 1
+        if runs["n"] == 1:
+            entered.set()
+            await release.wait()  # park the first delivery inside the handler
+        return Result.created({"attempt": runs["n"]})
+
+    pipeline = _dedupe_pipeline(store, handler)
+    headers = {"idempotency-key": "abc"}
+    first = Context("t", {}, headers=headers)
+    second = Context("t", {}, headers=headers)
+
+    async def deliver_the_twin() -> None:
+        await entered.wait()  # the first delivery is inside the handler, nothing stored yet
+        await pipeline.handle(second)
+        release.set()
+
+    async def scenario() -> None:
+        await asyncio.gather(pipeline.handle(first), deliver_the_twin())
+
+    run(scenario())
+
+    assert runs["n"] == 1  # "charge the card" happened exactly once
+    assert first.result is not None and first.result.payload == {"attempt": 1}
+    assert second.result is not None and second.result.status == Status.CONFLICT
+    assert "in flight" in second.result.errors[0]
+
+
+def test_idempotency_replays_a_finished_result_after_the_reservation() -> None:
+    store = InMemoryIdempotencyStore()
+    runs = {"n": 0}
+
+    async def handler(_request) -> Result:
+        runs["n"] += 1
+        return Result.created({"attempt": runs["n"]})
+
+    pipeline = _dedupe_pipeline(store, handler)
+    headers = {"idempotency-key": "abc"}
+    run(pipeline.handle(Context("t", {}, headers=headers)))
+    second = Context("t", {}, headers=headers)
+    run(pipeline.handle(second))
+
+    # A settled key replays the stored result — the in-progress marker never outlives the delivery.
+    assert runs["n"] == 1
+    assert second.result is not None and second.result.payload == {"attempt": 1}
+
+
+def test_idempotency_frees_the_key_when_the_handler_raises() -> None:
+    """A raising delivery must not leave the key reserved forever — the redelivery has to run."""
+    store = InMemoryIdempotencyStore()
+    middleware = idempotency(store)
+
+    async def explode() -> None:
+        raise RuntimeError("boom")
+
+    context = Context("t", {}, headers={"idempotency-key": "abc"})
+    try:
+        run(middleware(context, explode))
+        raise AssertionError("expected the exception to propagate")
+    except RuntimeError:
+        pass
+
+    assert run(store.get("abc")) is None  # the reservation was released
+
+    runs = {"n": 0}
+
+    async def handler(_request) -> Result:
+        runs["n"] += 1
+        return Result.ok()
+
+    pipeline = _dedupe_pipeline(store, handler)
+    run(pipeline.handle(Context("t", {}, headers={"idempotency-key": "abc"})))
+    assert runs["n"] == 1  # the redelivery ran, rather than seeing a wedged reservation
+
+
+def test_idempotency_falls_back_to_the_message_id_header() -> None:
+    store = InMemoryIdempotencyStore()
+    runs = {"n": 0}
+
+    async def handler(_request) -> Result:
+        runs["n"] += 1
+        return Result.ok({"attempt": runs["n"]})
+
+    pipeline = _dedupe_pipeline(store, handler)
+    headers = {"message-id": "m-1"}  # no idempotency-key → the transport's message id keys it
+    run(pipeline.handle(Context("t", {}, headers=headers)))
+    second = Context("t", {}, headers=headers)
+    run(pipeline.handle(second))
+
+    assert runs["n"] == 1
+    assert second.result is not None and second.result.payload == {"attempt": 1}
+
+    # An explicit idempotency-key wins over the fallback: same message-id, new key → a fresh run.
+    third = Context("t", {}, headers={"message-id": "m-1", "idempotency-key": "k-2"})
+    run(pipeline.handle(third))
+    assert runs["n"] == 2
+    assert third.result is not None and third.result.payload == {"attempt": 2}
+
+
+def test_idempotency_remembers_failures_when_remember_when_says_so() -> None:
+    store = InMemoryIdempotencyStore()
+    outcomes = iter([Result.not_found("gone"), Result.ok({"retried": True})])
+
+    async def handler(_request) -> Result:
+        return next(outcomes)
+
+    registry = Registry().register("t", handler)
+    pipeline = MiddlewarePipeline(
+        [idempotency(store, remember_when=lambda result: True)]  # remember every outcome
+    ).use(message_router(registry))
+    headers = {"idempotency-key": "abc"}
+
+    first = Context("t", {}, headers=headers)
+    run(pipeline.handle(first))
+    second = Context("t", {}, headers=headers)
+    run(pipeline.handle(second))
+
+    assert first.result is not None and first.result.status == Status.NOT_FOUND
+    # The custom predicate pinned the failure, so the redelivery replays it instead of retrying.
+    assert second.result is not None and second.result.status == Status.NOT_FOUND
+
+
 def test_idempotency_store_expires_entries() -> None:
     clock = ManualClock()
     store = InMemoryIdempotencyStore(ttl=5, clock=clock)
@@ -339,6 +598,11 @@ def test_idempotency_store_expires_entries() -> None:
     assert run(store.get("k")) is not None
     clock.advance(5)
     assert run(store.get("k")) is None  # TTL elapsed → forgotten
+
+
+def test_idempotency_interception_is_the_preferred_alias() -> None:
+    # D8: the middleware factories are named ``*_interception``; the old name stays working.
+    assert idempotency_interception is idempotency
 
 
 # --- saga --------------------------------------------------------------------------------------

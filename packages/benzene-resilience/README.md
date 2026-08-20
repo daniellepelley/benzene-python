@@ -23,7 +23,7 @@ from benzene.resilience import (
     RateLimiter,
     rate_limit_interception,
     InMemoryIdempotencyStore,
-    idempotency,
+    idempotency_interception,
     Saga,
 )
 
@@ -33,7 +33,7 @@ definition.middleware += [
         RateLimiter(refill_rate=100, burst=200)
     ),  # too-many-requests at the edge
     bulkhead_interception(Bulkhead(max_concurrency=20, max_queue=40)),  # shed load past capacity
-    idempotency(InMemoryIdempotencyStore(ttl=3600)),  # dedupe redelivered messages
+    idempotency_interception(InMemoryIdempotencyStore(ttl=3600)),  # dedupe redeliveries
 ]
 
 # Outbound: decorate a MessageSender, same shape as with_retry.
@@ -49,8 +49,12 @@ sender = with_circuit_breaker(orders_client, failure_threshold=5, reset_timeout=
 - **Rate limiting** — a continuous-refill token bucket (`refill_rate`/sec, tolerating a `burst`) that
   enforces `too-many-requests` at the edge; the concrete producer of that status the port was missing.
 - **Idempotency** — keys each invocation on an idempotency header and replays the first result for a
-  redelivery, so at-least-once transports don't run a handler twice. Only successes are remembered, so
-  a transient failure stays retryable. The store is a pluggable async port (in-memory impl included).
+  redelivery, so at-least-once transports don't run a handler twice. The key is *reserved* atomically
+  before the handler runs, so two deliveries that overlap can't both run it: the duplicate gets
+  `conflict` ("duplicate delivery is already in flight") and is redelivered once the first finishes.
+  Only successes are remembered by default, so a transient failure — or a handler that raises —
+  releases the key and stays retryable. The store is a pluggable async port (in-memory impl included).
+  (`idempotency_interception` is the preferred name; the original `idempotency` still works.)
 - **Saga** — sequence steps that each know how to undo themselves; a later failure compensates the
   completed steps in reverse. In-process (not durable) and `Result`-shaped — `execute` returns a
   `SagaResult`, it never raises for a step failure.

@@ -71,6 +71,12 @@ class CircuitBreaker:
     The object is deliberately lock-free: every state transition is a synchronous read-modify-write
     around the single ``await run()``, matching the cooperative, single-threaded asyncio model the
     rest of the pipeline assumes.
+
+    Each outcome is attributed to the state its call was *admitted* in, because concurrent calls
+    resolve out of order: an outcome from a call admitted while closed is **stale** once the breaker
+    has tripped — it neither closes the circuit nor re-trips it into a longer open window. Only the
+    single half-open probe moves a tripped breaker, and a probe that is cancelled (no outcome at all)
+    simply releases the probe slot and restarts the open window.
     """
 
     def __init__(
@@ -106,53 +112,87 @@ class CircuitBreaker:
         A tripping failure (or a raised exception) advances the breaker toward open; anything else
         closes/keeps it closed. An exception is re-raised after being recorded so the surrounding
         envelope maps it — the breaker only *observes* faults, it does not swallow them.
+
+        A call that ends *without* an outcome — cancellation, which arrives as
+        ``asyncio.CancelledError`` (a ``BaseException``, not an ``Exception``) — is not a
+        dependency fault and is not recorded as one; it only releases the half-open probe slot so a
+        cancelled probe can never wedge the breaker into rejecting every later call.
         """
-        if not self._admit():
+        admitted, is_probe = self._admit()
+        if not admitted:
             return Result.service_unavailable("circuit breaker is open")
         try:
             result = await run()
         except Exception:
-            self._on_failure()
+            self._on_failure(is_probe)
             raise
-        self._record(result)
+        except BaseException:  # cancellation (and friends): no outcome to record
+            self._abandon(is_probe)
+            raise
+        self._record(result, is_probe)
         return result
 
-    def _admit(self) -> bool:
-        """Decide whether a call may proceed, transitioning ``open`` → ``half-open`` when due."""
+    def _admit(self) -> tuple[bool, bool]:
+        """Decide whether a call may proceed, transitioning ``open`` → ``half-open`` when due.
+
+        Returns ``(admitted, is_probe)``. ``is_probe`` marks *this* call as the single half-open
+        probe, so its outcome is the only one allowed to move a tripped breaker — an outcome from a
+        call admitted earlier (while the breaker was still closed) is stale by the time it lands.
+        """
         if self._state is CircuitState.OPEN:
             if not self._reset_elapsed():
-                return False
+                return False, False
             # The open window has elapsed: admit exactly one probe.
             self._state = CircuitState.HALF_OPEN
             self._probing = True
-            return True
+            return True, True
         if self._state is CircuitState.HALF_OPEN:
             # A probe is already in flight — keep rejecting until it resolves.
             if self._probing:
-                return False
+                return False, False
             self._probing = True
-            return True
-        return True  # CLOSED
+            return True, True
+        return True, False  # CLOSED
 
-    def _record(self, result: Result) -> None:
+    def _record(self, result: Result, is_probe: bool) -> None:
         if result.is_successful or result.status not in self._trip_on:
-            self._on_success()
+            self._on_success(is_probe)
         else:
-            self._on_failure()
+            self._on_failure(is_probe)
 
-    def _on_success(self) -> None:
+    def _on_success(self, is_probe: bool) -> None:
+        if is_probe:
+            self._probing = False
+        elif self._state is not CircuitState.CLOSED:
+            # Stale: this call was admitted before the breaker tripped, so its success describes a
+            # dependency state that predates the trip. Only a probe reopens the door.
+            return
         self._consecutive_failures = 0
-        self._probing = False
         self._state = CircuitState.CLOSED
 
-    def _on_failure(self) -> None:
-        self._probing = False
-        if self._state is CircuitState.HALF_OPEN:
-            self._trip()
+    def _on_failure(self, is_probe: bool) -> None:
+        if is_probe:
+            self._probing = False
+            self._trip()  # the probe failed → straight back to open, window restarted
+            return
+        if self._state is not CircuitState.CLOSED:
+            # Stale failure landing while the breaker is already open/half-open: it is part of the
+            # burst that tripped it, so it must not re-trip and silently extend the open window.
             return
         self._consecutive_failures += 1
         if self._consecutive_failures >= self._failure_threshold:
             self._trip()
+
+    def _abandon(self, is_probe: bool) -> None:
+        """Release an admitted call that produced no outcome (it was cancelled).
+
+        Nothing is counted against the dependency; a cancelled *probe* returns the breaker to open
+        with a fresh window, so the next caller after ``reset_timeout`` probes again.
+        """
+        if not is_probe:
+            return
+        self._probing = False
+        self._trip()
 
     def _trip(self) -> None:
         self._state = CircuitState.OPEN

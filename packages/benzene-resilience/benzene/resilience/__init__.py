@@ -6,7 +6,8 @@ distribution (``benzene-resilience``) adds the rest of the resilience surface th
 * **Circuit breaker** — stop calling a failing dependency; fail fast, then probe for recovery.
 * **Bulkhead** — cap concurrent invocations so one slow dependency can't exhaust the service.
 * **Rate limiting** — a token bucket that enforces ``too-many-requests`` at the edge.
-* **Idempotency** — dedupe redelivered messages by replaying the first result.
+* **Idempotency** — dedupe redelivered messages by replaying the first result
+  (``idempotency_interception``; the older ``idempotency`` name still works).
 * **Saga** — an in-process compensating sequence (undo completed steps when a later one fails).
 
 Every gating policy (circuit breaker, bulkhead, rate limiter) exposes one ``execute(run)`` seam and
@@ -38,9 +39,11 @@ from .circuit_breaker import (
 )
 from .idempotency import (
     DEFAULT_KEY_HEADERS,
+    IN_PROGRESS,
     IdempotencyStore,
     InMemoryIdempotencyStore,
     idempotency,
+    idempotency_interception,
 )
 from .rate_limit import (
     RateLimiter,
@@ -77,9 +80,11 @@ __all__ = [
     "with_rate_limit",
     # idempotency
     "DEFAULT_KEY_HEADERS",
+    "IN_PROGRESS",
     "IdempotencyStore",
     "InMemoryIdempotencyStore",
     "idempotency",
+    "idempotency_interception",
     # saga
     "Saga",
     "SagaAction",
