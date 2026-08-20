@@ -54,7 +54,16 @@ def validated(model: type[M]) -> Callable[[Callable[[M], Awaitable[Result]]], Ha
     is answered with ``validation-error`` and the field messages, without invoking the handler. Apply
     ``@message(topic)`` *above* ``@validated(model)`` and leave ``request_type`` unset — the raw
     decoded body flows in and this decorator validates it.
+
+    ``model`` must be a pydantic ``BaseModel`` subclass: the bare form ``@validated`` (no model) would
+    otherwise make the handler function itself the "model" and fail on every request at runtime, so it
+    raises :class:`TypeError` here — at decoration/import time.
     """
+    if not (isinstance(model, type) and issubclass(model, BaseModel)):
+        raise TypeError(
+            f"@validated needs a pydantic model class, got {model!r}. "
+            "Write @validated(YourModel) — the bare form @validated is not supported."
+        )
 
     def decorate(fn: Callable[[M], Awaitable[Result]]) -> Handler:
         async def wrapper(request: object) -> Result:

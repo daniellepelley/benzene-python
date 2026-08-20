@@ -110,3 +110,25 @@ def test_format_validation_errors_is_readable() -> None:
         messages = format_validation_errors(exc)
         assert len(messages) == 1
         assert messages[0].startswith("n: ")
+
+
+# --- @validated needs a model class (audit D3) ---------------------------------------------------
+# The bare form `@validated` makes the decorated function itself the "model", which only fails later,
+# per request, as `service-unavailable: object function can't be used in 'await' expression`. The
+# decorator rejects that at decoration/import time instead.
+
+
+def test_bare_validated_raises_at_decoration_time() -> None:
+    with pytest.raises(TypeError, match="the bare form @validated is not supported"):
+
+        @validated  # type: ignore[arg-type]  # the mistake under test: no model argument
+        async def handler(order: PlaceOrder) -> Result:
+            return Result.ok()
+
+
+def test_validated_rejects_a_non_model_argument() -> None:
+    with pytest.raises(TypeError, match="@validated needs a pydantic model class"):
+        validated(dict)  # type: ignore[type-var]  # a type, but not a BaseModel subclass
+
+    with pytest.raises(TypeError, match="got 'PlaceOrder'"):
+        validated("PlaceOrder")  # type: ignore[arg-type]  # not even a class

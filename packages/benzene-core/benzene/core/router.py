@@ -30,7 +30,11 @@ def message_router(
 
         definition = selector(registry, context.topic, context.version)
         if definition is None:
-            context.result = Result.not_found(f"No handler found for topic {context.topic}")
+            # Only now — after the selector (including a highest_version fallback) has missed — is it
+            # worth asking *why*: a registered topic with other versions means the version dimension,
+            # not the topic, is the miss, and saying so saves the developer staring at a topic that is
+            # plainly registered. Selection behaviour is untouched; this is the message only.
+            context.result = Result.not_found(_not_found_detail(registry, context))
             return
 
         # Mapping the payload onto the handler's declared type can fail (e.g. a required field is
@@ -50,3 +54,16 @@ def message_router(
         # Terminal middleware: deliberately does not call next().
 
     return middleware
+
+
+def _not_found_detail(registry: Registry, context: Context) -> str:
+    """The ``not-found`` detail for an unresolved topic — version-aware when the topic is registered."""
+    registered = sorted(d.version or "(unversioned)" for d in registry.versions_of(context.topic))
+    if not registered:
+        return f"No handler found for topic {context.topic} (no handlers registered for this topic)"
+    version = context.version or "(unversioned)"
+    return (
+        f"No handler for topic {context.topic!r} version {version!r}; "
+        f"registered versions: {registered}. Send the version in the 'benzene-version' header, "
+        "or register an unversioned handler."
+    )

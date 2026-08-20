@@ -433,3 +433,43 @@ def test_unversioned_response_has_no_version_header() -> None:
     app = BenzeneMessageApplication(Registry().register("api:thing", handler))
     response = asyncio.run(app.handle({"topic": "api:thing", "headers": {}, "body": "{}"}))
     assert "benzene-version" not in response["headers"]  # nothing declared -> nothing echoed
+
+
+# --- a version miss says so (audit D5) -----------------------------------------------------------
+# A wrongly-versioned message for a registered topic used to answer "No handler found for topic X",
+# which points the developer at a topic that *is* registered and hides the version dimension.
+
+
+def _not_found_detail(app: BenzeneMessageApplication, topic: str, headers: dict[str, str]) -> str:
+    response = asyncio.run(app.handle({"topic": topic, "headers": headers, "body": "{}"}))
+    assert response["statusCode"] == "not-found"
+    return json.loads(response["body"])["detail"]
+
+
+def test_unknown_version_detail_lists_the_registered_versions() -> None:
+    detail = _not_found_detail(_selector_app(None), "api:thing", {"version": "v9"})
+    assert "api:thing" in detail and "'v9'" in detail
+    assert "v1" in detail and "v2" in detail and "v10" in detail  # every registered version named
+    assert "benzene-version" in detail                             # …and how to send the version
+
+
+def test_unversioned_message_to_a_versioned_topic_says_unversioned() -> None:
+    detail = _not_found_detail(_selector_app(None), "api:thing", {})  # no version header at all
+    assert "(unversioned)" in detail
+    assert "v1" in detail and "v10" in detail
+
+
+def test_unregistered_topic_keeps_the_plain_message() -> None:
+    detail = _not_found_detail(_selector_app(None), "api:missing", {"version": "v9"})
+    assert detail.startswith("No handler found for topic api:missing")
+    assert "no handlers registered for this topic" in detail
+    assert "benzene-version" not in detail  # nothing version-shaped to say about an unknown topic
+
+
+def test_the_richer_message_is_built_only_after_the_selector_misses() -> None:
+    # highest_version resolves v9 to the latest handler, so no not-found message is built at all.
+    app = _selector_app(highest_version)
+    response = asyncio.run(
+        app.handle({"topic": "api:thing", "headers": {"version": "v9"}, "body": "{}"})
+    )
+    assert response["statusCode"] == "ok" and json.loads(response["body"]) == {"served": "v10"}

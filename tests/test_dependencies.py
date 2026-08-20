@@ -7,8 +7,11 @@ transient is fresh on every resolve.
 
 from __future__ import annotations
 
+import inspect
+import typing
+
 import pytest
-from benzene.core import Container, ServiceNotRegisteredError
+from benzene.core import Container, Scope, ServiceNotRegisteredError
 
 
 class Thing:
@@ -86,3 +89,40 @@ def test_register_by_constructing_the_type_or_a_zero_arg_factory() -> None:
 def test_register_without_a_factory_needs_a_type_key() -> None:
     with pytest.raises(TypeError, match="needs a type to construct"):
         Container().add_singleton("not-a-type")        # a str key can't be constructed
+
+
+# --- resolution is typed by the key when the key is a type (audit D6) ----------------------------
+# The container is deliberately keyed by arbitrary tokens (a type OR a str), so `get_service` keeps an
+# `Any -> Any` overload; the `type[T] -> T` overload is what gives every composition root's most-typed
+# line real editor and type-checker help. Runtime behaviour is unchanged — these pin the annotations.
+
+
+def _overload_signatures(fn: object) -> list[inspect.Signature]:
+    get_overloads = getattr(typing, "get_overloads", None)
+    if get_overloads is None:  # pragma: no cover - Python 3.10 has no typing.get_overloads
+        pytest.skip("typing.get_overloads requires Python 3.11+")
+    return [inspect.signature(o) for o in get_overloads(fn)]
+
+
+def test_get_service_is_typed_by_a_type_key() -> None:
+    typed, fallback = _overload_signatures(Scope.get_service)
+    assert typed.parameters["key"].annotation == "type[T]"
+    assert typed.return_annotation == "T"                       # get_service(Thing) -> Thing
+    assert fallback.parameters["key"].annotation == "Any"       # a str/enum/... token still resolves
+    assert fallback.return_annotation == "Any"
+
+
+def test_try_get_service_is_typed_optional() -> None:
+    typed, fallback = _overload_signatures(Scope.try_get_service)
+    assert typed.parameters["key"].annotation == "type[T]"
+    assert typed.return_annotation == "T | None"                # the soft form may return None
+    assert fallback.parameters["key"].annotation == "Any"
+    assert fallback.return_annotation == "Any | None"
+
+
+def test_typed_and_token_keys_both_resolve_at_runtime() -> None:
+    container = Container().add_singleton(Thing).add_instance("log", [])
+    scope = container.create_scope()
+    assert isinstance(scope.get_service(Thing), Thing)          # the type[T] -> T overload
+    assert scope.get_service("log") == []                       # the Any -> Any overload
+    assert scope.try_get_service(Thing) is scope.get_service(Thing)

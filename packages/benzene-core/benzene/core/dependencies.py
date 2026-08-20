@@ -16,7 +16,12 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable
 from enum import Enum
-from typing import Any
+from typing import Any, TypeVar, overload
+
+#: The service type a ``type`` key resolves to — ``scope.get_service(OrderService)`` is an
+#: ``OrderService`` to a type checker, not an ``Any`` (the container also accepts non-type tokens,
+#: which keep the ``Any`` overload).
+T = TypeVar("T")
 
 #: A service factory: the full ``(scope) -> T`` form, a zero-arg ``() -> T``, or omitted entirely
 #: (construct the type key). :func:`_as_factory` normalizes all three to the internal ``(scope) -> T``.
@@ -129,7 +134,18 @@ class Scope:
         self._container = container
         self._scoped: dict[Any, Any] = {}
 
+    @overload
+    def try_get_service(self, key: type[T]) -> T | None: ...
+
+    @overload
+    def try_get_service(self, key: Any) -> Any | None: ...
+
     def try_get_service(self, key: Any) -> Any | None:
+        """Resolve ``key``, or ``None`` when nothing is registered for it.
+
+        A ``type`` key is typed as that type (minus ``None``); any other token (a ``str``, an enum
+        member, …) resolves to ``Any``, since only the caller knows what it registered.
+        """
         reg = self._container._registrations.get(key)
         if reg is None:
             return None
@@ -143,7 +159,18 @@ class Scope:
             cache[key] = reg.factory(self)
         return cache[key]
 
+    @overload
+    def get_service(self, key: type[T]) -> T: ...
+
+    @overload
+    def get_service(self, key: Any) -> Any: ...
+
     def get_service(self, key: Any) -> Any:
+        """Resolve ``key``, raising :class:`ServiceNotRegisteredError` when it is not registered.
+
+        A ``type`` key is typed as that type — ``scope.get_service(OrderService)`` needs no cast or
+        annotation; any other token resolves to ``Any``.
+        """
         service = self.try_get_service(key)
         if service is None:
             raise ServiceNotRegisteredError(key)
