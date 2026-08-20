@@ -87,3 +87,20 @@ def test_headers_propagate_as_request_metadata() -> None:
             )
         )
     assert seen["corr"] == "c1"  # forwarded as gRPC metadata, read off the context
+
+
+@message("health:report")
+async def health_report(request: dict) -> Result:
+    # The section 1.3 escape hatch: an application-defined status the handler classifies itself.
+    return Result.set("cache-warm", {"entries": 12}, successful=True)
+
+
+def test_an_application_defined_status_marked_successful_round_trips_as_a_success() -> None:
+    # section 4.2: an unknown status maps by isSuccessful, so this is OK and not Internal. Deriving
+    # the classification from the status text instead would answer Internal and lose the payload.
+    app = BenzeneMessageApplication(Registry().add(health_report))
+    with _serving(app) as channel:
+        result = asyncio.run(GrpcMessageSender(channel).send_message("health:report", {}))
+    assert result.status == "cache-warm"
+    assert result.is_successful
+    assert result.payload == {"entries": 12}

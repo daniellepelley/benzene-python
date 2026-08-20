@@ -13,7 +13,7 @@ import json
 from typing import Any
 
 from benzene.core import encode_body
-from benzene.results import Result
+from benzene.results import KNOWN_STATUSES, Result
 
 import grpc
 
@@ -44,7 +44,19 @@ class GrpcMessageSender:
             detail = exc.details()
             return Result.failure(status, detail) if detail else Result.failure(status)
         status = _trailer_status(call.trailing_metadata()) or "ok"
-        return Result(status, _parse(response.decode("utf-8")))
+        return Result(status, _parse(response.decode("utf-8")), successful=_successful(status))
+
+
+def _successful(status: str) -> bool | None:
+    """The success classification for a call that returned no ``RpcError`` — so, gRPC code ``OK``.
+
+    gRPC has no ``isSuccessful`` member to carry section 1.2's authoritative signal; the code is the
+    only place it survives. For a status **in** the section 3 vocabulary the status decides and
+    there is nothing to state (``None`` - derive it). For an **application-defined** status the code
+    is the whole signal, and an ``OK`` answer means the peer classified it successful: state that,
+    or the escape hatch the peer used to say "successful" would decode back as a failure here.
+    """
+    return None if status in KNOWN_STATUSES else True
 
 
 def _trailer_status(trailing_metadata: Any) -> str | None:

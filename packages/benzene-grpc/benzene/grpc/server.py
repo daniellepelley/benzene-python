@@ -17,8 +17,12 @@ import asyncio
 import json
 from typing import Any
 
-from benzene.core import AppDefinition, BenzeneMessageApplication, application_from
-from benzene.results import is_successful
+from benzene.core import (
+    AppDefinition,
+    BenzeneMessageApplication,
+    application_from,
+    successful_from,
+)
 
 import grpc
 
@@ -70,8 +74,16 @@ class BenzeneGrpcHandler(grpc.GenericRpcHandler):
         )
         status = response["statusCode"]
         context.set_trailing_metadata(((BENZENE_STATUS_TRAILER, status),))
-        if not is_successful(status):
-            context.set_code(status_to_code(status))
+        # isSuccessful is authoritative (wire-contracts.md 1.2) and is exactly what section 4.2's
+        # mapping needs for an **application-defined** status: one the handler marked successful is
+        # OK, not Internal. Classifying from the status text instead would answer Internal to a
+        # caller the handler meant to answer successfully - and would leave to_grpc's rule for it
+        # implemented but unreachable. Mapping first and branching on the resulting code (rather
+        # than on the classification) keeps that single rule in one place: a status that maps to OK
+        # sets no code and no details, whatever route it took there.
+        code = status_to_code(status, successful_from(response))
+        if code is not grpc.StatusCode.OK:
+            context.set_code(code)
             context.set_details(_detail(response))
         return response["body"].encode("utf-8")
 
