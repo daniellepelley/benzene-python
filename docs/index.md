@@ -17,6 +17,9 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
     single process and Deployment
 - **[Packages & adoption levels](packages.md)** — how Benzene is split into layered PyPI packages,
   why, and which ones to install.
+- **[Capability matrix](capability-matrix.md)** — for each production concern, what this port
+  provides (with the code that provides it), what it deliberately does not do, and how to fill the
+  gap.
 
 ## Reference
 
