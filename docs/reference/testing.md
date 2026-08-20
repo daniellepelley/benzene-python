@@ -46,6 +46,36 @@ assert fake.last_topic == "orders:created"           # ...and on the client's eg
   — method = topic, headers = metadata, no socket. Everything before the `build_*` call is transport-
   and cloud-neutral.
 
+### Sync or `await`?
+
+Whether a host's `send_*` is a plain call or a coroutine follows the binding it stands for, not a
+style preference — a request/response host models a runtime that *invokes* your function and waits,
+so its test host drives the app to completion for you; a consumer-loop host models a loop you own, so
+its `send_*` hands back the coroutine that loop would await.
+
+| Builder | `send_*` front doors | Call it |
+| --- | --- | --- |
+| `.build_http()` | `send_http` | plain call |
+| `.build_aws()` | `send_http`, `send_sqs`, `send_sns`, `send_s3`, `send_eventbridge`, `send_dynamodb`, `send_kinesis`, `send_kafka`, `send_invoke` | plain call |
+| `.build_gcp()` | `send_http`, `send_pubsub` | plain call |
+| `.build_azure()` | `send_http`, `send_service_bus`, `send_event_hub`, `send_queue_storage`, `send_blob`, `send_cosmos`, `send_timer`, `send_event_grid` | plain call |
+| `.build_grpc()` | `send_grpc` | plain call |
+| `.build_kafka()` | `send_kafka` | `await` |
+| `.build_rabbitmq()` | `send_rabbitmq` | `await` |
+| `.build_sqs_consumer()` | `send_sqs_consumer` | `await` |
+
+The suite has no async plugin, so the awaitable ones are driven with `asyncio.run(...)` from a plain
+`def` test — the house style everywhere in `tests/` and `examples/`:
+
+```python
+result = asyncio.run(host.send_kafka("orders:place", {"sku": "ABC"}))
+assert result.status == Status.CREATED
+```
+
+The plain-call hosts run `asyncio.run` internally, which is illegal inside a running loop: calling one
+from an `async def` test raises a `RuntimeError` telling you to drive the app directly
+(`await host._app.handle(...)`) instead.
+
 The composition root itself is core (`benzene.core`): implement `BenzeneStartUp.configure_services`
 (register services) and `configure` (resolve them and wire routes/topics into an `AppDefinition`);
 `build_application(StartUp, overrides=..., config=...)` boots it. Hosts and tests share the same

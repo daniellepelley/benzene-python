@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -321,3 +322,13 @@ def test_json_file_store_leaves_no_partial_file_when_save_fails(tmp_path: Path) 
     # The atomic write must clean up its temp sibling and never replace the good file with a partial.
     assert [p.name for p in tmp_path.iterdir()] == ["state.json"]
     assert store.load() == {"version": 1, "ok": True}
+
+
+def test_s3_store_missing_boto3_raises_a_teaching_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The S3 store's lazy `[aws]` import must name the extra too — `load` deliberately re-raises
+    # anything that is not a "nothing to restore" miss, so a forgotten extra fails the boot loudly.
+    monkeypatch.setitem(sys.modules, "boto3", None)
+    with pytest.raises(ImportError, match=r"benzene-mesh\[aws\]"):
+        S3CollectorStore("bucket").load()

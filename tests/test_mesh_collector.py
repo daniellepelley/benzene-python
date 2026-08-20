@@ -594,3 +594,30 @@ def test_a_direct_sync_ingest_still_persists_immediately() -> None:
     c = MeshCollector(store=store)
     c.ingest_register({"service": "orders", "topics": [{"id": "order:create"}]})
     assert len(store.saved) == 1
+
+
+def _register_message(service: str) -> dict:
+    return {
+        "topic": "benzene:mesh:register",
+        "headers": {},
+        "body": json.dumps({"service": service, "topics": [{"id": f"{service}:do"}]}),
+    }
+
+
+def test_a_collector_is_reusable_across_event_loops() -> None:
+    store = _RecordingStore()
+    collector = MeshCollector(store=store)
+    app = BenzeneMessageApplication(collector_registry(collector))
+
+    async def two_concurrent_ingests() -> None:
+        await asyncio.gather(
+            app.handle(_register_message("orders")), app.handle(_register_message("payments"))
+        )
+
+    # A collector outlives a single loop — a warm Lambda container reuses the instance across
+    # invocations, each with its own `asyncio.run`. Nothing in the save path may bind to the first.
+    asyncio.run(two_concurrent_ingests())
+    asyncio.run(two_concurrent_ingests())
+
+    assert len(store.saved) == 4
+    assert {s["name"] for s in store.saved[-1]["services"]} == {"orders", "payments"}

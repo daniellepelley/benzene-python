@@ -149,7 +149,8 @@ class MeshCollector:
         # of the mutation and awaited on a worker thread instead of running on the event loop.
         self._defer_save = False
         self._save_pending = False
-        self._save_lock = asyncio.Lock()
+        self._save_lock: asyncio.Lock | None = None
+        self._save_loop: asyncio.AbstractEventLoop | None = None
         saved = self._store.load()
         if saved is not None:
             self.restore(saved)
@@ -426,9 +427,23 @@ class MeshCollector:
             self._defer_save = False
         if self._save_pending:
             self._save_pending = False
-            async with self._save_lock:
+            async with self._save_gate():
                 await asyncio.to_thread(self._store.save, self.snapshot())
         return result
+
+    def _save_gate(self) -> asyncio.Lock:
+        """The lock serializing store writes, (re)bound to the loop currently running.
+
+        An :class:`asyncio.Lock` binds to the first loop that *contends* for it, and a collector can
+        easily outlive one loop — a warm Lambda container reuses the instance across invocations, each
+        with its own :func:`asyncio.run`. Rebinding when the loop changes keeps the second invocation
+        from failing on a lock owned by the first one's dead loop.
+        """
+        loop = asyncio.get_running_loop()
+        if self._save_lock is None or self._save_loop is not loop:
+            self._save_lock = asyncio.Lock()
+            self._save_loop = loop
+        return self._save_lock
 
     # --- queries ---------------------------------------------------------------------------
     def query_fleet(self, _body: dict[str, Any]) -> dict[str, Any]:

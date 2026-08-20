@@ -22,7 +22,6 @@ import pytest
 from benzene.core import MessageSender
 from benzene.results import Status
 from benzene.testing import FakeMessageSender, create_test_host
-from k8s_orders.app import run_legs
 from orders_domain import (
     ORDER_CREATED_TOPIC,
     PLACE_ORDER_TOPIC,
@@ -30,6 +29,8 @@ from orders_domain import (
     OrderService,
     OrdersStartUp,
 )
+
+from k8s_orders.app import run_legs
 
 
 @dataclass

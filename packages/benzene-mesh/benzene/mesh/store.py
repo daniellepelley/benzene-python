@@ -73,8 +73,19 @@ class S3CollectorStore:
         self._client = client
 
     def _s3(self) -> Any:
+        """The S3 client, importing the optional ``[aws]`` SDK lazily on first use.
+
+        A missing SDK is a *deployment* error, not "nothing to restore": it surfaces as an ImportError
+        naming the exact extra, which :meth:`load`'s not-found mapper deliberately re-raises.
+        """
         if self._client is None:
-            import boto3  # lazy: optional [aws] dependency
+            try:
+                import boto3  # lazy: optional [aws] dependency
+            except ImportError as exc:
+                raise ImportError(
+                    "S3CollectorStore requires boto3 — install it with "
+                    "'pip install benzene-mesh[aws]'."
+                ) from exc
 
             self._client = boto3.client("s3")
         return self._client

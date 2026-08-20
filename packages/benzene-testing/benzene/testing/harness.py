@@ -70,6 +70,8 @@ class TestHostBuilder:
         Boots the same app onto the plain ASGI binding (:class:`~benzene.http.BenzeneHttpApp`) — no
         cloud — so a service hosted on a standalone HTTP server is tested through the same
         ``send_http`` front door as the API Gateway / Cloud Functions hosts.
+
+        ``send_http`` is **synchronous** — call it from a plain ``def`` test.
         """
         try:
             from benzene.http import BenzeneHttpApp
@@ -84,7 +86,10 @@ class TestHostBuilder:
         return host
 
     def build_gcp(self) -> GcpFunctionsTestHost:
-        """Specialize to a GCP Cloud Functions test host (requires ``benzene-gcp``)."""
+        """Specialize to a GCP Cloud Functions test host (requires ``benzene-gcp``).
+
+        ``send_http`` / ``send_pubsub`` are **synchronous** — call them from a plain ``def`` test.
+        """
         try:
             from benzene.gcp import GcpFunctionsApp
             from benzene.gcp.testing import GcpFunctionsTestHost
@@ -98,7 +103,12 @@ class TestHostBuilder:
         return host
 
     def build_aws(self) -> AwsLambdaTestHost:
-        """Specialize to an AWS Lambda test host (requires ``benzene-aws``)."""
+        """Specialize to an AWS Lambda test host (requires ``benzene-aws``).
+
+        Every ``send_*`` here (``send_http``, ``send_sqs``, ``send_sns``, ``send_s3``,
+        ``send_eventbridge``, ``send_dynamodb``, ``send_kinesis``, ``send_kafka``, ``send_invoke``)
+        is **synchronous** — call them from a plain ``def`` test.
+        """
         try:
             from benzene.aws import AwsLambdaApp
             from benzene.aws.testing import AwsLambdaTestHost
@@ -116,6 +126,8 @@ class TestHostBuilder:
 
         The gRPC binding serves every topic as a generic unary method, so there is no router to
         mount: the whole registry is driven through one :class:`BenzeneGrpcHandler`, in memory.
+
+        ``send_grpc`` is **synchronous** — call it from a plain ``def`` test.
         """
         try:
             from benzene.grpc import BenzeneGrpcHandler
@@ -135,6 +147,9 @@ class TestHostBuilder:
         The Kafka binding is a consumer loop, not an HTTP host, so there is no router to mount: the
         registry is driven one record at a time through a :class:`KafkaConsumerApp`, in memory. Feed
         records with ``await host.send_kafka(topic, body, headers)``.
+
+        ``send_kafka`` is **awaitable** (unlike the request/response hosts' ``send_*``) — from a plain
+        ``def`` test, drive it with ``asyncio.run(host.send_kafka(...))``.
         """
         try:
             from benzene.kafka import KafkaConsumerApp
@@ -154,6 +169,9 @@ class TestHostBuilder:
         The RabbitMQ binding is a consumer loop, not an HTTP host, so there is no router to mount: the
         registry is driven one delivery at a time through a :class:`RabbitMqConsumerApp`, in memory.
         Feed deliveries with ``await host.send_rabbitmq(topic, body, headers)``.
+
+        ``send_rabbitmq`` is **awaitable** (unlike the request/response hosts' ``send_*``) — from a
+        plain ``def`` test, drive it with ``asyncio.run(host.send_rabbitmq(...))``.
         """
         try:
             from benzene.rabbitmq import RabbitMqConsumerApp
@@ -175,6 +193,9 @@ class TestHostBuilder:
         messages with ``await host.send_sqs_consumer(topic, body, headers)``. Distinct from
         ``.build_aws()`` — that specializes to the Lambda *event-source* binding, this one to the
         self-hosted poller.
+
+        ``send_sqs_consumer`` is **awaitable** (unlike ``.build_aws()``'s ``send_sqs``) — from a plain
+        ``def`` test, drive it with ``asyncio.run(host.send_sqs_consumer(...))``.
         """
         try:
             from benzene.aws import SqsConsumerApp
@@ -189,7 +210,12 @@ class TestHostBuilder:
         return host
 
     def build_azure(self) -> AzureFunctionsTestHost:
-        """Specialize to an Azure Functions test host (requires ``benzene-azure``)."""
+        """Specialize to an Azure Functions test host (requires ``benzene-azure``).
+
+        Every ``send_*`` here (``send_http``, ``send_service_bus``, ``send_event_hub``,
+        ``send_queue_storage``, ``send_blob``, ``send_cosmos``, ``send_timer``, ``send_event_grid``)
+        is **synchronous** — call them from a plain ``def`` test.
+        """
         try:
             from benzene.azure import AzureFunctionsApp
             from benzene.azure.testing import AzureFunctionsTestHost
