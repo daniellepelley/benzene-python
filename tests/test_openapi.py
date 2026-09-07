@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
 from benzene.core import Registry, json_schema
 from benzene.http import StandardPaths, to_http
 from benzene.openapi import OPENAPI_VERSION, openapi_document, operation_id
@@ -233,3 +234,31 @@ def test_custom_server_paths_relocate_the_invoke_base() -> None:
 
 def test_output_is_deterministic() -> None:
     assert openapi_document(_registry()) == openapi_document(_registry())
+
+
+# --- T0.4: a pydantic request type must reach the OpenAPI document --------------------------------
+
+
+def test_a_pydantic_model_payload_is_published_not_left_open() -> None:
+    """The fourth document `json_schema` feeds. An open `{}` component here is a generator's licence
+    to emit an untyped client for a service that declared a fully specified model."""
+    pytest.importorskip("pydantic")
+    import benzene.pydantic  # noqa: F401  # registering the provider is the adapter's import side effect
+    from pydantic import BaseModel
+
+    class Refund(BaseModel):
+        order_id: str
+        amount: int = 0
+
+    async def refund(request: Refund) -> Result:
+        return Result.ok()
+
+    registry = Registry().register("orders:refund", refund, request_type=Refund)
+    document = openapi_document(registry)
+    body = document["paths"]["/benzene/invoke/orders:refund"]["post"]["requestBody"]
+    ref = body["content"]["application/json"]["schema"]["$ref"]
+    schema = document["components"]["schemas"][ref.removeprefix("#/components/schemas/")]
+
+    assert schema["type"] == "object"
+    assert set(schema["properties"]) == {"order_id", "amount"}
+    assert schema["required"] == ["order_id"]

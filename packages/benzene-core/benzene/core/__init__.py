@@ -92,7 +92,14 @@ from .registry import (
     highest_version,
 )
 from .router import message_router
-from .schema import Schema, json_schema
+from .schema import (
+    Schema,
+    SchemaProvider,
+    clear_schema_providers,
+    json_schema,
+    register_schema_provider,
+    schema_providers,
+)
 from .spec import (
     SPEC_TOPIC,
     OutboundTopic,
@@ -151,7 +158,11 @@ __all__ = [
     "MiddlewarePipeline",
     "Next",
     "Schema",
+    "SchemaProvider",
+    "clear_schema_providers",
     "json_schema",
+    "register_schema_provider",
+    "schema_providers",
     "CONTRACT_OPENAPI",
     "ContractDocument",
     "ContractEvent",

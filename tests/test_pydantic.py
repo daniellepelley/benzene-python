@@ -15,10 +15,17 @@ pytest.importorskip("pydantic")
 
 from typing import Any
 
-from benzene.core import BenzeneMessageApplication, Registry, message  # noqa: E402
+from benzene.core import (  # noqa: E402
+    BenzeneMessageApplication,
+    ContractDocument,
+    Registry,
+    ServiceSpec,
+    message,
+)
+from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths  # noqa: E402
 from benzene.pydantic import format_validation_errors, validated  # noqa: E402
 from benzene.results import Result  # noqa: E402
-from pydantic import BaseModel, ConfigDict  # noqa: E402
+from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 from pydantic.alias_generators import to_camel  # noqa: E402
 
 
@@ -163,3 +170,225 @@ def test_validated_rejects_a_non_model_argument() -> None:
 
     with pytest.raises(TypeError, match="got 'PlaceOrder'"):
         validated("PlaceOrder")  # type: ignore[arg-type]  # not even a class
+
+
+# --- T0.4: a pydantic-modelled service must not publish an empty contract -------------------------
+# `benzene.core.json_schema` fell through to `{}` for anything it did not recognise, and a pydantic
+# BaseModel is exactly that — so every document derived from the registry (the Contract Document at
+# /benzene/spec, this port's native ServiceSpec, the mesh ServiceDescriptor, the OpenAPI document)
+# advertised the open schema for the one model type this package exists to support. The tests below
+# drive the published surfaces, not the helper, because the helper being wrong is not the bug — the
+# bug is four documents lying about the service's contract.
+
+class Address(BaseModel):
+    """A nested model — pydantic renders it as a `$defs` entry reached by `$ref`."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    line_one: str
+    post_code: str = ""
+
+
+class SubmitOrder(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    sku: str = Field(min_length=2, max_length=8, pattern="^A")
+    quantity: int = Field(default=1, ge=1, le=99)
+    ship_to: Address | None = None
+
+
+class OrderReceipt(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    order_id: str
+
+
+async def submit(order: SubmitOrder) -> Result:
+    return Result.created(OrderReceipt(order_id=order.sku))
+
+
+def _orders_registry() -> Registry:
+    return Registry().register(
+        "orders:submit", submit, request_type=SubmitOrder, response_type=OrderReceipt
+    )
+
+
+def _refs(node: Any) -> list[str]:
+    """Every `$ref`/`$defs` key anywhere in a document — the Contract Document forbids both here."""
+    if isinstance(node, dict):
+        found = [key for key in node if key in ("$ref", "$defs")]
+        return found + [ref for value in node.values() for ref in _refs(value)]
+    if isinstance(node, list):
+        return [ref for item in node for ref in _refs(item)]
+    return []
+
+
+def test_the_contract_document_publishes_the_models_schema() -> None:
+    """`GET /benzene/spec` — the document every other port's client generator parses."""
+    registry = _orders_registry()
+    app = BenzeneHttpApp(
+        HttpRouter(),
+        application=BenzeneMessageApplication(registry),
+        standard_paths=StandardPaths(
+            contract=lambda: ContractDocument.derive(registry, service="orders")
+        ),
+    )
+
+    response = asyncio.run(app.handle("GET", "/benzene/spec"))
+    assert response.status_code == 200
+    entry = json.loads(response.body)["requests"][0]
+
+    assert entry["request"]["type"] == "object"
+    # The aliased (wire) names, because `to_jsonable` dumps the model `by_alias=True`: the schema
+    # has to describe what actually crosses the wire.
+    assert set(entry["request"]["properties"]) == {"sku", "quantity", "shipTo"}
+    assert entry["request"]["required"] == ["sku"]
+    assert entry["response"]["properties"]["orderId"] == {"type": "string"}
+
+
+def test_the_contract_document_carries_no_pydantic_refs() -> None:
+    """contract-document.md §4: the only legal `$ref` is `#/components/schemas/<name>`, so a
+    nested model's `$defs`/`#/$defs/...` must be inlined before it reaches the document."""
+    registry = _orders_registry()
+    document = ContractDocument.derive(registry, service="orders").to_payload()
+
+    assert _refs(document) == []
+    ship_to = document["requests"][0]["request"]["properties"]["shipTo"]
+    assert ship_to["anyOf"][0]["properties"]["lineOne"] == {"type": "string"}
+
+
+def test_the_native_spec_document_publishes_the_models_schema() -> None:
+    """`GET /benzene/spec?type=native` — this port's own {service, topics} payload."""
+    registry = _orders_registry()
+    app = BenzeneHttpApp(
+        HttpRouter(),
+        application=BenzeneMessageApplication(registry),
+        standard_paths=StandardPaths(spec=lambda: ServiceSpec.derive(registry, service="orders")),
+    )
+
+    doc = json.loads(asyncio.run(app.handle("GET", "/benzene/spec", "type=native")).body)
+    assert doc["topics"][0]["requestSchema"]["properties"]["sku"]["type"] == "string"
+
+
+def test_the_mesh_descriptor_publishes_the_models_schema() -> None:
+    """The descriptor a service pushes to the mesh — and the hash the mesh diffs contracts on."""
+    mesh = pytest.importorskip("benzene.mesh")
+    registry = _orders_registry()
+    descriptor = mesh.ServiceDescriptor.derive(registry, mesh.ServiceInfo(service="orders"))
+
+    payload = descriptor.to_payload()
+    assert payload["topics"][0]["requestSchema"]["properties"]["sku"]["type"] == "string"
+    # The hash is content-derived: a descriptor that used to hash `{}` now hashes the real contract.
+    assert payload["descriptorHash"] != _EMPTY_SCHEMA_DESCRIPTOR_HASH
+
+
+#: The `descriptorHash` this service produced while its schemas were the open schema `{}` — pinned
+#: here so the change is asserted, not stumbled into. See the note in `docs/reference/pydantic.md`.
+_EMPTY_SCHEMA_DESCRIPTOR_HASH = (
+    "sha256:c60828d7e1300f412548e4e1f2f1dd75be7f63ee19ee1db59282eafa1419b1af"
+)
+
+
+def test_field_constraints_reach_the_published_schema() -> None:
+    """A model's `Field(...)` constraints are contract, and travel with it."""
+    schema = ContractDocument.derive(_orders_registry(), service="orders").to_payload()["requests"][
+        0
+    ]["request"]
+
+    assert schema["properties"]["sku"]["minLength"] == 2
+    assert schema["properties"]["sku"]["maxLength"] == 8
+    assert schema["properties"]["sku"]["pattern"] == "^A"
+    assert schema["properties"]["quantity"]["minimum"] == 1
+    assert schema["properties"]["quantity"]["maximum"] == 99
+
+
+def test_the_schema_keys_are_the_keys_the_wire_actually_carries() -> None:
+    """The property that matters: what the schema promises is what `to_jsonable` writes."""
+    from benzene.core import json_schema, to_jsonable
+
+    instance = SubmitOrder(sku="ABC", ship_to=Address(line_one="1 High St"))
+    assert set(json_schema(SubmitOrder)["properties"]) == set(to_jsonable(instance))
+
+
+def test_a_recursive_model_terminates_with_the_cycle_cut() -> None:
+    """The rule `benzene.core` already applies to a recursive dataclass: cut with `{}`, never a $ref."""
+    from benzene.core import json_schema
+
+    class Node(BaseModel):
+        name: str
+        child: Node | None = None
+
+    schema = json_schema(Node)
+
+    assert schema["properties"]["name"] == {"type": "string"}
+    assert schema["properties"]["child"]["anyOf"] == [{}, {"type": "null"}]
+    assert _refs(schema) == []
+
+
+def test_enums_and_literals_derive_an_enum_array() -> None:
+    from enum import Enum
+    from typing import Literal
+
+    from benzene.core import json_schema
+
+    class Colour(str, Enum):
+        RED = "red"
+        BLUE = "blue"
+
+    class Paint(BaseModel):
+        colour: Colour
+        finish: Literal["matte", "gloss"]
+
+    schema = json_schema(Paint)
+
+    # The enum arrives through a `$defs` entry and the Literal inline; both must read the same way.
+    assert schema["properties"]["colour"]["enum"] == ["red", "blue"]
+    assert schema["properties"]["finish"]["enum"] == ["matte", "gloss"]
+    assert _refs(schema) == []
+
+
+def test_synthesised_titles_are_stripped_but_authored_prose_is_kept() -> None:
+    from benzene.core import json_schema
+
+    class Documented(BaseModel):
+        line_one: str = Field(description="the first address line")
+
+    schema = json_schema(Documented)
+
+    assert "title" not in schema  # "Documented" — the class name, not contract
+    assert schema["properties"]["line_one"] == {
+        "type": "string",
+        "description": "the first address line",
+    }
+
+
+def test_a_non_model_type_is_left_to_the_core_rules() -> None:
+    """The provider defers rather than claiming: `None` means "not mine"."""
+    from benzene.pydantic import pydantic_schema
+
+    assert pydantic_schema(str) is None
+    assert pydantic_schema(list[SubmitOrder]) is None  # core recurses and reaches the model itself
+    assert pydantic_schema("not even a type") is None
+
+
+def test_inline_defs_prefers_a_ref_sibling_over_the_target() -> None:
+    """JSON Schema 2020-12 allows keywords beside a `$ref`; the more specific statement wins."""
+    from benzene.pydantic import inline_defs
+
+    document = {
+        "$defs": {"A": {"type": "object", "description": "the definition"}},
+        "$ref": "#/$defs/A",
+        "description": "the use site",
+    }
+    assert inline_defs(document) == {"type": "object", "description": "the use site"}
+
+
+def test_inline_defs_never_leaves_a_dangling_pointer() -> None:
+    from benzene.pydantic import inline_defs
+
+    assert inline_defs({"properties": {"a": {"$ref": "#/$defs/Missing"}}}) == {
+        "properties": {"a": {}}
+    }
+    assert inline_defs({"properties": {"a": {"$ref": "https://example.test/x"}}}) == {
+        "properties": {"a": {}}
+    }

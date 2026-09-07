@@ -13,10 +13,14 @@ from benzene.core import (
     DuplicateHandlerError,
     MiddlewarePipeline,
     Registry,
+    clear_schema_providers,
     decode_response,
     encode_body,
     encode_response,
+    json_schema,
     message,
+    register_schema_provider,
+    schema_providers,
     to_camel,
     to_jsonable,
     to_request,
@@ -307,3 +311,133 @@ def test_decode_response_defaults_a_missing_status_to_unexpected_error() -> None
     result = decode_response({})
     assert result.status == Status.UNEXPECTED_ERROR
     assert result.payload is None
+
+
+# --- T0.6: a raising middleware must not escape the pipeline -------------------------------------
+# Only the terminal router used to catch. Anything a *middleware* raised (auth, tracing, mesh
+# interception, rate limiting, a user-written middleware) propagated out of `MiddlewarePipeline.handle`
+# and into whichever transport adapter was hosting it — each of which handles it differently, or not
+# at all. The framework's promise is that request content never crashes the host, so containment
+# belongs at the pipeline boundary, mapped exactly as the router maps a handler exception.
+
+
+async def _boom(_context: Context, _next) -> None:  # noqa: ANN001 - the Next callable
+    raise RuntimeError("middleware exploded")
+
+
+def test_middleware_exception_is_contained_at_the_pipeline_boundary() -> None:
+    pipeline = MiddlewarePipeline().use(_boom)
+    context = Context("t", {})
+
+    asyncio.run(pipeline.handle(context))  # must not raise
+
+    assert context.result is not None
+    assert context.result.status == Status.SERVICE_UNAVAILABLE
+
+
+def test_middleware_exception_becomes_a_service_unavailable_envelope() -> None:
+    app = BenzeneMessageApplication(Registry(), MiddlewarePipeline().use(_boom))
+    response = asyncio.run(app.handle({"topic": "t", "headers": {}, "body": "{}"}))
+
+    assert response["statusCode"] == "service-unavailable"
+    assert response["isSuccessful"] is False
+    body = json.loads(response["body"])
+    # The structured-error shape the router already produces, not a bare string: one BenzeneError
+    # carrying the exception's message, and the problem document derived from the status.
+    assert body["benzeneStatus"] == "service-unavailable"
+    assert [error["message"] for error in body["errors"]] == ["middleware exploded"]
+
+
+def test_pipeline_containment_does_not_swallow_cancellation() -> None:
+    """Cooperative cancellation is not a request fault — it must stay cancelled, so the transport
+    redelivers rather than settling a fabricated failure."""
+
+    async def cancel(_context: Context, _next) -> None:  # noqa: ANN001
+        raise asyncio.CancelledError
+
+    pipeline = MiddlewarePipeline().use(cancel)
+    context = Context("t", {})
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(pipeline.handle(context))
+    assert context.result is None  # nothing fabricated on the way out
+
+
+def test_a_result_already_set_survives_a_later_middleware_failure() -> None:
+    """A middleware that produced a result and then failed while unwinding keeps its result."""
+
+    async def answered(context: Context, next) -> None:  # noqa: A002, ANN001
+        context.result = Result.ok({"answered": True})
+        await next()
+
+    pipeline = MiddlewarePipeline().use(answered).use(_boom)
+    context = Context("t", {})
+
+    asyncio.run(pipeline.handle(context))
+
+    assert context.result is not None
+    assert context.result.status == Status.OK
+
+
+# --- T0.4: the schema-provider seam --------------------------------------------------------------
+# `json_schema` used to answer `{}` for every type its table does not name, which silently included
+# the pydantic BaseModel this port ships an adapter for. Core cannot import pydantic (an optional
+# adoption choice the capability matrix is explicit about), so a provider may claim a type before
+# the built-in rules run and `benzene.pydantic` registers one on import. These tests cover the seam
+# itself; `tests/test_pydantic.py` covers the documents it fixes.
+
+
+@pytest.fixture
+def isolated_providers():  # noqa: ANN201 - a pytest fixture
+    """Run with an empty provider list, then restore whatever was registered (importing
+    ``benzene.pydantic`` anywhere in the session registers a provider process-wide)."""
+    registered = schema_providers()
+    clear_schema_providers()
+    yield
+    clear_schema_providers()
+    for provider in registered:
+        register_schema_provider(provider)
+
+
+class _Opaque:
+    """A type `json_schema`'s table cannot name — the case that used to be lost."""
+
+
+def test_an_unclaimed_type_is_still_the_open_schema(isolated_providers) -> None:  # noqa: ANN001
+    assert json_schema(_Opaque) == {}
+
+
+def test_a_provider_claims_a_type_the_built_in_table_cannot_name(isolated_providers) -> None:  # noqa: ANN001
+    register_schema_provider(
+        lambda t: {"type": "object", "properties": {"id": {"type": "string"}}}
+        if t is _Opaque
+        else None
+    )
+    assert json_schema(_Opaque)["properties"] == {"id": {"type": "string"}}
+
+
+def test_a_provider_reaches_a_type_nested_in_a_container(isolated_providers) -> None:  # noqa: ANN001
+    """Core recurses into `list`/`dict`/optional itself, so a provider need only know the leaf."""
+    register_schema_provider(lambda t: {"type": "string"} if t is _Opaque else None)
+
+    assert json_schema(list[_Opaque]) == {"type": "array", "items": {"type": "string"}}
+    assert json_schema(_Opaque | None) == {"type": ["string", "null"]}
+
+
+def test_providers_are_consulted_in_order_and_the_first_answer_wins(isolated_providers) -> None:  # noqa: ANN001
+    register_schema_provider(lambda t: {"type": "integer"} if t is _Opaque else None)
+    register_schema_provider(lambda t: {"type": "boolean"} if t is _Opaque else None)
+
+    assert json_schema(_Opaque) == {"type": "integer"}
+
+
+def test_a_provider_may_override_a_built_in_rule(isolated_providers) -> None:  # noqa: ANN001
+    """Providers run *before* the primitive/dataclass table — that is what makes a hand-authored
+    schema catalogue expressible on the same seam."""
+
+    @dataclass
+    class Authored:
+        name: str = ""
+
+    register_schema_provider(lambda t: {"type": "object", "x-authored": True} if t is Authored else None)
+    assert json_schema(Authored) == {"type": "object", "x-authored": True}

@@ -23,6 +23,14 @@ a ``@dataclass``        ``{"type": "object", "properties": {...}, "required": [.
 anything else           ``{}``   (unknown/custom — matches everything)
 ======================  =========================================================
 
+The last row is why this module has a **provider seam**. "Anything else" swallowed every type the
+table does not name — including a pydantic ``BaseModel``, the request type this port ships an
+adapter for — so a service modelled in pydantic published the open schema on all four surfaces that
+read this function. ``benzene.core`` cannot fix that itself: pydantic is an optional adoption
+choice and core must never import it. So a *provider* (:func:`register_schema_provider`) may claim
+a type before the table is consulted, and ``benzene.pydantic`` registers one on import. Installing
+that package is the opt-in; core alone behaves exactly as the table above says.
+
 **Property names follow the wire naming policy** (``benzene.core.to_camel`` — dataclass fields are
 emitted camelCase), so the schema describes what actually crosses the wire. **A field is
 ``required`` iff it has no default** (no ``default`` and no ``default_factory``) — the properties a
@@ -39,6 +47,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import types
+from collections.abc import Callable
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from .mapping import to_camel
@@ -60,6 +69,42 @@ _PRIMITIVES: dict[type, Schema] = {
 }
 
 
+#: A derivation strategy for types the built-in table does not cover: return a :data:`Schema` for a
+#: type it recognises, ``None`` to defer to the next provider (and finally to the built-in rules).
+SchemaProvider = Callable[[Any], "Schema | None"]
+
+_providers: list[SchemaProvider] = []
+
+
+def register_schema_provider(provider: SchemaProvider) -> None:
+    """Register a derivation strategy consulted *before* the built-in primitive/dataclass rules.
+
+    Providers run in registration order and the first non-``None`` result wins, so a provider may
+    also override a built-in rule — which is what makes this seam serve the hand-authored-schema
+    case (register a catalogue lookup ahead of everything else) as well as the pydantic one.
+
+    A provider is handed the **raw** type, not its ``get_origin``, so it can claim ``list[Model]``
+    if it wants to; the pydantic provider deliberately does not, leaving the list/dict/union
+    machinery below to recurse into the element type and reach the provider again with the model
+    itself.
+
+    ``benzene.pydantic`` calls this on import. That import side effect is the whole opt-in
+    mechanism: ``benzene-core`` declares no pydantic dependency and never imports it, so a core-only
+    service derives exactly the schemas it always did.
+    """
+    _providers.append(provider)
+
+
+def schema_providers() -> tuple[SchemaProvider, ...]:
+    """The registered providers, in the order they are consulted."""
+    return tuple(_providers)
+
+
+def clear_schema_providers() -> None:
+    """Drop every registered provider (a test seam — pair it with :func:`schema_providers`)."""
+    _providers.clear()
+
+
 def json_schema(py_type: Any) -> Schema:
     """Derive the JSON Schema (2020-12 subset) for a Python type. ``None`` → the open schema ``{}``."""
     return _schema(py_type, seen=())
@@ -68,6 +113,14 @@ def json_schema(py_type: Any) -> Schema:
 def _schema(py_type: Any, seen: tuple[Any, ...]) -> Schema:
     if py_type is None or py_type is type(None) or py_type is Any:
         return {}
+
+    # Providers first (after the None/Any guard, which is not a type they could meaningfully claim):
+    # a registered strategy knows shapes this module's table cannot express, and a type it claims
+    # must not fall through to the open schema below.
+    for provider in _providers:
+        derived = provider(py_type)
+        if derived is not None:
+            return derived
 
     origin = get_origin(py_type)
 
