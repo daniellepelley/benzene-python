@@ -24,9 +24,9 @@ from benzene.core import (
     MessageHandlingError,
     Registry,
     application_from,
+    successful_from,
 )
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
-from benzene.results import is_successful
 
 from .pubsub import decode_pubsub_message
 
@@ -85,11 +85,15 @@ class GcpFunctionsApp:
 
     # --- Pub/Sub trigger -------------------------------------------------------------------
     def handle_pubsub(self, cloud_event: Any) -> None:
-        """Handle a Pub/Sub CloudEvent. Raises on a failure result so Pub/Sub redelivers."""
+        """Handle a Pub/Sub CloudEvent. Raises on a failure result so Pub/Sub redelivers.
+
+        The envelope's ``isSuccessful`` is what says whether it failed (wire-contracts.md 1.2) -
+        deriving that from the status text would redeliver an application-defined status forever.
+        """
         message = _pubsub_message(cloud_event)
         envelope = decode_pubsub_message(message)
         response = asyncio.run(self._application.handle(envelope))
-        if not is_successful(response["statusCode"]):
+        if not successful_from(response):
             raise MessageHandlingError(envelope["topic"], response["statusCode"], response["body"])
 
 

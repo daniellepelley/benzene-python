@@ -5,11 +5,16 @@ The mesh module turns a service into a first-class citizen of a Benzene mesh: it
 schemas and a content hash), **answers the reserved ``benzene:mesh`` topic** with that descriptor
 (:func:`mesh_interception`), **traces every invocation** (:func:`trace_interception` → one
 :class:`TraceEvent` each), and **reports into a collector** over an outbound client
-(:class:`MeshFeedSender`).
+(:class:`MeshFeedSender`). The pull side — :class:`MeshPoller` and :func:`probe_cloud_service` —
+reads a service's ``/benzene/spec`` in **either** shape it may answer with (:mod:`benzene.mesh.specdoc`:
+the Contract Document the Cloud Service Profile's R5 names, or this port's native payload), so a Python
+mesh grades and ingests a .NET, Go, or TypeScript service exactly as it does one of its own.
 
 Everything here is optional and additive — install it to join the mesh, leave it out and the rest of
 your service is unchanged. Depends only on ``benzene-core``; the S3 artifact publisher
-(:class:`S3ArtifactStore`) additionally needs the optional ``[aws]`` extra (``boto3``), imported lazily.
+(:class:`S3ArtifactStore`) additionally needs the optional ``[aws]`` extra (``boto3``), and the Blob
+artifact publisher (:class:`BlobArtifactStore`) the optional ``[azure]`` extra
+(``azure-storage-blob`` + ``azure-identity``) — both imported lazily.
 
     pip install benzene-mesh
 
@@ -20,6 +25,7 @@ Mirrors .NET's ``Benzene.Mesh``. Contributes the ``benzene.mesh`` subpackage to 
 from __future__ import annotations
 
 from .artifacts import build_artifacts, write_artifacts
+from .blob_artifacts import BlobArtifactStore, write_artifacts_to_blob
 from .collector import (
     QUERY_FLEET_TOPIC,
     QUERY_SERVICE_TOPIC,
@@ -79,6 +85,14 @@ from .profile import (
 )
 from .s3_artifacts import S3ArtifactStore, write_artifacts_to_s3
 from .schema import Schema, json_schema
+from .specdoc import (
+    is_contract_document,
+    is_native_document,
+    is_spec_document,
+    spec_produces,
+    spec_service,
+    spec_topics,
+)
 from .store import (
     CollectorStore,
     JsonFileCollectorStore,
@@ -102,6 +116,7 @@ from .trace import (
 
 __all__ = [
     "CLASSIFICATIONS",
+    "BlobArtifactStore",
     "CallableServiceSource",
     "HttpServiceSource",
     "MeshPoller",
@@ -156,6 +171,12 @@ __all__ = [
     "TraceExporter",
     "TracePropagatingMessageSender",
     "build_artifacts",
+    "is_contract_document",
+    "is_native_document",
+    "is_spec_document",
+    "spec_produces",
+    "spec_service",
+    "spec_topics",
     "classify",
     "current_traceparent",
     "with_trace_propagation",
@@ -168,5 +189,6 @@ __all__ = [
     "trace_interception",
     "trace_middleware",
     "write_artifacts",
+    "write_artifacts_to_blob",
     "write_artifacts_to_s3",
 ]

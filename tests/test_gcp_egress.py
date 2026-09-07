@@ -62,7 +62,7 @@ def test_pubsub_sender_maps_a_publish_failure_to_service_unavailable() -> None:
         PubSubMessageSender("projects/p/topics/t", publisher=fake).send_message("t", {})
     )
     assert result.status == Status.SERVICE_UNAVAILABLE
-    assert "pubsub down" in " ".join(result.errors)
+    assert "pubsub down" in " ".join(result.messages)
 
 
 # --- a missing SDK is a deployment error, not a message outcome (D1) ----------------------------

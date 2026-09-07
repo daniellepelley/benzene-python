@@ -15,11 +15,11 @@ the startup configure the app against a resolved scope.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from .dependencies import Container, Scope
+from .dependencies import Container, Scope, ServiceOverride
 from .envelope import BenzeneMessageApplication
 from .pipeline import Middleware, MiddlewarePipeline
 from .registry import Registry
@@ -61,7 +61,7 @@ class BenzeneStartUp:
 def build_application(
     startup: BenzeneStartUp | type[BenzeneStartUp],
     *,
-    overrides: Sequence[Callable[[Container], None]] = (),
+    overrides: Sequence[ServiceOverride] = (),
     config: Mapping[str, str] | None = None,
 ) -> tuple[AppDefinition, Scope]:
     """Boot an app from its startup: register services, apply overrides, then configure.
@@ -70,6 +70,9 @@ def build_application(
     a caller — a test, or a host supplying its cloud's real outbound client — can replace any
     registration before the app is wired. Returns the :class:`AppDefinition` and the root
     :class:`~benzene.core.Scope` (so a caller can resolve services for assertions).
+
+    An override's return value is ignored, so ``lambda c: c.add_instance(...)`` — the shortest way to
+    say it, and the form this module's own docstrings use — is accepted. See :data:`ServiceOverride`.
     """
     instance = startup() if isinstance(startup, type) else startup
     resolved_config = dict(config or {})

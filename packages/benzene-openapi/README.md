@@ -63,8 +63,8 @@ Benzene failure status is mapped to its HTTP code through `benzene.http.to_http`
         "responses": {
           "200": { "description": "ok", "content": { "application/json": {
             "schema": { "$ref": "#/components/schemas/OrdersPlaceResponse" } } } },
-          "400": { "description": "bad-request", "content": { "application/json": {
-            "schema": { "$ref": "#/components/schemas/BenzeneError" } } } }
+          "400": { "description": "bad-request", "content": { "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/BenzeneProblem" } } } }
           // ... one entry per failure status, ordered by HTTP code
         }
       }
@@ -72,9 +72,20 @@ Benzene failure status is mapped to its HTTP code through `benzene.http.to_http`
   },
   "components": {
     "schemas": {
+      // The RFC 9457 problem document a failure carries. `status` is RFC 9457's integer HTTP
+      // code; the Benzene status travels as `benzeneStatus`.
+      "BenzeneProblem": { "type": "object",
+        "properties": {
+          "type": { "type": "string", "format": "uri" }, "title": { "type": "string" },
+          "status": { "type": "integer" }, "detail": { "type": "string" },
+          "instance": { "type": "string" }, "benzeneStatus": { "type": "string" },
+          "errors": { "type": "array",
+            "items": { "$ref": "#/components/schemas/BenzeneError" } } },
+        "required": ["benzeneStatus", "status"] },
       "BenzeneError": { "type": "object",
-        "properties": { "status": { "type": "string" }, "detail": { "type": "string" } },
-        "required": ["status", "detail"] },
+        "properties": { "message": { "type": "string" }, "field": { "type": "string" },
+          "code": { "type": "string" } },
+        "required": ["message"] },
       "OrdersPlaceRequest": { "type": "object", "properties": {
         "sku": { "type": "string" }, "quantity": { "type": "integer" } },
         "required": ["sku", "quantity"] },

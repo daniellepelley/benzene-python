@@ -111,6 +111,8 @@ class RecordingKafkaConsumer:
     records: list[Any]
     committed: list[Any] = field(default_factory=list)
     seeks: list[Any] = field(default_factory=list)
+    #: Set by :meth:`close`, so a test can assert that a worker released its partition assignment.
+    closed: bool = False
 
     def poll(self, _timeout: float) -> Any:
         return self.records.pop(0) if self.records else None
@@ -120,6 +122,10 @@ class RecordingKafkaConsumer:
 
     def seek(self, partition: Any) -> None:
         self.seeks.append(partition)
+
+    def close(self) -> None:
+        """Match the real consumer's close, which :func:`~benzene.kafka.kafka_consumer_worker` calls."""
+        self.closed = True
 
 
 class KafkaTestHost:

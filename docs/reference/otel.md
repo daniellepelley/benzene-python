@@ -109,4 +109,3 @@ definition.middleware.append(response_event_interception(sink))
 - [`benzene.mesh_fleet`](mesh-fleet.md) — the sibling fleet trace-mappers (Jaeger / Tempo / X-Ray)
   that project the same `TraceEvent` model into a backend's JSON.
 - [`benzene.core`](core.md) — the middleware pipeline `response_event_interception` installs into.
-</content>

@@ -72,7 +72,7 @@ def test_breaker_opens_after_consecutive_failures_and_rejects_fast() -> None:
     # Now open: the next call is rejected without touching the inner sender.
     rejected = run(guarded.send_message("t", {}))
     assert rejected.status == Status.SERVICE_UNAVAILABLE
-    assert "circuit breaker is open" in rejected.errors[0]
+    assert "circuit breaker is open" in rejected.messages[0]
     assert sender.calls == 3  # unchanged — fast reject, no inner call
 
 
@@ -90,7 +90,9 @@ def test_breaker_half_opens_after_timeout_and_closes_on_success() -> None:
     assert breaker.state is CircuitState.OPEN
 
     clock.advance(10)  # reset window elapsed → half-open on next read
-    assert breaker.state is CircuitState.HALF_OPEN
+    # The assert above narrows breaker.state to OPEN, and a type checker cannot see that advancing
+    # the clock re-reads it. The state genuinely changes; the narrowing is the fiction.
+    assert breaker.state is CircuitState.HALF_OPEN  # type: ignore[comparison-overlap]
 
     # The probe succeeds → circuit closes and normal traffic resumes.
     assert run(breaker.execute(ok)).is_successful
@@ -169,7 +171,7 @@ def test_half_open_admits_exactly_one_probe() -> None:
 
     rejected = run(scenario())
     assert rejected.status == Status.SERVICE_UNAVAILABLE
-    assert "circuit breaker is open" in rejected.errors[0]
+    assert "circuit breaker is open" in rejected.messages[0]
     assert ran["n"] == 1  # only the probe ran; the second caller's work never started
     assert breaker.state is CircuitState.CLOSED  # the probe succeeded → closed
 
@@ -494,7 +496,7 @@ def test_idempotency_runs_the_handler_once_for_concurrent_duplicates() -> None:
     assert runs["n"] == 1  # "charge the card" happened exactly once
     assert first.result is not None and first.result.payload == {"attempt": 1}
     assert second.result is not None and second.result.status == Status.CONFLICT
-    assert "in flight" in second.result.errors[0]
+    assert "in flight" in second.result.messages[0]
 
 
 def test_idempotency_replays_a_finished_result_after_the_reservation() -> None:

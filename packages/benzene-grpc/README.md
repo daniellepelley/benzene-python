@@ -48,5 +48,7 @@ result = await sender.send_message("orders:place", {"sku": "A"})
 ```
 
 The method name *is* the topic; the `benzene-status` trailer preserves the exact status across the
-codes that collapse to one gRPC code. Mirrors .NET's `Benzene.Grpc`, and contributes the `benzene.grpc`
+codes that collapse to one gRPC code, and a failure's structured `errors` cross as a
+`google.rpc.BadRequest` on the `grpc-status-details-bin` trailer (§4.2) — gRPC drops the body of a
+non-OK call, so that trailer is where a per-field validation error survives the hop. Mirrors .NET's `Benzene.Grpc`, and contributes the `benzene.grpc`
 subpackage to the shared `benzene` namespace.

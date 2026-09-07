@@ -2,15 +2,16 @@
 
 Distribution ``benzene-azure``: host the same Benzene handlers behind Azure Functions HTTP, Service
 Bus, Event Hub, Queue Storage, Blob Storage, Cosmos DB change feed, Timer, and Event Grid (native +
-CloudEvents 1.0) triggers, plus Service Bus, Queue Storage, and Event Grid outbound clients. Depends
-on ``benzene-core`` and ``benzene-http``. Mirrors .NET's ``Benzene.Azure.Function.*`` and
-``Benzene.Clients.Azure.*``.
+CloudEvents 1.0) triggers, plus Service Bus, Event Hub, Queue Storage, and Event Grid outbound
+clients. Depends on ``benzene-core`` and ``benzene-http``. Mirrors .NET's ``Benzene.Azure.Function.*``
+and ``Benzene.Clients.Azure.*``.
 
     from benzene.azure import AzureFunctionsApp
 
 The Azure SDKs are only needed for the real outbound clients and are optional extras
-(``pip install benzene-azure[servicebus,storage,eventgrid]``); the inbound bindings and the test host
-need no Azure SDK. Contributes the ``benzene.azure`` subpackage to the shared ``benzene`` namespace.
+(``pip install benzene-azure[servicebus,eventhub,storage,eventgrid]``); the inbound bindings and the
+test host need no Azure SDK. Contributes the ``benzene.azure`` subpackage to the shared ``benzene``
+namespace.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from .app import (
 )
 from .clients import (
     EventGridMessageSender,
+    EventHubMessageSender,
     QueueStorageMessageSender,
     ServiceBusMessageSender,
 )
@@ -54,6 +56,7 @@ __all__ = [
     "AzureFunctionsApp",
     "AzureHttpResponse",
     "EventGridMessageSender",
+    "EventHubMessageSender",
     "QueueStorageMessageSender",
     "ServiceBusMessageSender",
     "TOPIC_PROPERTY",

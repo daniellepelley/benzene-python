@@ -185,15 +185,19 @@ def evaluate_cloud_service_profile(
         )
     )
 
-    # R5 — derived spec exposed (the /benzene/spec source is wired).
-    r5 = has_http and getattr(paths, "spec", None) is not None
+    # R5 — derived spec exposed (a /benzene/spec source is wired). Either source satisfies it: a
+    # ServiceSpec is projected into the Contract Document R5 names, and an authored ContractDocument
+    # is that document already.
+    r5 = has_http and (
+        getattr(paths, "spec", None) is not None or getattr(paths, "contract", None) is not None
+    )
     checks.append(
         RequirementCheck(
             "R5",
             r5,
             "derived spec provisioned"
             if r5
-            else "no ServiceSpec on standard_paths (/benzene/spec)",
+            else "no ServiceSpec or ContractDocument on standard_paths (/benzene/spec)",
         )
     )
 

@@ -109,6 +109,7 @@ def test_real_channel_round_trip() -> None:
         client = GrpcMessageSender(channel)
         result = asyncio.run(client.send_message("orders:place", PlaceOrder(sku="ABC", quantity=2)))
         assert result.status == "created"
+        assert result.payload is not None
         assert result.payload["sku"] == "ABC"
         assert sender.last_topic == ORDER_CREATED_TOPIC  # egress crossed the real hop
     finally:

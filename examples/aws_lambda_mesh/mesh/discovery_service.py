@@ -74,7 +74,7 @@ def lambda_service_source(
     async def fetch_spec() -> dict[str, Any]:
         result = await sender.send_message(MESH_TOPIC, None)
         if not isinstance(result.payload, dict):
-            detail = "; ".join(result.errors) or result.status
+            detail = "; ".join(result.messages) or result.status
             raise PollError(f"{function_name}: {MESH_TOPIC} invoke failed: {detail}")
         return result.payload
 
@@ -83,7 +83,7 @@ def lambda_service_source(
         # A degraded service still answers with the health aggregate as its payload (service-
         # unavailable, not a transport failure) — only a missing/malformed payload is a poll error.
         if not isinstance(result.payload, dict):
-            detail = "; ".join(result.errors) or result.status
+            detail = "; ".join(result.messages) or result.status
             raise PollError(f"{function_name}: {HEALTH_TOPIC} invoke failed: {detail}")
         return result.payload
 

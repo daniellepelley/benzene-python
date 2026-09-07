@@ -46,8 +46,33 @@ def test_all_healthy_returns_ok_with_the_aggregate() -> None:
 def test_an_unhealthy_check_returns_service_unavailable_naming_it() -> None:
     checks = HealthChecks().add("db", lambda: True).add("queue", lambda: HealthCheckResult.unhealthy("timeout"))
     response = _hit(_app(checks))
+
     assert response["statusCode"] == "service-unavailable"
-    assert "queue" in json.loads(response["body"])["detail"]
+
+    # The body is still the report, per check, not a problem document. That is the whole point of
+    # hitting a health endpoint: "unhealthy" alone tells an operator nothing they did not already
+    # know from the 503. wire-contracts.md 1.3 carves this case out, and Result.set is how the
+    # middleware claims it - service-unavailable for the probe, isSuccessful for the body.
+    body = json.loads(response["body"])
+    assert body["isHealthy"] is False
+    assert body["healthChecks"]["db"] == {"isHealthy": True}
+    assert body["healthChecks"]["queue"] == {"isHealthy": False, "detail": "timeout"}
+
+
+def test_an_unhealthy_report_is_signalled_successful_so_its_body_survives() -> None:
+    """The regression guard for the carve-out itself.
+
+    Before Result.set existed here, the encoder branched on the status class alone, saw
+    service-unavailable, and replaced the carefully-built report with a problem document naming only
+    the failed check. isSuccessful is what keeps the body - and section 1.2 requires the envelope to
+    state it either way.
+    """
+    checks = HealthChecks().add("queue", lambda: HealthCheckResult.unhealthy("timeout"))
+    response = _hit(_app(checks))
+
+    assert response["isSuccessful"] is True
+    assert response["statusCode"] == "service-unavailable"
+    assert "benzeneStatus" not in json.loads(response["body"])
 
 
 def test_a_raising_check_is_unhealthy_not_a_crash() -> None:
@@ -56,6 +81,7 @@ def test_a_raising_check_is_unhealthy_not_a_crash() -> None:
 
     response = _hit(_app(HealthChecks().add("boom", boom)))
     assert response["statusCode"] == "service-unavailable"
+    assert json.loads(response["body"])["healthChecks"]["boom"]["isHealthy"] is False
 
 
 def test_async_checks_are_awaited() -> None:

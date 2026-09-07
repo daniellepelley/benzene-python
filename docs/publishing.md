@@ -44,7 +44,8 @@ Pushing a tag `vX.Y.Z` (or running the workflow manually) triggers two jobs:
 
 1. **build** — checks that every `packages/*/pyproject.toml` carries the *same* version (and, for a
    tag, that it equals `v<version>`), then builds an sdist + wheel for every package and runs
-   `twine check` on all of them.
+   `twine check` on all of them. It globs `packages/*/`, so a new package is built and uploaded
+   automatically — which is exactly why the publisher list below has to keep up.
 2. **publish** — uploads every artifact to PyPI from the `pypi` GitHub Environment, authenticating via
    OIDC. PyPI routes each distribution to its project and verifies the trusted-publisher identity per
    project.
@@ -60,6 +61,14 @@ benzene-pydantic  benzene-testing   benzene-gcp      benzene-aws       benzene-a
 benzene-kafka     benzene-rabbitmq  benzene-auth     benzene-cache     benzene-resilience
 benzene-openapi   benzene-otel      benzene-mesh-fleet benzene-codegen-client
 ```
+
+> **`benzene-codegen-client` still needs its pending publisher registered.** It was added to
+> `packages/` after the first release and was missing from this list and from the workflow's; the
+> lists are now correct, but registering the publisher is the one step in this document the
+> repository cannot do for itself. Until a maintainer adds it on PyPI, the next tagged release
+> **fails**: the build globs `packages/*/`, so that distribution is uploaded in the same
+> `pypi-publish` call as the other eighteen, and PyPI rejects the whole upload for a project with no
+> publisher it trusts. Do this before the next tag.
 
 add a *pending* trusted publisher (Account → Publishing) pointing at:
 
@@ -80,7 +89,8 @@ optionally with required reviewers so a human approves each publish.
 1. Bump the version in **every** `packages/*/pyproject.toml` to the new version (they must
    match — the workflow enforces it). Pre-1.0, that means a prerelease identifier every time —
    `0.1.0b2`, `0.1.0b3`, … (bump the counter), or `0.1.0rc1` once the `0.1.0` line is stabilizing.
-   Inter-package dependencies are pinned `>=0.0.1`, so a coordinated bump keeps the stack installable.
+   Inter-package dependency floors name a prerelease (`>=0.1.0b1`, see above) — raise them with
+   each bump so the stack stays installable.
    Only drop the prerelease suffix (ship a bare `X.Y.Z`) for an actual 1.0-and-beyond stable release,
    deliberately decided, not as a default.
 2. Commit, then tag and push:

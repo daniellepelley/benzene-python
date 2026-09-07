@@ -9,14 +9,25 @@ explicit registration remains available via :meth:`Registry.register`.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, get_origin, get_type_hints
 
 from benzene.results import Result
 
 #: A handler: an async function from a request to a Result.
-Handler = Callable[[Any], Awaitable[Result]]
+#:
+#: ``Coroutine``, not ``Awaitable``, and deliberately so. This module's own first line says a handler
+#: *is* ``async def handle(request) -> Result``, and an ``async def`` produces exactly a Coroutine, so
+#: the narrower type states the documented contract rather than a superset of it. It also makes the
+#: most natural way to unit test a handler - ``asyncio.run(handler(request))`` - type-check, because
+#: ``asyncio.run`` requires a coroutine specifically; typed ``Awaitable`` it does not, and a user
+#: running mypy has to work around the framework to test their own handler.
+#:
+#: The injection *seams* (``HttpTransport``, ``HttpGet``) stay ``Awaitable`` for the opposite reason:
+#: an injection point wants the most permissive thing it can accept, so a partial returning a Future
+#: or a mock returning a completed Future still satisfies it.
+Handler = Callable[[Any], Coroutine[Any, Any, Result]]
 
 _BENZENE_MESSAGE_ATTR = "_benzene_message"
 

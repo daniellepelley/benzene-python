@@ -315,7 +315,7 @@ def test_eventbridge_sender_maps_a_put_failure_to_service_unavailable() -> None:
 
     result = asyncio.run(EventBridgeMessageSender("bus", client=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
-    assert "eventbridge down" in " ".join(result.errors)
+    assert "eventbridge down" in " ".join(result.messages)
 
 
 def test_kinesis_sender_embeds_the_envelope_and_keys_the_shard() -> None:
@@ -350,7 +350,7 @@ def test_kinesis_sender_maps_a_put_failure_to_service_unavailable() -> None:
 
     result = asyncio.run(KinesisMessageSender("stream", client=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
-    assert "kinesis down" in " ".join(result.errors)
+    assert "kinesis down" in " ".join(result.messages)
 
 
 # --- direct invoke: one AWS Lambda calling another via lambda.invoke() -----------------------
@@ -387,7 +387,7 @@ def test_invoke_failure_decodes_status_and_errors_not_a_raise() -> None:
     app = AwsLambdaApp(registry=Registry().register("orders:place", place))
     result = AwsLambdaTestHost(app).send_invoke("orders:place", {})
     assert result.status == Status.BAD_REQUEST
-    assert result.errors == ("sku is required",)
+    assert result.messages == ("sku is required",)
 
 
 class _FakeLambdaPayload:
@@ -455,7 +455,7 @@ def test_lambda_sender_decodes_a_failure_response_envelope() -> None:
         LambdaMessageSender("target-fn", client=fake).send_message("orders:get", {})
     )
     assert result.status == Status.NOT_FOUND
-    assert result.errors == ("no such order",)
+    assert result.messages == ("no such order",)
 
 
 def test_lambda_sender_maps_a_function_error_to_service_unavailable() -> None:
@@ -468,7 +468,7 @@ def test_lambda_sender_maps_a_function_error_to_service_unavailable() -> None:
     )
     result = asyncio.run(LambdaMessageSender("target-fn", client=fake).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
-    assert "boom" in " ".join(result.errors)
+    assert "boom" in " ".join(result.messages)
 
 
 def test_lambda_sender_maps_an_invoke_exception_to_service_unavailable() -> None:
@@ -478,7 +478,7 @@ def test_lambda_sender_maps_an_invoke_exception_to_service_unavailable() -> None
 
     result = asyncio.run(LambdaMessageSender("target-fn", client=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
-    assert "lambda invoke failed" in " ".join(result.errors)
+    assert "lambda invoke failed" in " ".join(result.messages)
 
 
 def test_lambda_sender_maps_a_non_benzene_response_to_service_unavailable_not_a_crash() -> None:

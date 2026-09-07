@@ -133,6 +133,21 @@ service needs the scope. The `try_add_*` variants accept all three the same way.
 Lifetimes: `Lifetime.SINGLETON`, `SCOPED`, `TRANSIENT`. Keys are arbitrary tokens (typically a
 `type` or a `str`).
 
+`use_instance(key, instance)` is the shorthand for the commonest override a host writes — swap in one
+ready-made service before the app is wired:
+
+```python
+from benzene.core import MessageSender, build_application, use_instance
+
+definition, _ = build_application(
+    OrdersStartUp, overrides=[use_instance(MessageSender, SqsMessageSender(queue_url))]
+)
+```
+
+It returns exactly the closure it replaces (`lambda services: services.add_instance(key, instance)`),
+so write that closure directly the moment a host needs to register more than one service. See
+[Composition root](#composition-root) for how `overrides` are applied.
+
 > The DI container mirrors .NET's `Benzene.Dependencies`; it is folded into `benzene.core` rather
 > than shipped separately (the C# split existed for assembly isolation, which Python does not need).
 
@@ -155,19 +170,41 @@ response = await app.handle(
 The message version is read inbound from the first present header in `VERSION_HEADER_NAMES` —
 `benzene-version` (the canonical `VERSION_HEADER`, written outbound), then `version`, then `x-version`
 (versioning.md §2) — via `resolve_version(headers)`. Helpers `encode_response(result)` and
-`error_payload(result)` produce the response envelope and the problem-details error body
-(`{"status", "detail"}`) respectively; `decode_response(response)` is the inverse — a response envelope
-back into a `Result` — for any transport whose reply *is* the Benzene envelope verbatim rather than a
-translated status code (an in-process dispatch, a direct AWS Lambda invoke of another Benzene
-function, or a bespoke caller speaking the wire envelope directly).
+`error_payload(result)` produce the response envelope and the RFC 9457 problem document that is a
+failure's body (`{type, title, detail, benzeneStatus, errors[]}` — see
+[`benzene.results`](results.md#problem-details-on-the-wire-wire-contracts-13); RFC 9457's integer
+`status` is added only by an HTTP binding). `decode_response(response)` is the inverse — a response
+envelope back into a `Result` — for any transport whose reply *is* the Benzene envelope verbatim
+rather than a translated status code (an in-process dispatch, a direct AWS Lambda invoke of another
+Benzene function, or a bespoke caller speaking the wire envelope directly).
 
 ```python
 from benzene.core import decode_response, encode_response
 from benzene.results import Result
 
 envelope = encode_response(Result.bad_request("sku is required"))
+# {"statusCode": "bad-request", "isSuccessful": False, "headers": {...}, "body": "..."}
 result = decode_response(envelope)
-# Result(status="bad-request", payload=None, errors=("sku is required",))
+# Result(status="bad-request", payload=None, errors=(BenzeneError("sku is required"),))
+```
+
+### `isSuccessful` is the receiver's signal, not the status text
+
+The response envelope carries `isSuccessful`, and wire-contracts §1.2 makes it **authoritative**: a
+receiver MUST prefer it over anything it derives from `statusCode`. `successful_from(envelope)` is
+that rule — it reads the stated member, and falls back to the status class only for a sender that
+predates it (an older peer, or a port that has not adopted it).
+
+This matters for an application-defined status, which is outside the shared vocabulary and so means
+nothing to a receiver classifying by string alone. Every transport binding here reads it, which is
+what makes `Result.set(status, payload, successful=True)` survive the round trip instead of being
+nacked by SQS, redelivered by Pub/Sub, or answered as gRPC `Internal`.
+
+```python
+from benzene.core import successful_from
+
+successful_from({"statusCode": "cache-warm", "isSuccessful": True})   # True  — stated
+successful_from({"statusCode": "created"})                            # True  — derived (older peer)
 ```
 
 ## Composition root
@@ -295,8 +332,8 @@ raises `NoCastPathError` at call time — a loud configuration error, not a sile
 
 ## Health checks
 
-A service answers the reserved `benzene:healthcheck` topic by running its registered checks (core-
-concepts §). Register named checks on a `HealthChecks` and install `health_interception` before the
+A service answers the reserved `benzene:healthcheck` topic by running its registered checks
+(core-concepts §10; wire-contracts §5). Register named checks on a `HealthChecks` and install `health_interception` before the
 router; it short-circuits the reserved topic (version ignored, like the mesh endpoint):
 
 ```python
@@ -342,10 +379,55 @@ pipeline = MiddlewarePipeline().use(spec_interception(spec))
 
 `spec_interception(spec)` short-circuits the reserved `benzene:spec` topic (version ignored), so a
 service serves its spec over gRPC or a cloud queue too; over HTTP the [`/benzene/spec`](http.md) surface
-is its face. Pass a callable to `spec_interception` / `StandardPaths(spec=...)` to re-derive per request
-(e.g. to reflect a degraded subsystem). The mesh [`ServiceDescriptor`](mesh.md) is a richer projection
-of the same registry (adding identity, placement, and a contract hash); `ServiceSpec` is the minimal
-profile document and needs only `benzene.core`. Both share one schema derivation, `json_schema`.
+serves the **Contract Document** below and keeps this payload at `?type=native`. Pass a callable to
+`spec_interception` / `StandardPaths(spec=...)` to re-derive per request (e.g. to reflect a degraded
+subsystem). The mesh [`ServiceDescriptor`](mesh.md) is a richer projection of the same registry
+(adding identity, placement, and a contract hash); `ServiceSpec` is the minimal profile document and
+needs only `benzene.core`. Both share one schema derivation, `json_schema`.
+
+## Contract document
+
+A `ContractDocument` is the **cross-language** projection of the same registry — the shape
+`contract-document.md` specifies, which the Cloud Service Profile's R5 requires a service to serve at
+`/benzene/spec` and which every language's client generator parses:
+
+```json
+{"openapi": "3.0.1", "info": {"title": "orders", "description": "", "version": "1.0.0"},
+ "messageEndpoint": "/benzene/invoke", "transports": ["http", "sqs"],
+ "requests": [{"topic": "orders:place", "httpMappings": [{"method": "POST", "path": "/orders"}],
+               "request": {"$ref": "#/components/schemas/PlaceOrder"}, "response": {"$ref": "..."}}],
+ "events": [{"topic": "order:placed", "message": {"$ref": "..."}}],
+ "components": {"schemas": {"PlaceOrder": {"type": "object", "properties": {"sku": {"type": "string"}}}}}}
+```
+
+```python
+from benzene.core import ContractDocument, HttpMapping
+
+document = ContractDocument.derive(
+    registry,
+    service="orders",
+    version="1.0.0",
+    produces=outbound,                       # -> events[], same three forms ServiceSpec.derive takes
+    message_endpoint="/benzene/invoke",
+    transports=("http", "sqs"),
+    http_mappings={("orders:place", ""): [HttpMapping("POST", "/orders")]},
+)
+document.to_payload()
+```
+
+- **`derive(registry, ...)`** sees the handlers' declared Python types, so each dataclass payload is
+  named once in `components.schemas` and referenced by `$ref` — that is what lets a generator emit one
+  named type per payload instead of one anonymous type per topic. An untyped (`dict`) handler has no
+  name worth publishing, so its schema is written inline, which §2 allows.
+- **`from_spec(spec, ...)`** projects an already-derived `ServiceSpec`. The types are gone by then, so
+  every schema is inline and the catalogue is empty. This is what `/benzene/spec` serves when you wired
+  only `spec=`; it costs a generator the payload *names*, not any of the contract.
+
+Emission follows §1's presence column rather than whatever is convenient: `transports` is **omitted**
+when empty (never `[]`), `info` writes empty strings rather than going missing, `messageEndpoint` is
+absent when the service exposes none (consumers feature-detect send capability on it), and
+`requests`/`events`/`components` are always present even when empty. A `version` is omitted rather than
+written as `""`, and `reserved` is written only when true.
 
 ## Transport metadata
 
@@ -423,6 +505,54 @@ process-wide singleton), so two targets can legitimately both handle the literal
 zero collision. See `benzene.core.inprocess`'s module docstring for the full port-divergence
 rationale.
 
+## `WorkerHost` — running N transports in one process
+
+A service that speaks more than one transport has to start several things that never return on their
+own, make whichever one finishes first wind the others down, and still exit non-zero if one crashed.
+That is framework work, so `WorkerHost` does it:
+
+```python
+from benzene.core import WorkerHost, background_worker
+from benzene.aws import sqs_consumer_worker
+from benzene.http import uvicorn_worker
+from benzene.kafka import kafka_consumer_worker
+
+await (
+    WorkerHost()
+    .add("http", uvicorn_worker(http_app, port=8080))
+    .add("sqs", sqs_consumer_worker(sqs_app, sqs_client, queue_url))
+    .add("kafka", kafka_consumer_worker(kafka_app, consumer))
+    .run()
+)
+```
+
+- `WorkerHost(*, shutdown_timeout=30.0)` — `add(name, worker)` registers one leg (returns `self`, so
+  it chains); a repeated name raises `DuplicateWorkerError` there and then. `run()` starts every leg
+  concurrently with a shared `StopSignal`, and returns only once **all** of them have finished; a leg
+  that has not noticed the stop signal within `shutdown_timeout` is cancelled rather than left to
+  hang. If any leg raised, the first such exception is re-raised after the orderly shutdown, so the
+  process exits non-zero for an orchestrator to restart. `run()` with no legs raises `NoWorkersError`
+  at start-up — never a process that boots healthy and handles nothing. `host.stop` is the shared
+  signal, so anything can wind the whole host down.
+- A **`Worker`** is just `async def worker(stop: StopSignal) -> None` — no base class. `StopSignal`
+  wraps an `asyncio.Event` and adds `should_continue()`, which drops straight into the consumer
+  loops' `should_continue=` parameter.
+- `background_worker(start)` adapts the other shape of long-lived leg: a `while True:` loop whose
+  shutdown is *cancellation* (a poller, a reporter, a refresh timer). `start` is a callable returning
+  the coroutine, so nothing is scheduled until the host runs.
+
+`WorkerHost` is a shorthand for an `asyncio.gather` over the transports' own loop functions with a
+shared `asyncio.Event` threaded through their `should_continue` parameters — that explicit form is
+written out in full in `benzene/core/worker.py`'s module docstring, and remains the thing to write
+when you want different shutdown semantics. The loop functions themselves
+(`benzene.aws.run_sqs_consumer_loop`, `benzene.kafka.run_consumer_loop`) are unchanged and still
+callable directly: a queue-only service needs no host at all.
+
+`run()` starts no threads and installs no signal handlers, deliberately — `uvicorn.Server.serve()`
+owns SIGINT/SIGTERM on the main thread, and that only works if nothing takes it away. It also cannot
+make a blocking SDK call safe: sharing one event loop works because the consumer loops route their
+`boto3`/`confluent-kafka` calls through `asyncio.to_thread` themselves.
+
 ## Exports
 
 `BenzeneMessageApplication`, `Container`, `Context`, `DuplicateHandlerError`, `Handler`,
@@ -437,8 +567,12 @@ rationale.
 `DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `MessageSender`, `with_retry`, `with_correlation_id`,
 `RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `SchemaCasters`,
 `casting_handler`, `Cast`, `NoCastPathError`, `ServiceSpec`, `TopicSpec`, `spec_interception`,
+`ContractDocument`, `ContractRequest`, `ContractEvent`, `ContractSource`, `HttpMapping`,
+`CONTRACT_OPENAPI`, `is_reserved_topic`, `resolve_contract`,
 `SPEC_TOPIC`, `json_schema`, `Schema`, `to_jsonable`, `to_request`, `Pipelines`,
-`InProcessMessageSender`, `InProcessFanOutSender`, `DuplicatePipelineError`, `PipelineNotFoundError`.
+`InProcessMessageSender`, `InProcessFanOutSender`, `DuplicatePipelineError`, `PipelineNotFoundError`,
+`use_instance`, `WorkerHost`, `StopSignal`, `Worker`, `background_worker`, `NoWorkersError`,
+`DuplicateWorkerError`.
 
 ## See also
 

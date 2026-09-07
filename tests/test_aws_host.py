@@ -45,6 +45,7 @@ def test_message_only_app_answers_http_with_501() -> None:
     app = AwsLambdaApp(registry=Registry().register("t", echo))  # no HTTP router
     event = ApiGatewayRequestBuilder("GET", "/echo").build()
     response = app.handle(event)
+    assert response is not None
     assert response["statusCode"] == 501
 
 
@@ -82,6 +83,7 @@ def test_sqs_poison_record_is_isolated_not_a_whole_batch_crash() -> None:
     # The whole batch must not crash: only the poison record is reported for redelivery, and the
     # good record is still processed (partial-batch response, not an all-or-nothing failure).
     response = app.handle(event)
+    assert response is not None
     assert response["batchItemFailures"] == [{"itemIdentifier": "bad"}]
     assert seen == [{"ok": True}]
 
@@ -103,3 +105,18 @@ def test_a_sync_send_inside_a_running_loop_teaches_how_to_drive_the_app() -> Non
     assert "send_http() is synchronous" in detail
     assert "plain 'def' test" in detail
     assert "await host._app.handle(...)" in detail
+
+
+def test_sqs_does_not_nack_an_application_defined_status_the_handler_marked_successful() -> None:
+    # wire-contracts.md 1.2: isSuccessful is authoritative and MUST be preferred over anything
+    # derived from the status text. Classifying "cache-warm" by string alone makes it a failure,
+    # and SQS then redelivers a message the handler said it had handled - forever.
+    async def handler(request: dict) -> Result:
+        return Result.set("cache-warm", {"entries": 12}, successful=True)
+
+    app = AwsLambdaApp(registry=Registry().register("warm", handler))
+    event = SqsEventBuilder().with_message("warm", {}, message_id="m1").build()
+
+    response = app.handle(event)
+    assert response is not None
+    assert response["batchItemFailures"] == []

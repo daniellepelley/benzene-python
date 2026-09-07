@@ -46,6 +46,35 @@ from_grpc("OK", trailer="created")   # -> "created"   (the trailer wins verbatim
 `BENZENE_STATUS_TRAILER` is the trailer key (`"benzene-status"`). Pinned by
 `grpc-status-mapping.json`.
 
+## Structured errors: the `grpc-status-details-bin` trailer
+
+There is no JSON problem document over gRPC — a non-OK call has no body — so wire-contracts §4.2 maps
+the problem's information onto gRPC's own error model instead. `benzene-status` carries
+`benzeneStatus`; the structured `errors` cross as a `google.rpc.BadRequest` packed into a
+`google.rpc.Status` on the `grpc-status-details-bin` trailer, **one `FieldViolation` per error**:
+
+| `BenzeneError` | `google.rpc.BadRequest.FieldViolation` |
+| --- | --- |
+| `message` | `description` |
+| `field` | `field` (left unset when the error isn't scoped to a field) |
+| `code` | *not carried* — §4.2 doesn't say where it goes, so no port invents a home for it |
+
+The `google.rpc.Status` itself carries the numeric gRPC code and the same detail string the call sets,
+which is what lets a non-Benzene peer read it with the stock `grpc_status.rpc_status.from_call`.
+
+```python
+result = await sender.send_message("orders:submit", {})
+result.status                                    # -> "validation-error"
+[(e.message, e.field) for e in result.errors]    # -> [("sku is required", "sku"), ...]
+```
+
+The server attaches the trailer whenever the outcome is non-OK; the `BadRequest` goes in whenever the
+result carries errors, not only for `validation-error`. A client reading a peer that sends no details
+keeps the message-only behaviour it always had. `GRPC_DETAILS_TRAILER` is the trailer key.
+
+The `google.rpc` messages come from `grpcio-status`, which the `[transport]` extra installs. Without
+it the trailer is simply not written or read — the status mapping and `benzene-status` are unaffected.
+
 ## The transport (`[transport]` extra)
 
 A Benzene gRPC service is a **generic** gRPC handler: the method name *is* the topic (the `grpc` topic
@@ -71,10 +100,11 @@ result = await sender.send_message("orders:place", {"sku": "A"}, headers={"x-cor
 - `add_benzene_handler(server, application)` registers a `BenzeneGrpcHandler` on a `grpc.Server`. The
   response carries the mapped `StatusCode` and — on success and failure alike — a `benzene-status`
   trailer with the raw status, so a status like `created` (which maps to gRPC `OK`) survives the round
-  trip exactly.
+  trip exactly. A failure also carries the structured errors on `grpc-status-details-bin`.
 - `GrpcMessageSender(channel)` is a `MessageSender`: it calls `/benzene.Benzene/<topic>`, forwards the
-  headers as metadata, and maps the outcome back (the trailer wins verbatim, else the code is mapped).
-  The blocking gRPC call runs on a worker thread, so it never blocks the event loop.
+  headers as metadata, and maps the outcome back (the trailer wins verbatim, else the code is mapped),
+  reading a failure's `BadRequest` details back into `result.errors`. The blocking gRPC call runs on a
+  worker thread, so it never blocks the event loop.
 - `method_for(topic)` / `topic_for(method)` are the method-path convention if you need them directly.
 
 ## Testing
@@ -102,8 +132,8 @@ assert reply.status == "created"     # the benzene-status trailer, verbatim; rep
 
 ## Exports
 
-`to_grpc`, `from_grpc`, `BENZENE_STATUS_TRAILER`, `add_benzene_handler`, `BenzeneGrpcHandler`,
-`GrpcMessageSender`, `method_for`, `topic_for`.
+`to_grpc`, `from_grpc`, `BENZENE_STATUS_TRAILER`, `GRPC_DETAILS_TRAILER`, `add_benzene_handler`,
+`BenzeneGrpcHandler`, `GrpcMessageSender`, `method_for`, `topic_for`.
 
 ## See also
 

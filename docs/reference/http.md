@@ -124,17 +124,43 @@ app = BenzeneHttpApp(
   when healthy and `503` when not. The full aggregate is returned either way (it is run directly, so an
   unhealthy report survives — the envelope drops a failure payload). Enabled by passing `health`.
   Note the two health faces differ on failure: this HTTP surface returns the full aggregate on `503`,
-  while the transport-neutral `benzene:healthcheck` envelope reply carries the standard failure body
-  `{status, detail}` (an unhealthy `Result` is `service-unavailable`, and the envelope drops its
-  payload). Both name the failing checks; the HTTP surface additionally keeps the per-check breakdown.
-- **`GET /benzene/spec`** (R5) — the derived [`ServiceSpec`](core.md#service-spec): `{service, topics}`
-  with each topic's request/response JSON schema, projected from the registry (never hand-written).
-  Enabled by passing `spec` (a `ServiceSpec` or a callable returning one).
+  while the transport-neutral `benzene:healthcheck` envelope reply carries the standard failure body —
+  the RFC 9457 problem document (`{type, title, detail, benzeneStatus, errors[]}`, wire-contracts
+  §1.3) — because an unhealthy `Result` is `service-unavailable` and the envelope drops its payload.
+  Both name the failing checks; the HTTP surface additionally keeps the per-check breakdown.
+- **`GET /benzene/spec`** (R5) — the derived **[Contract Document](core.md#contract-document)**:
+  `{openapi, info, messageEndpoint, transports?, requests[], events[], components}`, projected from the
+  registry (never hand-written). This is the format `contract-document.md` specifies and every
+  language's client generator parses, so a .NET/Go/TypeScript generator pointed here reads a Python
+  service the same way it reads its own. Enabled by passing `spec` (a `ServiceSpec` or a callable) or
+  `contract` (a `ContractDocument` or a callable) — see the `?type=` switch below.
 - **Prefix** (R7) — `prefix` defaults to `/benzene` and is configurable; relocating it moves every
   surface together (the prefix is the steer, not a cage), so tell your clients the new base.
 
+### `?type=` on `/benzene/spec`
+
+R5 names the Contract Document as `/benzene/spec?type=benzene&format=json`, and that is what the
+surface answers **by default** — a generator that follows the profile's documented path and asks for
+nothing must get the document the profile names, not a shape only this port can read. (It is also
+where the .NET reference lands for an absent or unrecognised type, so the two ports agree.)
+
+| `?type=` | Document |
+| --- | --- |
+| absent, `benzene`, or anything unrecognised | the Contract Document (contract-document.md) |
+| `native` | this port's own [`ServiceSpec`](core.md#service-spec) payload, `{service, topics[, produces]}` |
+
+`format` is accepted and ignored: JSON is the only rendering this port produces.
+
+Left to itself the served document is projected from the `ServiceSpec`, with schemas written inline
+and this host's own knowledge folded in — `messageEndpoint` (`/benzene/invoke`), each topic's
+`httpMappings` from the router, and any `StandardPaths(transports=...)` you declared. Pass
+`contract=ContractDocument.derive(registry, ...)` to serve an authored document instead: that
+projection sees the handlers' declared types, so it can **name** each payload in
+`components.schemas` rather than inlining it.
+
 The reserved topic **`benzene:spec`** is answered on *any* transport by `spec_interception` (the same
-pattern as health and mesh interception); the HTTP `/benzene/spec` surface is its HTTP face.
+pattern as health and mesh interception) and still carries the native `ServiceSpec` payload; the
+`?type=` switch is an HTTP-surface affordance, which is the only place R5 defines one.
 
 The three cloud hosts drive their HTTP trigger through this same `BenzeneHttpApp`, so passing
 `standard_paths=` to `GcpFunctionsApp` / `AwsLambdaApp` / `AzureFunctionsApp` exposes the identical
@@ -161,11 +187,36 @@ result = await sender.send_message("orders:place", {"sku": "A"}, headers={"x-cor
   it with a fake and no network. The default (`stdlib_transport()`) uses `urllib` on a worker thread, so
   the sender needs **no extra dependency**; inject an `httpx`-backed transport for pooling in production.
 
+## Serving it alongside another transport
+
+`BenzeneHttpApp` is a plain ASGI app, so the ordinary way to run it is `uvicorn my_service:app` — that
+stays the right answer for an HTTP-only service. For a process that serves HTTP **and** polls a queue,
+the server has to run as one leg of a [`benzene.core.WorkerHost`](core.md#workerhost--running-n-transports-in-one-process):
+
+```python
+from benzene.http import asgi_server_worker, uvicorn_worker
+
+WorkerHost().add("http", uvicorn_worker(app, port=8080, access_log=False))
+
+# one level down: build the server yourself, then adapt it
+server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=8080))
+WorkerHost().add("http", asgi_server_worker(server))
+```
+
+- `uvicorn_worker(app, *, host="0.0.0.0", port=8080, **uvicorn_config)` builds
+  `uvicorn.Server(uvicorn.Config(...))` — `**uvicorn_config` is forwarded verbatim — and hands it to
+  `asgi_server_worker`. That is all it does. Needs the optional extra:
+  `pip install "benzene-http[uvicorn]"`; the error names the extra and the rung below if it is absent,
+  and it is raised when the worker is built, not on the first request.
+- `asgi_server_worker(server)` supervises any server exposing `await serve()` and a settable
+  `should_exit` (`SupportsAsgiServing`) — uvicorn's own shutdown flag, so a sibling leg stopping ends
+  `serve()`, and a signal ending `serve()` winds the siblings down.
+
 ## Exports
 
 `BenzeneHttpApp`, `HttpResponse`, `HttpRouter`, `HttpEndpoint`, `http_endpoint`, `routes_of`,
 `to_http`, `from_http`, `HttpMessageSender`, `HttpReply`, `HttpTransport`, `stdlib_transport`,
-`StandardPaths`, `DEFAULT_PREFIX`.
+`StandardPaths`, `DEFAULT_PREFIX`, `uvicorn_worker`, `asgi_server_worker`, `SupportsAsgiServing`.
 
 ## See also
 

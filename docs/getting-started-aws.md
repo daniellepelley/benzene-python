@@ -17,6 +17,16 @@ here we only add the AWS host.
 > hosted on Lambda, with dogfooded tests that push a native API Gateway, SQS, and SNS event through
 > the real bindings. Read it alongside this page.
 
+## What you'll build
+
+One Lambda function hosting one set of order handlers, behind three event sources:
+
+- **HTTP** — `POST /orders` places an order (API Gateway → Lambda).
+- **SQS and SNS** — one `orders:created` subscriber answers the event from either source.
+- **Egress** — placing an order publishes `orders:created` back out over SNS.
+
+All of it runs in memory first — the deploy sketch comes last.
+
 ## Prerequisites
 
 - **Python 3.10+**, `pip`, and a virtual environment (see [Getting started](getting-started.md)).
@@ -309,7 +319,10 @@ however you already do (a zip, container image, SAM, CDK, Terraform, or the cons
 
 ## 7. Supported event sources
 
-`benzene.aws` binds nine Lambda event sources, all through the one function:
+`benzene.aws` binds **nine** Lambda event sources — API Gateway, SQS, SNS, S3, EventBridge, DynamoDB
+Streams, Kinesis, Kafka/MSK, and direct invoke — all through the one function; the
+[`benzene.aws` reference](reference/aws.md#overview) covers each in full. Where each one's topic
+comes from, and what a failure does:
 
 | Source | Topic comes from | Response | On handler failure |
 | --- | --- | --- | --- |
@@ -390,9 +403,9 @@ execution-role IAM to receive requests.
   `FakeMessageSender` via `create_test_host(OrdersStartUp).with_services(...)` instead.
 - **`ModuleNotFoundError: No module named 'boto3'` at first publish** — `boto3` is an optional extra.
   Install `benzene-aws[boto3]` and include it in your deployment bundle.
-- **`ValueError: Unrecognised Lambda event` at runtime** — the payload wasn't API Gateway, SQS, or
-  SNS shaped. Check the trigger wiring; a test event pasted in the console must match one of the real
-  event shapes (use the `*EventBuilder`s as a reference).
+- **`ValueError: Unrecognised Lambda event` at runtime** — the payload matched none of the nine
+  supported event shapes. Check the trigger wiring; a test event pasted in the console must match one
+  of the real event shapes (use the `*EventBuilder`s as a reference).
 - **SQS/SNS message never routes to a handler** — the topic is read from the `topic` message
   *attribute*, not the body. Confirm the producer sets it (Benzene clients do automatically) and that
   a handler is registered for that topic. An unknown topic yields `not-found`, which for SQS surfaces

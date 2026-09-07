@@ -18,6 +18,13 @@ It builds on the base tutorial: read [Getting started](getting-started.md) first
 > served over gRPC, with dogfooded tests that drive the real binding in memory and one test that
 > pushes a message through a live `grpc.Server` + channel. Read it alongside this page.
 
+## What you'll build
+
+- A **gRPC server** serving every registered topic (`orders:place`, `orders:get`, …) as one generic
+  unary method — one `add_benzene_handler` call, no route table.
+- **Egress** — placing an order publishes `orders:created` through an outbound `MessageSender`.
+- A **client** call over `GrpcMessageSender`, plus in-memory tests and one live-socket round trip.
+
 ## Prerequisites
 
 - **Python 3.10+**, `pip`, and a virtual environment (see [Getting started](getting-started.md)).
@@ -299,6 +306,25 @@ You can use the mapping directly — `to_grpc(status)` (server side) and `from_g
 (client side) — with gRPC codes as their canonical **names** (`"OK"`, `"InvalidArgument"`, …), no
 `grpcio` needed. `BENZENE_STATUS_TRAILER` is the trailer key (`"benzene-status"`).
 
+### Structured errors survive the hop too
+
+gRPC discards the body of a non-OK call, so there is no problem document to read `errors` off. A
+failure therefore also carries them on the `grpc-status-details-bin` trailer, as a
+`google.rpc.BadRequest` with one `FieldViolation` per error (wire-contracts §4.2) — and
+`GrpcMessageSender` reads them back:
+
+```python
+result = await sender.send_message("orders:submit", {})
+[(e.message, e.field) for e in result.errors]
+# -> [("sku is required", "sku"), ("quantity must be positive", "quantity")]
+```
+
+So a `@validated(Model)` handler's per-field pydantic errors reach a gRPC caller intact, exactly as
+they do over HTTP. `error.code` is not carried — §4.2 doesn't say where it belongs, and a port
+choosing for itself would put the four ports on different wires. The `google.rpc` messages come from
+`grpcio-status`, installed by the `[transport]` extra; a peer that sends no details still decodes to
+the message-only failure it always did.
+
 > **Interop note (a documented bend).** The method-path scheme `/benzene.Benzene/<topic>` is this
 > port's convention, not a wire contract: the Python port serves every topic through one generic
 > handler (the idiomatic gRPC-Python shape), whereas .NET registers explicit *(route → topic)*
@@ -329,5 +355,3 @@ You can use the mapping directly — `to_grpc(status)` (server side) and `from_g
 - [`benzene.testing` reference](reference/testing.md) and [`benzene.core` reference](reference/core.md).
 - Specification: [transport-bindings](https://benzene.app/docs/specification/transport-bindings),
   [wire-contracts](https://benzene.app/docs/specification/wire-contracts).
-</content>
-</invoke>

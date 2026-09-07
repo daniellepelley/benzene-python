@@ -61,7 +61,7 @@ def test_ingest_and_query_over_http() -> None:
 
     # A per-topic query reads the path parameter (topic ids contain ':').
     topic = asyncio.run(host.app.handle("GET", "/mesh/topic/orders:place"))
-    assert json.loads(topic.body)["providers"] == ["orders"]
+    assert json.loads(topic.body)["consumers"] == ["orders"]
 
 
 def test_health_surface_is_served_for_the_load_balancer() -> None:

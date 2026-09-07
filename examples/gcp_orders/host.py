@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from benzene.gcp import GcpFunctionsApp, PubSubMessageSender
 from orders_domain import OrdersStartUp
 
@@ -23,8 +23,7 @@ def build_gcp_orders_app() -> GcpFunctionsApp:
             "(tests use create_test_host instead)."
         )
 
-    def use_pubsub(services: Container) -> None:
-        services.add_instance(MessageSender, PubSubMessageSender(topic))
-
-    definition, _ = build_application(OrdersStartUp, overrides=[use_pubsub])
+    definition, _ = build_application(
+        OrdersStartUp, overrides=[use_instance(MessageSender, PubSubMessageSender(topic))]
+    )
     return GcpFunctionsApp.from_definition(definition)

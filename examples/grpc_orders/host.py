@@ -13,7 +13,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from benzene.core import Container, MessageSender, application_from, build_application
+from benzene.core import MessageSender, application_from, build_application, use_instance
 from benzene.grpc import add_benzene_handler
 from orders_domain import OrdersStartUp
 
@@ -33,10 +33,7 @@ def build_grpc_orders_server(
     """
     import grpc
 
-    def use_sender(services: Container) -> None:
-        services.add_instance(MessageSender, sender)
-
-    definition, _ = build_application(OrdersStartUp, overrides=[use_sender])
+    definition, _ = build_application(OrdersStartUp, overrides=[use_instance(MessageSender, sender)])
     server = grpc.server(ThreadPoolExecutor(max_workers=max_workers))
     add_benzene_handler(server, application_from(definition))
     port = server.add_insecure_port(bind)

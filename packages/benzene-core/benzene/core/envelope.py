@@ -11,7 +11,8 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from benzene.results import Result, Status, is_successful
+from benzene.results import Result, Status, is_successful, problem_errors
+from benzene.results.problems import problem_title, problem_type
 
 from .context import Context
 from .dependencies import Container
@@ -91,8 +92,46 @@ class BenzeneMessageApplication:
 
 
 def error_payload(result: Result[Any]) -> dict[str, Any]:
-    """The problem-details-shaped error body (wire-contracts.md section 1.3)."""
-    return {"status": result.status, "detail": ", ".join(result.errors)}
+    """The RFC 9457 problem document written as a failed response's body (wire-contracts.md 1.3).
+
+    A genuine problem document, not a problem-shaped dict: ``type`` is the section 3.1 registry URI
+    for the status (omitted for an application-defined status, which the framework has no URI for),
+    ``benzeneStatus`` is the required transport-neutral discriminator mirroring the envelope's
+    ``statusCode``, ``detail`` is the error messages joined with ``", "``, and ``errors`` carries
+    them individually and in order.
+
+    ``status`` is deliberately absent. RFC 9457 defines it as the integer HTTP response code, and
+    section 1.3 requires it to be omitted - not null - wherever no HTTP response exists, which is
+    every transport this function serves. An HTTP binding adds it when it renders the document as
+    an HTTP body (section 4.1).
+
+    The previous shape put the Benzene *status string* in a member named ``status``, colliding with
+    RFC 9457's own integer member. That collision was resolved by rename, not by dropping the RFC
+    alignment: the Benzene status now travels as ``benzeneStatus``.
+    """
+    # An application-authored document is emitted verbatim (Result.problem). Deriving one from the
+    # status instead would overwrite the application's own `type` URI with the registry URI, which
+    # is the entire reason for authoring it.
+    if result.problem_document is not None:
+        return result.problem_document.to_payload()
+
+    problem: dict[str, Any] = {}
+
+    type_uri = problem_type(result.status)
+    if type_uri is not None:
+        problem["type"] = type_uri
+        problem["title"] = problem_title(result.status)
+
+    problem["detail"] = ", ".join(result.messages)
+    problem["benzeneStatus"] = result.status
+
+    # Authoritative and ordered when present (section 1.3): this replaces the withdrawn "recover
+    # errors by splitting detail on ', '" rule, which was never safe - messages contain commas.
+    # Each error is emitted whole, so a field and a code the producer knew reach the caller.
+    if result.errors:
+        problem["errors"] = [error.to_payload() for error in result.errors]
+
+    return problem
 
 
 def encode_response(result: Result[Any] | None) -> dict[str, Any]:
@@ -104,9 +143,42 @@ def encode_response(result: Result[Any] | None) -> dict[str, Any]:
     if result.is_successful:
         body = "" if result.payload is None else json.dumps(to_jsonable(result.payload))
     else:
+        # The envelope is the failure signal, and the body IS the problem document (section 1.3),
+        # so say so on the way out rather than leaving a reader to sniff the shape.
+        headers["content-type"] = "application/problem+json"
         body = json.dumps(error_payload(result))
 
-    return {"statusCode": result.status, "headers": headers, "body": body}
+    # isSuccessful is REQUIRED (section 1.2) and is the authoritative signal: a receiver MUST prefer
+    # it over anything it derives from statusCode text. That matters most for an application-defined
+    # status, which is outside the shared vocabulary and means nothing to a receiver classifying by
+    # string alone - exactly the case where omitting this member makes a success look like a failure.
+    return {
+        "statusCode": result.status,
+        "isSuccessful": result.is_successful,
+        "headers": headers,
+        "body": body,
+    }
+
+
+def successful_from(envelope: Mapping[str, Any]) -> bool:
+    """Whether a response envelope reports success — the receiver's side of section 1.2.
+
+    ``isSuccessful`` is REQUIRED on a response envelope and is **authoritative**: a receiver MUST
+    prefer it over any classification it derives from ``statusCode`` text. That is not a nicety.
+    An application-defined status is outside the shared vocabulary, so it means nothing to a
+    receiver classifying by string alone — ``is_successful`` calls every such status a failure. A
+    handler answering ``Result.set("cache-warm", report, successful=True)`` would then have its
+    success read back as a failure by every peer: a Lambda-to-Lambda invoke returning a failed
+    Result, SQS nacking the message, Pub/Sub redelivering it forever, gRPC answering ``Internal``.
+
+    The fallback to the status class covers a sender that predates the member — an older peer, or a
+    port that has not adopted it yet — where deriving from the status is the best available answer.
+    An explicit ``false`` is honoured as a failure, so ``is not None`` rather than truthiness.
+    """
+    stated = envelope.get("isSuccessful")
+    if stated is None:
+        return is_successful(str(envelope.get("statusCode") or ""))
+    return bool(stated)
 
 
 def decode_response(response: Mapping[str, Any]) -> Result[Any]:
@@ -119,25 +191,47 @@ def decode_response(response: Mapping[str, Any]) -> Result[Any]:
     or gRPC codes — this is the one decode step needed, no reverse status-code table involved (unlike
     ``benzene.http``'s ``from_http`` or ``benzene.grpc``'s ``code_to_status``, whose peers speak a
     *different* status vocabulary on the wire). An empty ``body`` maps to a ``None`` payload; a failure
-    body in :func:`error_payload`'s shape (``{"status", "detail"}``) has its ``detail`` split back into
-    the result's ``errors`` tuple; a body that isn't valid JSON becomes ``unexpected-error`` rather than
-    raising, matching this envelope's "never crash the caller" rule everywhere else.
+    body in :func:`error_payload`'s shape (an RFC 9457 problem document) has its ``errors`` member read
+    back into the result's ``errors`` tuple, falling back to ``detail`` as a single opaque message when
+    the producer sent no ``errors``; a body that isn't valid JSON becomes ``unexpected-error`` rather
+    than raising, matching this envelope's "never crash the caller" rule everywhere else.
+
+    The envelope's ``isSuccessful`` decides whether this is a success (:func:`successful_from`),
+    never the status text, so an application-defined status carried on a result the sender marked
+    successful decodes back as a success instead of a failure.
     """
     status = response.get("statusCode") or Status.UNEXPECTED_ERROR
     body = response.get("body") or ""
+    # The sender's own classification wins over anything derived from the status text, and rides
+    # onto the Result so it survives the decode rather than being re-derived by every later reader.
+    # Only a *divergence* is recorded: when the envelope agrees with the status class - the
+    # overwhelming case - the Result keeps the derived default and looks exactly as it did before,
+    # so the override stays a signal that something unusual was stated rather than noise on every
+    # decoded result.
+    successful = successful_from(response)
+    stated = None if successful == is_successful(status) else successful
     if not body:
-        return Result(status, None)
+        return Result(status, None, successful=stated)
 
     try:
         parsed = json.loads(body)
     except (ValueError, TypeError):
         return Result.unexpected_error(f"response body is not valid JSON: {body!r}")
 
-    if not is_successful(status) and isinstance(parsed, dict) and "detail" in parsed:
-        # error_payload() always encodes a failure as {"status": ..., "detail": ...} - surface the
-        # detail as the Result's error message(s), matching what a peer decoding this envelope does.
-        detail = parsed.get("detail") or ""
-        errors = tuple(e for e in detail.split(", ") if e) if detail else ()
-        return Result(status, None, errors)
+    if not successful and isinstance(parsed, dict) and _looks_like_problem(parsed):
+        # errors, when present, is authoritative and ordered (section 1.3); detail stands in only
+        # when it is absent. problem_errors is that rule, shared with every other decode site.
+        return Result(status, None, problem_errors(parsed), successful=stated)
 
-    return Result(status, parsed)
+    return Result(status, parsed, successful=stated)
+
+
+def _looks_like_problem(parsed: dict[str, Any]) -> bool:
+    """Whether a failed response's parsed body is a problem document rather than a domain payload.
+
+    Any of the three members this profile's documents always or usually carry is enough. Accepting
+    the withdrawn ``status``-string shape too would be wrong - that member is now the integer HTTP
+    code - so a legacy peer's body simply falls through and is surfaced as the payload, which is
+    honest about not understanding it rather than silently mis-reading a number as a status.
+    """
+    return "benzeneStatus" in parsed or "errors" in parsed or "detail" in parsed

@@ -42,9 +42,9 @@ from benzene.core import (
     MessageHandlingError,
     Registry,
     application_from,
+    successful_from,
 )
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
-from benzene.results import is_successful
 
 from .events import (
     DEFAULT_EVENTBRIDGE_TOPIC,
@@ -155,7 +155,10 @@ class AwsLambdaApp:
             for record in event.get("Records", []):
                 envelope = sqs_record_envelope(record)
                 response = await self._application.handle(envelope)
-                if not is_successful(response["statusCode"]):
+                # The envelope's isSuccessful decides what gets nacked, not the status text
+                # (wire-contracts.md 1.2) - otherwise a handler answering an application-defined
+                # status on a result it marked successful has its message redelivered forever.
+                if not successful_from(response):
                     failures.append({"itemIdentifier": record.get("messageId", "")})
             return failures
 
@@ -202,7 +205,7 @@ class AwsLambdaApp:
             for record in event.get("Records", []):
                 envelope = dynamodb_record_envelope(record, self._dynamodb_topic)
                 response = await self._application.handle(envelope)
-                if not is_successful(response["statusCode"]):
+                if not successful_from(response):
                     sequence = (record.get("dynamodb") or {}).get("SequenceNumber", "")
                     failures.append({"itemIdentifier": sequence})
             return failures
@@ -216,7 +219,7 @@ class AwsLambdaApp:
             for record in event.get("Records", []):
                 envelope = kinesis_record_envelope(record, self._kinesis_topic)
                 response = await self._application.handle(envelope)
-                if not is_successful(response["statusCode"]):
+                if not successful_from(response):
                     sequence = (record.get("kinesis") or {}).get("sequenceNumber", "")
                     failures.append({"itemIdentifier": sequence})
             return failures
@@ -239,10 +242,12 @@ class AwsLambdaApp:
         """Run one envelope; on a failure result raise ``MessageHandlingError`` (retry/redeliver).
 
         The shared path for the sources with no partial-batch channel (SNS, S3, EventBridge, Kafka):
-        the only way to signal failure back to the platform is to fault the invocation.
+        the only way to signal failure back to the platform is to fault the invocation. Whether it
+        *is* a failure is the envelope's ``isSuccessful`` to say (wire-contracts.md 1.2), never a
+        classification derived from the status string.
         """
         response = await self._application.handle(envelope)
-        if not is_successful(response["statusCode"]):
+        if not successful_from(response):
             raise MessageHandlingError(envelope["topic"], response["statusCode"], response["body"])
 
 

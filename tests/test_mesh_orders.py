@@ -50,11 +50,11 @@ class MeshOrdersStartUp(OrdersStartUp):
     """`OrdersStartUp` made operational: mesh self-description, a trace per invocation, and a health
     endpoint — the whole cross-cutting stack installed once, in the composition root."""
 
-    def configure_services(self, services, config):  # type: ignore[override]
+    def configure_services(self, services, config):
         super().configure_services(services, config)
         services.try_add_singleton(TraceExporter, lambda _scope: InMemoryTraceExporter())
 
-    def configure(self, services, config):  # type: ignore[override]
+    def configure(self, services, config):
         base = super().configure(services, config)
         descriptor = ServiceDescriptor.derive(base.registry, _SERVICE_INFO)
         health = HealthChecks().add("order-store", lambda: True)
