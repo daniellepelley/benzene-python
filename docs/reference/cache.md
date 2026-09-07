@@ -144,8 +144,28 @@ sentinel value (for example `{"found": False}`) instead of `None`.
 
 `Cache`, `InMemoryCache`, `RedisCache`, `get_or_load`, `CacheAside`.
 
+## Not a lock, and not an idempotency store
+
+`Cache` is `get` / `set` / `delete`. There is deliberately no `add`, no `set_if_absent` and no
+compare-and-swap, because a cache-aside read-through does not need one — and because a port that
+*looked* like it could reserve a key, backed by two calls, would be a race with a reassuring name.
+
+So if you are reaching for the cache to make something happen once, that is the wrong port:
+
+- **Deduping redelivered messages** — use `idempotency_interception` with
+  `RedisIdempotencyStore` or `DynamoDbIdempotencyStore` from
+  [`benzene.resilience`](resilience.md#idempotencystore-and-the-stores-that-implement-it). They live
+  there, next to the middleware and the `IdempotencyStore` port they satisfy, and they reserve a key
+  with a single atomic conditional write (`SET NX`, a conditional `PutItem`) — something `Cache`
+  cannot express through its own methods.
+- **Mutual exclusion between instances** — Benzene ships no distributed lock, and neither the cache
+  nor the idempotency stores are one.
+
+Both can share one Redis: the idempotency store namespaces its keys under `benzene:idem:`.
+
 ## See also
 
 - [`benzene.core`](core.md) — `encode_body`, the wire-naming JSON encoder `RedisCache` serializes with.
-- [`benzene.resilience`](resilience.md) — `InMemoryIdempotencyStore`, the same injectable-clock shape
-  as `InMemoryCache`.
+- [`benzene.resilience`](resilience.md) — the idempotency stores (Redis, DynamoDB) that need an
+  atomic conditional write `Cache` does not offer, and `InMemoryIdempotencyStore`, the same
+  injectable-clock shape as `InMemoryCache`.

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "benzene-resilience"
 version = "0.1.0b2"
-description = "Benzene resilience policies — circuit breaker, bulkhead, rate limiting, idempotency, and in-process sagas."
+description = "Benzene resilience policies — circuit breaker, bulkhead, rate limiting, idempotency (in-memory, Redis and DynamoDB stores), and in-process sagas."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -18,6 +18,8 @@ keywords = [
     "bulkhead",
     "rate-limiting",
     "idempotency",
+    "redis",
+    "dynamodb",
     "saga",
     "hexagonal",
 ]
@@ -34,6 +36,13 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = ["benzene-core>=0.1.0b1"]
+
+# The durable idempotency stores. Both SDKs are optional and imported lazily, so the engine — and
+# every test — runs with neither installed; a store constructed without its extra raises an
+# ImportError naming the one to install.
+[project.optional-dependencies]
+redis = ["redis>=5.0"]
+dynamodb = ["boto3>=1.34"]
 
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"

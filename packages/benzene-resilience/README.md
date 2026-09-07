@@ -5,7 +5,9 @@ retry that ships in the core — **circuit breaker**, **bulkhead**, **rate limit
 and an in-process **saga**. Depends only on `benzene-core`.
 
 ```bash
-pip install benzene-resilience
+pip install benzene-resilience               # every policy, no third-party SDK
+pip install "benzene-resilience[redis]"      # + the Redis idempotency store
+pip install "benzene-resilience[dynamodb]"   # + the DynamoDB idempotency store
 ```
 
 Every gating policy has one `execute(run)` seam and ships in two shapes off it — an inbound
@@ -53,7 +55,11 @@ sender = with_circuit_breaker(orders_client, failure_threshold=5, reset_timeout=
   before the handler runs, so two deliveries that overlap can't both run it: the duplicate gets
   `conflict` ("duplicate delivery is already in flight") and is redelivered once the first finishes.
   Only successes are remembered by default, so a transient failure — or a handler that raises —
-  releases the key and stays retryable. The store is a pluggable async port (in-memory impl included).
+  releases the key and stays retryable. The store is a pluggable async port with three
+  implementations: `InMemoryIdempotencyStore` for one process, and — because a dict dedupes nothing
+  across pods — `RedisIdempotencyStore` (`SET NX`) and `DynamoDbIdempotencyStore` (conditional put)
+  for everything that runs more than one instance. A shared store relocates the race rather than
+  removing it, so handlers should still tolerate running twice.
   (`idempotency_interception` is the preferred name; the original `idempotency` still works.)
 - **Saga** — sequence steps that each know how to undo themselves; a later failure compensates the
   completed steps in reverse. In-process (not durable) and `Result`-shaped — `execute` returns a

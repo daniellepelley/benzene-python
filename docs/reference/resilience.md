@@ -4,8 +4,13 @@ Resilience policies **beyond retry** — a circuit breaker, a bulkhead, a rate l
 dedupe, and an in-process saga. **Distribution: `benzene-resilience` (depends only on `benzene-core`).**
 
 ```bash
-pip install benzene-resilience
+pip install benzene-resilience               # every policy, no third-party SDK
+pip install benzene-resilience[redis]        # + the Redis idempotency store
+pip install benzene-resilience[dynamodb]     # + the DynamoDB idempotency store
 ```
+
+Both extras are optional and imported lazily: the engine, and every test, runs with neither
+installed.
 
 ## Overview
 
@@ -183,10 +188,10 @@ idempotency_interception(         # the older name `idempotency` remains a worki
   policy.
 - Install it ahead of the message router.
 
-### `IdempotencyStore` and `InMemoryIdempotencyStore`
+### `IdempotencyStore` and the stores that implement it
 
-`IdempotencyStore` is the pluggable seam — a runtime `Protocol`, so a network-backed store (Redis,
-DynamoDB) is a drop-in:
+`IdempotencyStore` is the pluggable seam — a `Protocol`, so a network-backed store is a drop-in and
+nothing needs to inherit from anything:
 
 ```python
 class IdempotencyStore(Protocol):
@@ -205,9 +210,129 @@ is answered `conflict` rather than being run a second time or made to wait; a se
 replayed as before; and a handler that raises releases its reservation, so a redelivery is not locked
 out.
 
-`InMemoryIdempotencyStore(*, ttl=None, clock=time.monotonic)` is the process-local implementation for
-tests and single-instance services. `ttl` (seconds) bounds how long a key is remembered (`None` keeps
+Three stores ship:
+
+| Store | Reservation | Use it for |
+|---|---|---|
+| `InMemoryIdempotencyStore` | a `dict` write with no `await` between read and write | tests, and services that genuinely run **one** instance |
+| `RedisIdempotencyStore` | `SET key value NX EX ttl` — one command | anything with a Redis, containers and pods |
+| `DynamoDbIdempotencyStore` | `PutItem` with `attribute_not_exists(#pk) OR expiresAt <= :now` | Lambda and other serverless shapes |
+
+> **The in-memory store is single-process, and a multi-instance service using it is not
+> deduplicating.** Two pods, two Lambda invocations or two SQS consumer replicas dedupe against two
+> different dictionaries, so both run the handler. Nothing errors and nothing logs — the card is
+> charged twice. Configure a shared store, or accept that dedupe is off.
+
+And the honest limit on the shared stores: **a shared store relocates the race, it does not remove
+it.** Independent processes cannot coordinate at runtime; what a conditional write buys you is that
+the *store* orders the two deliveries, so exactly one reservation wins. Everything outside that one
+command is still at-least-once — a key that lapsed between deliveries, a store outage, a redelivery
+beyond `ttl` — so handlers should still be designed to tolerate running twice. Dedupe middleware is
+a large improvement on nothing; it is not a distributed transaction.
+
+#### `InMemoryIdempotencyStore`
+
+```python
+InMemoryIdempotencyStore(*, ttl: float | None = None, clock: Clock = time.monotonic)
+```
+
+The process-local implementation. `ttl` (seconds) bounds how long a key is remembered (`None` keeps
 it for the process lifetime); `clock` is injectable so a test expires entries without sleeping.
+
+#### `RedisIdempotencyStore`
+
+```bash
+pip install benzene-resilience[redis]
+```
+
+```python
+from benzene.resilience import RedisIdempotencyStore, idempotency_interception
+
+store = RedisIdempotencyStore("redis://cache:6379", ttl=3600)
+definition.middleware += [idempotency_interception(store)]
+```
+
+```python
+RedisIdempotencyStore(
+    url: str | None = None,
+    *,
+    client: Any | None = None,          # an already-built redis.asyncio client (or a fake)
+    ttl: float | None = 86_400.0,       # seconds; None = no expiry
+    prefix: str = "benzene:idem:",
+)
+```
+
+`put_if_absent` is **one** command, `SET ... NX`, with the TTL in the same command — never `EXISTS`
+then `SET` (both callers would read "absent" across the await between them), and never a follow-up
+`EXPIRE` (a crash in between pins the key forever). Redis answers nil when `NX` finds the key
+present, so the reply *is* the answer.
+
+Only the client's `get` / `set` / `delete` are used, so any duck-typed stand-in works and the tests
+need no Redis. Sub-second TTLs go out as `px` milliseconds, whole seconds as `ex`, both rounded
+**up** — the same rule `RedisCache` follows. The `redis` SDK is imported lazily; a missing `[redis]`
+extra raises an `ImportError` naming it, at construction, rather than silently disabling dedupe.
+
+#### `DynamoDbIdempotencyStore`
+
+```bash
+pip install benzene-resilience[dynamodb]
+```
+
+```python
+DynamoDbIdempotencyStore(
+    table_name: str,
+    *,
+    client: Any | None = None,          # an already-built boto3 dynamodb client (or a fake)
+    ttl: float | None = 86_400.0,
+    partition_key: str = "pk",
+    clock: Callable[[], float] = time.time,   # epoch seconds, UTC
+)
+```
+
+`put_if_absent` is one conditional `PutItem`; DynamoDB evaluates the condition and writes the item
+atomically, and the loser's `ConditionalCheckFailedException` is mapped to `False` rather than
+raised. Any *other* error (throttling, access denied) propagates — a store you cannot reach must not
+be mistaken for a key that is already taken.
+
+Two things are worth knowing before you deploy it:
+
+- **A lapsed record reads as absent.** DynamoDB's TTL sweeper lags by up to 48 hours, so both `get`
+  and the condition compare `expiresAt` against the clock themselves. Waiting for the physical delete
+  would make an expired key unreclaimable for two days.
+- **Reads are strongly consistent** (`ConsistentRead=True`). An eventually-consistent read could miss
+  the reservation another instance wrote a millisecond ago — which is exactly the read being made.
+
+The store **never creates the table** and never enables TTL: a single string partition key
+(`partition_key`, default `pk`) and TTL on `expiresAt` are your infrastructure. Every blocking
+`boto3` call goes through `asyncio.to_thread`, so dedupe never stalls a co-hosted ASGI server. The
+item mirrors .NET's — `pk`, `status` (`"InProgress"` / `"Completed"`), `wasSuccessful`, `expiresAt`,
+plus a Python-only `result` .NET ignores — so a mixed-language fleet can share one table, and a
+record written by a .NET service (no `result` attribute) still reads as "this key is taken".
+
+#### `ttl` is a correctness setting, not a tidiness one
+
+It must **exceed the transport's maximum redelivery window**. A redelivery arriving after the key
+lapsed finds nothing and runs the handler again — SQS's 14-day retention, not its 30-second
+visibility timeout, is the number to size against. Too long instead of too short: the cost is
+storage.
+
+#### Writing your own store
+
+Implement the four methods (no inheritance — it is a `Protocol`) over anything offering an **atomic
+conditional write**: a unique-key `INSERT`, an etag-conditional blob write, a Postgres
+`INSERT ... ON CONFLICT DO NOTHING`. `encode_result` / `decode_result` are exported for serialising
+the stored `Result`, and their contract is worth reading before rolling your own: `errors` must come
+back a **tuple** (`Result` is a frozen dataclass compared field-by-field, and the middleware
+recognises its reservation marker with `settled == IN_PROGRESS`), and `benzene.core.encode_response`
+is *not* a substitute — it collapses several errors into one `detail` string.
+
+They persist the status, the payload in its wire form, every error whole (with `field` and `code`),
+an explicit `successful` classification, and an application-authored problem document. What they
+deliberately drop is the payload's Python *type*: a replayed payload is JSON data — a `dict`, not the
+dataclass or model the handler returned — which is what a durable store can honestly hold and what
+the wire edge would have produced anyway. Nothing is added: no exception text, no traceback, no host
+identity. A shared store is a new home for whatever your remembered results carry, so scope its
+credentials and its TTL accordingly.
 
 ## Saga
 
@@ -302,7 +427,9 @@ limit and bulkhead at the edge to shed load early, idempotency to dedupe before 
 `DEFAULT_TRIP_ON`, `circuit_breaker_interception`, `with_circuit_breaker`; `Bulkhead`,
 `BulkheadMessageSender`, `bulkhead_interception`, `with_bulkhead`; `RateLimiter`,
 `RateLimitingMessageSender`, `rate_limit_interception`, `with_rate_limit`; `IdempotencyStore`,
-`InMemoryIdempotencyStore`, `DEFAULT_KEY_HEADERS`, `idempotency_interception` (alias `idempotency`); `Saga`, `SagaStep`, `SagaResult`,
+`InMemoryIdempotencyStore`, `RedisIdempotencyStore`, `DynamoDbIdempotencyStore`, `encode_result`,
+`decode_result`, `IN_PROGRESS`, `DEFAULT_KEY_HEADERS`, `idempotency_interception` (alias
+`idempotency`); `Saga`, `SagaStep`, `SagaResult`,
 `SagaAction`, `SagaCompensation`.
 
 ## See also

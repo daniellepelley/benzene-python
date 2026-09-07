@@ -20,9 +20,14 @@ dedupe never pins a failure in place. A handler that *raises* likewise releases 
 delivery cannot wedge a key forever. A message with no idempotency key passes straight through
 (nothing to dedupe on).
 
-The store is a pluggable port (:class:`IdempotencyStore`); an in-memory implementation ships here for
-tests and single-process services, and a shared backend (e.g. Redis, once ``benzene-cache`` lands)
-slots in behind the same async methods.
+The store is a pluggable port (:class:`IdempotencyStore`). :class:`InMemoryIdempotencyStore` ships
+here for tests and single-process services — and **only** those: it is a dict, so on a multi-instance
+deployment two pods dedupe against two different dictionaries and the handler runs twice with nothing
+logged. A service that runs more than one instance must configure a shared store or it is not
+deduplicating: :class:`~benzene.resilience.RedisIdempotencyStore` (``SET NX``) and
+:class:`~benzene.resilience.DynamoDbIdempotencyStore` (conditional put) ship behind the same async
+methods. Even then a shared store *relocates* the race rather than removing it — the conditional
+write orders the two deliveries, so a handler should still tolerate running twice.
 """
 
 from __future__ import annotations

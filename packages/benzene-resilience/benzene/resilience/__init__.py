@@ -7,7 +7,9 @@ distribution (``benzene-resilience``) adds the rest of the resilience surface th
 * **Bulkhead** — cap concurrent invocations so one slow dependency can't exhaust the service.
 * **Rate limiting** — a token bucket that enforces ``too-many-requests`` at the edge.
 * **Idempotency** — dedupe redelivered messages by replaying the first result
-  (``idempotency_interception``; the older ``idempotency`` name still works).
+  (``idempotency_interception``; the older ``idempotency`` name still works), over a pluggable store:
+  in-memory for one process, Redis (``SET NX``) or DynamoDB (conditional put) to dedupe across
+  instances.
 * **Saga** — an in-process compensating sequence (undo completed steps when a later one fails).
 
 Every gating policy (circuit breaker, bulkhead, rate limiter) exposes one ``execute(run)`` seam and
@@ -37,6 +39,7 @@ from .circuit_breaker import (
     circuit_breaker_interception,
     with_circuit_breaker,
 )
+from .dynamodb_store import DynamoDbIdempotencyStore
 from .idempotency import (
     DEFAULT_KEY_HEADERS,
     IN_PROGRESS,
@@ -51,6 +54,8 @@ from .rate_limit import (
     rate_limit_interception,
     with_rate_limit,
 )
+from .redis_store import RedisIdempotencyStore
+from .result_codec import decode_result, encode_result
 from .saga import (
     Saga,
     SagaAction,
@@ -81,8 +86,12 @@ __all__ = [
     # idempotency
     "DEFAULT_KEY_HEADERS",
     "IN_PROGRESS",
+    "DynamoDbIdempotencyStore",
     "IdempotencyStore",
     "InMemoryIdempotencyStore",
+    "RedisIdempotencyStore",
+    "decode_result",
+    "encode_result",
     "idempotency",
     "idempotency_interception",
     # saga

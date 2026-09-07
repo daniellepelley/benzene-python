@@ -8,16 +8,25 @@ deterministically without sleeping. No broker, no real clock, no third-party pac
 from __future__ import annotations
 
 import asyncio
+import sys
+import threading
+from typing import Any
 
+import pytest
 from benzene.core import Context, MiddlewarePipeline, Registry, message_router
 from benzene.resilience import (
+    IN_PROGRESS,
     Bulkhead,
     CircuitBreaker,
     CircuitState,
+    DynamoDbIdempotencyStore,
     InMemoryIdempotencyStore,
     RateLimiter,
+    RedisIdempotencyStore,
     Saga,
     circuit_breaker_interception,
+    decode_result,
+    encode_result,
     idempotency,
     idempotency_interception,
     rate_limit_interception,
@@ -25,7 +34,7 @@ from benzene.resilience import (
     with_circuit_breaker,
     with_rate_limit,
 )
-from benzene.results import Result, Status
+from benzene.results import BenzeneError, ProblemDetails, Result, Status
 
 
 def run(coro):
@@ -605,6 +614,466 @@ def test_idempotency_store_expires_entries() -> None:
 def test_idempotency_interception_is_the_preferred_alias() -> None:
     # D8: the middleware factories are named ``*_interception``; the old name stays working.
     assert idempotency_interception is idempotency
+
+
+# --- durable idempotency stores (Redis, DynamoDB) ------------------------------------------------
+#
+# The in-memory store is single-process, so on a multi-instance deployment dedupe is a silent no-op.
+# These two stores are the shared backing that makes the guarantee hold across processes, and the
+# whole of their correctness is that ``put_if_absent`` is ONE atomic conditional write. Both fakes
+# below therefore model the *real* command semantics — Redis' ``SET NX`` and DynamoDB's conditional
+# ``PutItem`` — with a switch point that a ``get``-then-``put`` emulation cannot survive.
+
+
+class FakeRedis:
+    """A ``redis.asyncio`` stand-in modelling SET's real NX / EX / PX semantics on a manual clock.
+
+    The ``await asyncio.sleep(0)`` at the top of every command is load-bearing: it hands control to
+    any other ready task *before* the command decides, so two callers can be inside ``set`` at once.
+    A store that emulated ``SET NX`` as ``get``-then-``set`` would have both callers read "absent"
+    across that switch point and both would claim the key; only a single atomic command survives it.
+    """
+
+    def __init__(self, clock: ManualClock | None = None) -> None:
+        self.clock = clock or ManualClock()
+        self.entries: dict[str, tuple[str, float | None]] = {}
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def _live(self, key: str) -> str | None:
+        entry = self.entries.get(key)
+        if entry is None:
+            return None
+        value, expires_at = entry
+        if expires_at is not None and self.clock() >= expires_at:
+            del self.entries[key]  # Redis drops a lapsed key; a reader never sees it
+            return None
+        return value
+
+    async def get(self, key: str) -> str | None:
+        self.calls.append(("get", {"key": key}))
+        await asyncio.sleep(0)
+        return self._live(key)
+
+    async def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        nx: bool = False,
+        ex: int | None = None,
+        px: int | None = None,
+    ) -> bool | None:
+        self.calls.append(("set", {"key": key, "value": value, "nx": nx, "ex": ex, "px": px}))
+        await asyncio.sleep(0)  # the switch point a non-atomic emulation loses on
+        if nx and self._live(key) is not None:
+            return None  # redis answers nil when NX finds the key present
+        ttl = float(ex) if ex is not None else (px / 1000 if px is not None else None)
+        self.entries[key] = (value, None if ttl is None else self.clock() + ttl)
+        return True
+
+    async def delete(self, key: str) -> None:
+        self.calls.append(("delete", {"key": key}))
+        await asyncio.sleep(0)
+        self.entries.pop(key, None)
+
+    def command_names(self) -> list[str]:
+        return [name for name, _ in self.calls]
+
+
+class ConditionalCheckFailedException(Exception):
+    """What boto3 exposes as ``client.exceptions.ConditionalCheckFailedException``."""
+
+
+class FakeDynamoDb:
+    """A boto3 DynamoDB client stand-in modelling conditional ``PutItem``.
+
+    ``put_item`` evaluates its ``ConditionExpression`` and writes under one lock, the way DynamoDB
+    applies a conditional write to a single item, and raises the same
+    ``ConditionalCheckFailedException`` the SDK hangs off ``client.exceptions``. It accepts *only*
+    the store's atomic expression, so an implementation that dropped the condition — or read first
+    and wrote unconditionally — is caught here rather than in production.
+
+    ``rendezvous`` (a :class:`threading.Barrier`) parks every caller inside ``put_item`` until the
+    expected number have arrived, so a racing pair is genuinely concurrent instead of being
+    accidentally serialised by the thread pool.
+    """
+
+    CONDITION = "attribute_not_exists(#pk) OR expiresAt <= :now"
+
+    def __init__(self, *, rendezvous: threading.Barrier | None = None) -> None:
+        self.items: dict[str, dict[str, Any]] = {}
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.threads: list[int] = []
+        self.exceptions = self
+        self.ConditionalCheckFailedException = ConditionalCheckFailedException
+        self._rendezvous = rendezvous
+        self._lock = threading.Lock()
+
+    def _record(self, name: str, kwargs: dict[str, Any]) -> None:
+        self.calls.append((name, kwargs))
+        self.threads.append(threading.get_ident())
+
+    def put_item(self, **kwargs: Any) -> dict[str, Any]:
+        self._record("put_item", kwargs)
+        item = kwargs["Item"]
+        condition = kwargs.get("ConditionExpression")
+        if self._rendezvous is not None:
+            self._rendezvous.wait(timeout=5)  # both callers inside the command at once
+        with self._lock:  # DynamoDB evaluates and writes a single item atomically
+            names = kwargs.get("ExpressionAttributeNames") or {}
+            key = item[names.get("#pk", "pk")]["S"]
+            if condition is None:
+                self.items[key] = item
+                return {}
+            if condition != self.CONDITION:
+                raise AssertionError(f"unexpected ConditionExpression: {condition!r}")
+            now = float(kwargs["ExpressionAttributeValues"][":now"]["N"])
+            existing = self.items.get(key)
+            if existing is not None:
+                expires_at = existing.get("expiresAt")
+                lapsed = expires_at is not None and float(expires_at["N"]) <= now
+                if not lapsed:
+                    raise ConditionalCheckFailedException("The conditional request failed")
+            self.items[key] = item
+            return {}
+
+    def get_item(self, **kwargs: Any) -> dict[str, Any]:
+        self._record("get_item", kwargs)
+        key = next(iter(kwargs["Key"].values()))["S"]
+        item = self.items.get(key)
+        return {} if item is None else {"Item": item}
+
+    def delete_item(self, **kwargs: Any) -> dict[str, Any]:
+        self._record("delete_item", kwargs)
+        key = next(iter(kwargs["Key"].values()))["S"]
+        self.items.pop(key, None)
+        return {}
+
+    def command_names(self) -> list[str]:
+        return [name for name, _ in self.calls]
+
+
+def _run_concurrent_duplicates(store: Any) -> tuple[int, Context, Context]:
+    """Deliver one idempotency key twice, overlapping, through the real middleware.
+
+    The same scenario ``test_idempotency_runs_the_handler_once_for_concurrent_duplicates`` runs
+    against the in-memory store, so pointing it at a durable store proves the swap is
+    behaviour-preserving rather than merely type-compatible.
+    """
+    runs = {"n": 0}
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(_request) -> Result:
+        runs["n"] += 1
+        if runs["n"] == 1:
+            entered.set()
+            await release.wait()  # park the first delivery inside the handler
+        return Result.created({"attempt": runs["n"]})
+
+    pipeline = _dedupe_pipeline(store, handler)
+    headers = {"idempotency-key": "abc"}
+    first = Context("t", {}, headers=headers)
+    second = Context("t", {}, headers=headers)
+
+    async def deliver_the_twin() -> None:
+        await entered.wait()  # the first delivery is inside the handler, nothing stored yet
+        await pipeline.handle(second)
+        release.set()
+
+    async def scenario() -> None:
+        await asyncio.gather(pipeline.handle(first), deliver_the_twin())
+
+    run(scenario())
+    return runs["n"], first, second
+
+
+# --- the result codec both stores serialise through ---------------------------------------------
+
+
+def test_encode_result_round_trips_the_status_payload_and_every_error() -> None:
+    result = Result(
+        Status.VALIDATION_ERROR,
+        {"orderId": "o-1"},
+        (BenzeneError("too small", field="quantity", code="min"), BenzeneError("unknown sku")),
+    )
+    restored = decode_result(encode_result(result))
+    assert restored == result
+    # A list would compare unequal to every stored tuple — including the in-flight marker.
+    assert isinstance(restored.errors, tuple)
+    assert restored.errors[0].field == "quantity" and restored.errors[0].code == "min"
+
+
+def test_encode_result_round_trips_the_in_flight_marker_by_equality() -> None:
+    # The middleware recognises the reservation with ``settled == IN_PROGRESS``, so a store that
+    # serialises entries has to restore something that compares equal, not merely similar.
+    assert decode_result(encode_result(IN_PROGRESS)) == IN_PROGRESS
+
+
+def test_encode_result_keeps_an_application_authored_problem_document() -> None:
+    document = ProblemDetails(
+        benzene_status=Status.CONFLICT,
+        type="https://orders.example/problems/already-shipped",
+        title="Already shipped",
+        detail="order o-1 left the warehouse",
+        errors=(BenzeneError("already shipped", code="shipped"),),
+    )
+    restored = decode_result(encode_result(Result.problem(document)))
+    assert restored == Result.problem(document)
+    assert restored.problem_document is not None
+    assert restored.problem_document.type == "https://orders.example/problems/already-shipped"
+
+
+def test_encode_result_keeps_an_explicit_success_classification() -> None:
+    # ``isSuccessful`` is authoritative on the wire; a replayed duplicate must carry the same
+    # classification the first delivery did, not one re-derived from the status text.
+    result = Result.set("cache-warm", {"warmed": 3}, successful=True)
+    restored = decode_result(encode_result(result))
+    assert restored.successful is True and restored.is_successful
+
+
+def test_decode_result_rejects_a_corrupt_entry_loudly() -> None:
+    with pytest.raises(ValueError, match="idempotency"):
+        decode_result("[]")
+
+
+# --- Redis store ---------------------------------------------------------------------------------
+
+
+def test_redis_store_reserves_a_key_for_exactly_one_of_two_racing_callers() -> None:
+    """The race the whole capability exists for: two deliveries, one reservation."""
+    fake = FakeRedis()
+    store = RedisIdempotencyStore(client=fake)
+
+    async def scenario() -> list[bool]:
+        return list(
+            await asyncio.gather(
+                store.put_if_absent("abc", IN_PROGRESS),
+                store.put_if_absent("abc", IN_PROGRESS),
+            )
+        )
+
+    claimed = run(scenario())
+    assert sorted(claimed) == [False, True]  # exactly one delivery may run the handler
+    # One command per caller, and it is SET ... NX: a read followed by a write would show up here
+    # as ``["get", "get", "set", "set"]`` and both callers would have won above.
+    assert fake.command_names() == ["set", "set"]
+    assert all(call["nx"] is True for _, call in fake.calls)
+
+
+def test_redis_store_lets_a_lapsed_reservation_be_reclaimed() -> None:
+    clock = ManualClock()
+    fake = FakeRedis(clock)
+    store = RedisIdempotencyStore(client=fake, ttl=30)
+
+    assert run(store.put_if_absent("abc", IN_PROGRESS)) is True
+    assert run(store.put_if_absent("abc", IN_PROGRESS)) is False  # held for the TTL
+    clock.advance(30)
+    assert run(store.get("abc")) is None  # the TTL elapsed → Redis forgot it
+    assert run(store.put_if_absent("abc", IN_PROGRESS)) is True  # reclaimable
+
+
+def test_redis_store_sets_the_ttl_in_the_same_command_as_the_reservation() -> None:
+    # A separate EXPIRE would leave a window where a crash pins the key forever.
+    fake = FakeRedis()
+    run(RedisIdempotencyStore(client=fake, ttl=1.9).put_if_absent("abc", IN_PROGRESS))
+    _, call = fake.calls[0]
+    assert call["nx"] is True and call["ex"] == 2 and call["px"] is None  # rounds up, never down
+
+
+def test_redis_store_uses_px_for_a_sub_second_ttl() -> None:
+    fake = FakeRedis()
+    run(RedisIdempotencyStore(client=fake, ttl=0.25).put_if_absent("abc", IN_PROGRESS))
+    _, call = fake.calls[0]
+    assert call["px"] == 250 and call["ex"] is None
+
+
+def test_redis_store_round_trips_a_result_through_the_wire_form() -> None:
+    fake = FakeRedis()
+    store = RedisIdempotencyStore(client=fake)
+    result = Result.created({"orderId": "o-1"})
+    run(store.put("abc", result))
+    assert run(store.get("abc")) == result
+    assert "benzene:idem:abc" in fake.entries  # namespaced, so it shares a Redis with the cache
+
+
+def test_redis_store_reports_a_miss_as_none() -> None:
+    assert run(RedisIdempotencyStore(client=FakeRedis()).get("nothing-here")) is None
+
+
+def test_redis_store_delete_releases_the_reservation() -> None:
+    fake = FakeRedis()
+    store = RedisIdempotencyStore(client=fake)
+    run(store.put_if_absent("abc", IN_PROGRESS))
+    run(store.delete("abc"))
+    assert run(store.put_if_absent("abc", IN_PROGRESS)) is True
+
+
+def test_redis_store_requires_a_url_or_a_client() -> None:
+    with pytest.raises(ValueError, match="url or an injected client"):
+        RedisIdempotencyStore()
+
+
+def test_redis_store_missing_sdk_raises_a_teaching_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A forgotten extra is a deployment error, never a message outcome: it must fail loudly at
+    # construction with a message naming the extra to install.
+    monkeypatch.setitem(sys.modules, "redis", None)
+    with pytest.raises(ImportError, match=r"benzene-resilience\[redis\]"):
+        RedisIdempotencyStore("redis://localhost")
+
+
+def test_idempotency_over_the_redis_store_runs_the_handler_once_for_concurrent_duplicates() -> None:
+    calls, first, second = _run_concurrent_duplicates(RedisIdempotencyStore(client=FakeRedis()))
+    assert calls == 1  # "charge the card" happened exactly once, across the shared store
+    assert first.result is not None and first.result.payload == {"attempt": 1}
+    assert second.result is not None and second.result.status == Status.CONFLICT
+    assert "in flight" in second.result.messages[0]
+
+
+def test_idempotency_over_the_redis_store_replays_the_first_result() -> None:
+    store = RedisIdempotencyStore(client=FakeRedis())
+    runs = {"n": 0}
+
+    async def handler(_request) -> Result:
+        runs["n"] += 1
+        return Result.created({"attempt": runs["n"]})
+
+    pipeline = _dedupe_pipeline(store, handler)
+    headers = {"idempotency-key": "abc"}
+    first = Context("t", {}, headers=headers)
+    run(pipeline.handle(first))
+    second = Context("t", {}, headers=headers)
+    run(pipeline.handle(second))
+
+    assert runs["n"] == 1
+    assert second.result is not None and second.result.status == Status.CREATED
+    assert second.result.payload == {"attempt": 1}  # decoded back out of the store
+
+
+# --- DynamoDB store ------------------------------------------------------------------------------
+
+
+def test_dynamodb_store_reserves_a_key_for_exactly_one_of_two_racing_callers() -> None:
+    """Both callers sit inside ``PutItem`` at once; the conditional write picks one."""
+    fake = FakeDynamoDb(rendezvous=threading.Barrier(2))
+    store = DynamoDbIdempotencyStore("orders-idempotency", client=fake, clock=ManualClock())
+
+    async def scenario() -> list[bool]:
+        return list(
+            await asyncio.gather(
+                store.put_if_absent("abc", IN_PROGRESS),
+                store.put_if_absent("abc", IN_PROGRESS),
+            )
+        )
+
+    claimed = run(scenario())
+    assert sorted(claimed) == [False, True]
+    # One conditional write per caller — no read-then-write, which would both show up here and let
+    # both callers claim the key above.
+    assert fake.command_names() == ["put_item", "put_item"]
+    assert {call["ConditionExpression"] for _, call in fake.calls} == {FakeDynamoDb.CONDITION}
+    assert all(call["ExpressionAttributeNames"] == {"#pk": "pk"} for _, call in fake.calls)
+
+
+def test_dynamodb_store_treats_a_lapsed_record_as_absent() -> None:
+    # DynamoDB's own TTL sweeper lags by up to 48 hours. A store that waited for it would leave an
+    # expired key unreclaimable for two days, so the record's own ``expiresAt`` is what decides.
+    clock = ManualClock()
+    fake = FakeDynamoDb()
+    store = DynamoDbIdempotencyStore("orders-idempotency", client=fake, ttl=30, clock=clock)
+
+    assert run(store.put_if_absent("abc", IN_PROGRESS)) is True
+    assert run(store.put_if_absent("abc", IN_PROGRESS)) is False
+    clock.advance(30)
+    assert run(store.get("abc")) is None
+    assert "abc" in fake.items  # still physically present: the read expired it, not the sweeper
+    assert run(store.put_if_absent("abc", IN_PROGRESS)) is True
+
+
+def test_dynamodb_store_writes_a_ttl_attribute_and_the_marker_status() -> None:
+    clock = ManualClock(1_700_000_000.0)
+    fake = FakeDynamoDb()
+    store = DynamoDbIdempotencyStore("orders-idempotency", client=fake, ttl=60, clock=clock)
+    run(store.put_if_absent("abc", IN_PROGRESS))
+
+    item = fake.items["abc"]
+    assert item["pk"] == {"S": "abc"}
+    assert item["expiresAt"] == {"N": "1700000060"}  # whole epoch seconds, what TTL requires
+    # Mirrors the .NET record so a mixed-language fleet can share one table.
+    assert item["status"] == {"S": "InProgress"}
+    assert item["wasSuccessful"] == {"BOOL": False}
+
+    run(store.put("abc", Result.created({"orderId": "o-1"})))
+    settled = fake.items["abc"]
+    assert settled["status"] == {"S": "Completed"} and settled["wasSuccessful"] == {"BOOL": True}
+
+
+def test_dynamodb_store_reads_consistently_and_round_trips_a_result() -> None:
+    fake = FakeDynamoDb()
+    store = DynamoDbIdempotencyStore("orders-idempotency", client=fake)
+    result = Result.created({"orderId": "o-1"})
+    run(store.put("abc", result))
+    assert run(store.get("abc")) == result
+    _, read = fake.calls[-1]
+    # An eventually-consistent read could miss the reservation the other instance just wrote.
+    assert read["ConsistentRead"] is True
+
+
+def test_dynamodb_store_synthesises_a_result_for_a_record_written_by_another_port() -> None:
+    # A .NET service sharing the table writes no ``result`` attribute; its record still has to read
+    # as "this key is taken" rather than crashing or looking absent.
+    fake = FakeDynamoDb()
+    fake.items["abc"] = {
+        "pk": {"S": "abc"},
+        "status": {"S": "Completed"},
+        "wasSuccessful": {"BOOL": True},
+        "expiresAt": {"N": "9999999999"},
+    }
+    settled = run(DynamoDbIdempotencyStore("orders-idempotency", client=fake).get("abc"))
+    assert settled is not None and settled.is_successful
+
+    fake.items["def"] = dict(fake.items["abc"], pk={"S": "def"}, status={"S": "InProgress"})
+    in_flight = run(DynamoDbIdempotencyStore("orders-idempotency", client=fake).get("def"))
+    assert in_flight == IN_PROGRESS  # the middleware's marker, recognised by equality
+
+
+def test_dynamodb_store_delete_releases_the_reservation() -> None:
+    fake = FakeDynamoDb()
+    store = DynamoDbIdempotencyStore("orders-idempotency", client=fake)
+    run(store.put_if_absent("abc", IN_PROGRESS))
+    run(store.delete("abc"))
+    assert fake.command_names()[-1] == "delete_item"
+    assert run(store.put_if_absent("abc", IN_PROGRESS)) is True
+
+
+def test_dynamodb_store_offloads_every_blocking_call_off_the_event_loop() -> None:
+    # The rule tests/test_egress_offloads_the_event_loop.py pins for the senders: a blocking boto3
+    # call must never run on the loop that an ASGI server is sharing.
+    fake = FakeDynamoDb()
+    store = DynamoDbIdempotencyStore("orders-idempotency", client=fake)
+    run(store.put_if_absent("abc", IN_PROGRESS))
+    run(store.get("abc"))
+    run(store.delete("abc"))
+    assert fake.threads and all(ident != threading.get_ident() for ident in fake.threads)
+
+
+def test_dynamodb_store_missing_sdk_raises_a_teaching_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "boto3", None)
+    store = DynamoDbIdempotencyStore("orders-idempotency")
+    with pytest.raises(ImportError, match=r"benzene-resilience\[dynamodb\]"):
+        run(store.get("abc"))
+
+
+def test_idempotency_over_the_dynamodb_store_runs_the_handler_once_for_duplicates() -> None:
+    store = DynamoDbIdempotencyStore("orders-idempotency", client=FakeDynamoDb())
+    calls, first, second = _run_concurrent_duplicates(store)
+    assert calls == 1
+    assert first.result is not None and first.result.payload == {"attempt": 1}
+    assert second.result is not None and second.result.status == Status.CONFLICT
 
 
 # --- saga --------------------------------------------------------------------------------------
