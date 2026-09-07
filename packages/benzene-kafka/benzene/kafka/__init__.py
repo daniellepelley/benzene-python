@@ -15,6 +15,12 @@ Mirrors .NET's ``Benzene.Kafka.Core``. Contributes the ``benzene.kafka`` subpack
 from __future__ import annotations
 
 from .consumer import (
+    DLT_ORIGINAL_OFFSET_HEADER,
+    DLT_ORIGINAL_PARTITION_HEADER,
+    DLT_ORIGINAL_TOPIC_HEADER,
+    DLT_REASON_HEADER,
+    DeadLetterOptions,
+    DeadLetterProducer,
     KafkaConsumerApp,
     KafkaMessage,
     build_kafka_consumer,
@@ -25,6 +31,12 @@ from .consumer import (
 from .producer import TOPIC_HEADER, KafkaMessageSender
 
 __all__ = [
+    "DLT_ORIGINAL_OFFSET_HEADER",
+    "DLT_ORIGINAL_PARTITION_HEADER",
+    "DLT_ORIGINAL_TOPIC_HEADER",
+    "DLT_REASON_HEADER",
+    "DeadLetterOptions",
+    "DeadLetterProducer",
     "KafkaConsumerApp",
     "KafkaMessage",
     "KafkaMessageSender",

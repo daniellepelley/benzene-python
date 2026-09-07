@@ -29,8 +29,9 @@ class FakeKafkaMessage:
     """A stand-in for a ``confluent_kafka.Message``.
 
     Exposes the accessors the binding reads — ``headers()`` / ``value()`` / ``error()`` for the
-    decode, and ``topic()`` / ``partition()`` / ``offset()`` for the loop's per-partition offset
-    bookkeeping (the seek-back that keeps a failed record from being leapfrogged).
+    decode, ``topic()`` / ``partition()`` / ``offset()`` for the loop's per-partition offset
+    bookkeeping (the seek-back that keeps a failed record from being leapfrogged), and ``key()``,
+    which only the dead-letter path reads (the original key must ride onto the re-produced record).
     """
 
     _headers: list[tuple[str, bytes]]
@@ -39,12 +40,16 @@ class FakeKafkaMessage:
     _topic: str = "benzene"
     _partition: int = 0
     _offset: int = 0
+    _key: bytes | None = None
 
     def headers(self) -> list[tuple[str, bytes]]:
         return self._headers
 
     def value(self) -> bytes:
         return self._value
+
+    def key(self) -> bytes | None:
+        return self._key
 
     def error(self) -> Any:
         return self._error
@@ -76,6 +81,7 @@ class KafkaMessageBuilder:
         self._offset = offset
         self._headers: dict[str, str] = {}
         self._body: str = ""
+        self._key: bytes | None = None
 
     def with_header(self, key: str, value: str) -> KafkaMessageBuilder:
         self._headers[key] = value
@@ -83,6 +89,11 @@ class KafkaMessageBuilder:
 
     def with_body(self, body: Any) -> KafkaMessageBuilder:
         self._body = encode_body(body)
+        return self
+
+    def with_key(self, key: bytes | None) -> KafkaMessageBuilder:
+        """Set the record's Kafka key — read only by the dead-letter re-produce, which preserves it."""
+        self._key = key
         return self
 
     def build(self) -> FakeKafkaMessage:
@@ -96,6 +107,7 @@ class KafkaMessageBuilder:
             _topic=self._kafka_topic,
             _partition=self._partition,
             _offset=self._offset,
+            _key=self._key,
         )
 
 
@@ -126,6 +138,43 @@ class RecordingKafkaConsumer:
     def close(self) -> None:
         """Match the real consumer's close, which :func:`~benzene.kafka.kafka_consumer_worker` calls."""
         self.closed = True
+
+
+@dataclass
+class RecordingKafkaProducer:
+    """An in-memory ``confluent_kafka.Producer`` for the dead-letter seam — no broker, no SDK.
+
+    Satisfies :class:`~benzene.kafka.DeadLetterProducer`, so a test can assert what
+    :func:`~benzene.kafka.run_consumer_loop` routed to the dead-letter topic (the original key,
+    value and headers plus the ``x-dlt-*`` diagnostics) and can make the produce fail the three ways
+    a real one can: ``fail`` raises, ``remaining`` leaves records in flight at flush, and
+    ``delivery_error`` reports a per-record delivery failure to the callback. Each of those must
+    leave the offset uncommitted — a dead-letter that never landed is not a routed record.
+    """
+
+    fail: bool = False
+    remaining: int = 0
+    delivery_error: Any = None
+    produced: list[dict[str, Any]] = field(default_factory=list)
+    flushed: list[float] = field(default_factory=list)
+
+    def produce(
+        self,
+        topic: str,
+        *,
+        value: bytes | None,
+        key: bytes | None,
+        headers: list[tuple[str, bytes]],
+        on_delivery: Any,
+    ) -> None:
+        if self.fail:
+            raise RuntimeError("dead-letter topic unreachable")
+        self.produced.append({"topic": topic, "value": value, "key": key, "headers": headers})
+        on_delivery(self.delivery_error, None)
+
+    def flush(self, timeout: float) -> int:
+        self.flushed.append(timeout)
+        return self.remaining
 
 
 class KafkaTestHost:

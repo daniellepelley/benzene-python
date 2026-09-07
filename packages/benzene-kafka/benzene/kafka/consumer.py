@@ -7,11 +7,18 @@ per the spec, result mapping is *acknowledge/log only*: one record is one pipeli
 DI scope, and the handler's result governs whether the loop commits the offset (success) or seeks
 back so the record is redelivered, never a reply.
 
+Because a Kafka commit is a *watermark* rather than a per-message ack, a failed record blocks its
+``(topic, partition)`` until it succeeds — nothing may commit past it. :class:`DeadLetterOptions`
+bounds that block, so a record that can never succeed is re-produced to a dead-letter topic and the
+partition advances instead of wedging: the two halves of poison handling, neither safe alone.
+
 Everything here is duck-typed against the ``confluent-kafka`` shapes (``message.headers()`` /
 ``message.value()`` / ``message.error()`` / ``message.topic()`` / ``message.partition()`` /
-``message.offset()``; ``consumer.poll()`` / ``consumer.commit()`` / ``consumer.seek()``), so the
-binding — decode, per-record dispatch, and the consumer loop — is exercised in memory with fakes and
-needs neither a broker nor the SDK. Only the real client is an optional dependency.
+``message.offset()`` / ``message.key()``; ``consumer.poll()`` / ``consumer.commit()`` /
+``consumer.seek()``; and, for the dead-letter seam, ``producer.produce()`` / ``producer.flush()``),
+so the binding — decode, per-record dispatch, the consumer loop, and dead-lettering — is exercised
+in memory with fakes and needs neither a broker nor the SDK. Only the real clients are an optional
+dependency.
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from benzene.core import (
+    DEFAULT_RETRYABLE,
     AppDefinition,
     BenzeneMessageApplication,
     StopSignal,
@@ -33,6 +41,13 @@ from benzene.core import (
 from benzene.results import Result
 
 logger = logging.getLogger(__name__)
+
+#: Dead-letter diagnostics, byte-identical to .NET's ``KafkaDeadLetterOptions`` constants so a record
+#: dead-lettered by either port is triaged (and replayed) the same way.
+DLT_REASON_HEADER = "x-dlt-reason"
+DLT_ORIGINAL_TOPIC_HEADER = "x-dlt-original-topic"
+DLT_ORIGINAL_PARTITION_HEADER = "x-dlt-original-partition"
+DLT_ORIGINAL_OFFSET_HEADER = "x-dlt-original-offset"
 
 
 class KafkaMessage(Protocol):
@@ -136,6 +151,166 @@ def _seek_target(message: Any) -> Any:
     return TopicPartition(topic, partition, offset)
 
 
+class DeadLetterProducer(Protocol):
+    """The subset of a ``confluent_kafka.Producer`` the dead-letter seam drives (duck-typed).
+
+    Deliberately the SDK's own shape, so the caller passes a real ``Producer`` with no wrapper —
+    Benzene never builds or wraps it, and never touches its auth (matching .NET, where the caller
+    owns ``KafkaDeadLetterOptions.Producer``). Anything with these two methods qualifies, so a
+    dead-letter destination that is not Kafka at all — a database, a file, an SQS queue — is a
+    handful of lines, and a test needs neither broker nor SDK.
+    """
+
+    def produce(
+        self,
+        topic: str,
+        *,
+        value: bytes | None,
+        key: bytes | None,
+        headers: list[tuple[str, bytes]],
+        on_delivery: Callable[[Any, Any], None],
+    ) -> None: ...
+
+    def flush(self, timeout: float) -> int: ...
+
+
+@dataclass(frozen=True)
+class DeadLetterOptions:
+    """The bound that keeps a poison record from wedging its partition (mirrors .NET's options).
+
+    Blocking a partition on a failed record is right for a *transient* failure and wrong for a
+    permanent one: a malformed body or a permanently-unknown topic fails identically on every
+    redelivery, so without a bound the partition stops advancing forever. These options give the
+    block an exit: after enough attempts the record is re-produced to :attr:`topic` and the
+    partition moves on.
+
+    - ``max_attempts`` counts **deliveries of one record** (3 = two seek-backs then dead-letter),
+      tracked per ``(topic, partition, offset)``; it is floored at 1.
+    - ``retry_on`` is the set of statuses worth re-serving at all
+      (:data:`~benzene.core.DEFAULT_RETRYABLE` — ``service-unavailable``, ``timeout``,
+      ``too-many-requests``). A failure *outside* it is deterministic and is dead-lettered on its
+      first failure rather than burning the budget, exactly as the RabbitMQ consumer nacks a final
+      failure without requeue. Pass ``retry_on=frozenset(KNOWN_STATUSES)`` to retry everything.
+    - ``flush_timeout`` bounds the wait for the broker's ack of the dead-letter produce. A produce
+      that is not acknowledged is a *failure* (see :func:`run_consumer_loop`), never a silent drop.
+    """
+
+    topic: str
+    producer: DeadLetterProducer
+    max_attempts: int = 3
+    retry_on: frozenset[str] = DEFAULT_RETRYABLE
+    flush_timeout: float = 10.0
+
+    def budget_for(self, status: str) -> int:
+        """Deliveries this record gets before it is dead-lettered — one, if retrying cannot help."""
+        return max(1, self.max_attempts) if status in self.retry_on else 1
+
+
+@dataclass
+class _Blocked:
+    """The failed record holding up a ``(topic, partition)``, and how many times it has been served.
+
+    The attempt count lives *on the block entry* rather than in a second map keyed by offset: the
+    loop only ever blocks one offset per partition, so this is already per
+    ``(topic, partition, offset)``, and the count is created and discarded with the block itself —
+    when the record finally succeeds, or when it is dead-lettered. There is therefore no per-record
+    state that can outlive the record, and no second dictionary to prune on a rebalance.
+    """
+
+    offset: int
+    attempts: int = 0
+
+
+def _as_bytes(value: Any) -> bytes:
+    """A Kafka header value as bytes (confluent hands out bytes; leaner fakes may hand out ``str``)."""
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    return ("" if value is None else str(value)).encode("utf-8")
+
+
+async def _route_to_dead_letter(
+    options: DeadLetterOptions, message: Any, result: Result, attempts: int
+) -> bool:
+    """Re-produce ``message`` verbatim to the dead-letter topic; ``True`` iff the broker acked it.
+
+    The record is copied byte for byte — ``key()``, ``value()`` and every original header — so it can
+    be replayed from the dead-letter topic unchanged; only the four ``x-dlt-*`` diagnostics are
+    added. The reason is the Benzene :attr:`~benzene.results.Result.status` **string only**: never an
+    exception message or any part of the payload, which would leak request data into an operational
+    topic (the same rule .NET's ``x-dlt-reason`` follows by sending the exception's type name).
+    """
+    topic = _accessor(message, "topic", "")
+    partition = _accessor(message, "partition", 0)
+    offset = _accessor(message, "offset", 0)
+    headers: list[tuple[str, bytes]] = [
+        (str(key), _as_bytes(value)) for key, value in (message.headers() or [])
+    ]
+    headers.extend(
+        [
+            (DLT_REASON_HEADER, _as_bytes(result.status)),
+            (DLT_ORIGINAL_TOPIC_HEADER, _as_bytes(topic)),
+            (DLT_ORIGINAL_PARTITION_HEADER, _as_bytes(partition)),
+            (DLT_ORIGINAL_OFFSET_HEADER, _as_bytes(offset)),
+        ]
+    )
+    delivery_errors: list[Any] = []
+
+    def _on_delivery(error: Any, _message: Any) -> None:
+        if error is not None:
+            delivery_errors.append(error)
+
+    def _publish_dead_letter() -> int:
+        options.producer.produce(
+            options.topic,
+            value=message.value(),
+            key=_accessor(message, "key", None),
+            headers=headers,
+            on_delivery=_on_delivery,
+        )
+        # ``produce`` only buffers locally; ``flush`` is what waits for the broker and returns how
+        # many records are *still* in flight. Both block, so the whole publish takes one thread hop.
+        return int(options.producer.flush(options.flush_timeout))
+
+    try:
+        remaining = await asyncio.to_thread(_publish_dead_letter)
+    except Exception as error:  # noqa: BLE001 - any produce failure is the same decision: don't commit
+        logger.error(
+            "failed to produce the record on Kafka topic %r (partition %s, offset %s) to the "
+            "dead-letter topic %r: %s; leaving the offset uncommitted and stopping the loop, so the "
+            "record is redelivered rather than lost",
+            topic,
+            partition,
+            offset,
+            options.topic,
+            error,
+        )
+        return False
+    if remaining or delivery_errors:
+        logger.error(
+            "the dead-letter produce of the record on Kafka topic %r (partition %s, offset %s) to "
+            "%r was not acknowledged (%s still in flight, %s delivery error(s)); leaving the offset "
+            "uncommitted and stopping the loop, so the record is redelivered rather than lost",
+            topic,
+            partition,
+            offset,
+            options.topic,
+            remaining,
+            len(delivery_errors),
+        )
+        return False
+    logger.error(
+        "record on topic %r (partition %s, offset %s) failed %s time(s) with status %s; "
+        "dead-lettered to %r and the partition advanced past it",
+        read_message_metadata(_decode_headers(message.headers()))[0],
+        partition,
+        offset,
+        attempts,
+        result.status,
+        options.topic,
+    )
+    return True
+
+
 async def run_consumer_loop(
     app: KafkaConsumerApp,
     consumer: Any,
@@ -144,6 +319,7 @@ async def run_consumer_loop(
     should_continue: Callable[[], bool] = lambda: True,
     commit: bool = True,
     on_result: Callable[[Any, Result], None] | None = None,
+    dead_letter: DeadLetterOptions | None = None,
 ) -> None:
     """Drive a self-hosted consumer: poll, dispatch one record at a time, commit the offset on success.
 
@@ -157,14 +333,28 @@ async def run_consumer_loop(
     never commits past it: the partition stays blocked until the failed record itself succeeds, and
     a success on any *other* partition still commits normally (offsets are per-partition).
 
-    The consequence is that a poison record is re-served rather than silently dropped: the loop will
-    keep re-delivering it until it succeeds. Callers cap that with the ``on_result`` /
-    ``should_continue`` seams — count attempts, dead-letter the record and stop blocking, or break
-    out of the loop. Every failure is logged at warning level, so a poison record is never invisible.
-    A caller wanting different semantics passes ``commit=False``, in which case the loop touches
-    neither ``commit`` nor ``seek`` and offset management is entirely the caller's (via
-    ``on_result``). ``should_continue`` bounds the loop (a real worker loops forever; a test stops
-    after N polls).
+    The consequence is that a poison record — one that can *never* succeed — would be re-served
+    forever and its partition would stop advancing entirely, trading silent loss for a wedged
+    partition. ``dead_letter`` bounds that (see :class:`DeadLetterOptions`, and prefer it in
+    production): each delivery of the blocking record is counted, and once it has had its budget the
+    record is re-produced **verbatim** to the dead-letter topic with ``x-dlt-*`` diagnostics, the
+    block is released, and the loop commits past it — the partition advances and the record is
+    preserved for triage or replay. A failure whose status is *outside*
+    :attr:`DeadLetterOptions.retry_on` is deterministic and is dead-lettered on its first failure,
+    without seeking back at all (the RabbitMQ consumer draws the same line: requeue a transient
+    failure, drop a final one to the queue's dead-letter exchange). If the dead-letter produce is
+    not acknowledged, the loop logs at error, leaves the offset **uncommitted**, and returns: a
+    record that could not be routed anywhere must be redelivered on restart, never buried by the
+    next commit. That is .NET's trade too — availability for no-loss.
+
+    Without ``dead_letter`` the block is unbounded, as before: with no seam configured there is
+    nowhere to route the record, and dropping it would be exactly the silent data loss the
+    watermark rule exists to prevent, so the loop keeps re-delivering it and every failure is logged
+    at warning level (a poison record is never invisible). Callers can still cap it themselves from
+    the ``on_result`` / ``should_continue`` seams. A caller wanting different semantics passes
+    ``commit=False``, in which case the loop touches neither ``commit`` nor ``seek`` (nor the
+    dead-letter seam) and offset management is entirely the caller's (via ``on_result``).
+    ``should_continue`` bounds the loop (a real worker loops forever; a test stops after N polls).
 
     ``consumer.poll``/``consumer.commit``/``consumer.seek`` are plain synchronous ``confluent-kafka``
     calls, run via :func:`asyncio.to_thread` rather than called directly on the event loop - called
@@ -174,10 +364,14 @@ async def run_consumer_loop(
     consumer. See ``docs/getting-started-kubernetes.md`` for the multi-transport-in-one-process story
     this makes possible.
     """
-    # (topic, partition) → the offset of the oldest record that failed and has not yet succeeded.
-    # While an entry stands, nothing on that partition may be committed: the commit would be a
-    # watermark past the failure, marking it consumed.
-    blocked: dict[tuple[str, int], int] = {}
+    # (topic, partition) → the oldest record that failed and has not yet succeeded, with the number
+    # of times it has been served. While an entry stands, nothing on that partition may be
+    # committed: the commit would be a watermark past the failure, marking it consumed. The entry is
+    # the *only* per-record state the loop keeps — it is created on the first failure and deleted
+    # the moment the record succeeds or is dead-lettered, so the attempt count cannot outlive the
+    # record it counts and there is no second map to prune (this one is still bounded by the
+    # partitions assigned to this consumer; it is not pruned on a rebalance).
+    blocked: dict[tuple[str, int], _Blocked] = {}
     while should_continue():
         message = await asyncio.to_thread(consumer.poll, poll_timeout)
         if message is None:
@@ -190,6 +384,29 @@ async def run_consumer_loop(
         key = (_accessor(message, "topic", ""), _accessor(message, "partition", 0))
         offset = _accessor(message, "offset", 0)
         if not result.is_successful:
+            if not commit:
+                # The caller owns offsets entirely: touch neither commit, seek, nor the dead letter.
+                logger.warning(
+                    "record on topic %r (partition %s, offset %s) failed with status %s; "
+                    "offsets left to the caller",
+                    read_message_metadata(_decode_headers(message.headers()))[0],
+                    key[1],
+                    offset,
+                    result.status,
+                )
+                continue
+            # At-least-once: stop advancing past the failure and re-fetch it on the next poll.
+            entry = blocked.setdefault(key, _Blocked(offset))
+            if entry.offset == offset:
+                # Only the record actually holding the partition counts attempts. A *later* record
+                # that failed while the block stood is re-served anyway, so counting it would spend
+                # the blocking record's budget on a record that is not blocking anything.
+                entry.attempts += 1
+            spent = (
+                dead_letter is not None
+                and entry.offset == offset
+                and entry.attempts >= dead_letter.budget_for(result.status)
+            )
             # A failing record must never loop invisibly, even with no ``on_result`` wired.
             logger.warning(
                 "record on topic %r (partition %s, offset %s) failed with status %s; %s",
@@ -197,16 +414,29 @@ async def run_consumer_loop(
                 key[1],
                 offset,
                 result.status,
-                "seeking back to redeliver it" if commit else "offsets left to the caller",
+                f"attempt {entry.attempts}, dead-lettering it to {dead_letter.topic!r}"
+                if spent and dead_letter is not None
+                else f"attempt {entry.attempts}, seeking back to redeliver it"
+                if entry.offset == offset
+                else f"seeking back to redeliver it (offset {entry.offset} still blocks the "
+                "partition)",
             )
-            if commit:
-                # At-least-once: stop advancing past the failure and re-fetch it on the next poll.
-                blocked.setdefault(key, offset)
+            if dead_letter is None or not spent:
                 await asyncio.to_thread(consumer.seek, _seek_target(message))
+                continue
+            if not await _route_to_dead_letter(dead_letter, message, result, entry.attempts):
+                # The record went nowhere. Committing past it would lose it, so leave the offset
+                # where it is and stop: a restart redelivers it. Availability traded for no-loss.
+                return
+            # Routed and safely stored elsewhere: release the block (and its attempt count with it)
+            # so the partition can finally advance past the poison record.
+            del blocked[key]
+            await asyncio.to_thread(consumer.commit, message=message)
             continue
         if not commit:
             continue  # the caller owns offsets entirely: touch neither commit nor seek
-        if blocked.get(key) == offset:
+        held = blocked.get(key)
+        if held is not None and held.offset == offset:
             del blocked[key]  # the failed record itself succeeded on redelivery — unblock
         if key in blocked:
             continue  # a later record succeeded first; committing it would bury the failure
@@ -288,7 +518,9 @@ def kafka_consumer_worker(
     the consumer outlives the worker and you close it yourself.
 
     ``**loop_options`` are passed straight through to :func:`run_consumer_loop` (``poll_timeout``,
-    ``commit``, ``on_result``, ...). Passing ``should_continue`` is refused: the host owns that, and
+    ``commit``, ``on_result``, ``dead_letter``, ...) — a long-running worker is exactly where an
+    unbounded block hurts most, so pass ``dead_letter=DeadLetterOptions(...)`` here in production.
+    Passing ``should_continue`` is refused: the host owns that, and
     silently ignoring your callback would be worse than saying so.
     """
     if "should_continue" in loop_options:

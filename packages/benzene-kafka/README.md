@@ -29,9 +29,19 @@ await sender.send_message("orders:created", order, headers={"x-correlation-id": 
   commits the offset on success (at-least-once) and, because a Kafka commit is a *watermark* rather
   than a per-message ack, `seek`s back to a failed record instead of committing past it (the loop
   never buries a failure under a later success on the same partition; other partitions are unaffected).
-  The failed record is re-served and logged at warning level — cap the retries or dead-letter it from
-  the `on_result`/`should_continue` seams, or pass `commit=False` and own the offsets yourself. A
-  poison record can never crash the loop.
+  The failed record is re-served and logged at warning level. A poison record can never crash the
+  loop.
+- **Dead-letter bound** — blocking is right for a transient failure and wrong for a permanent one, so
+  pass `dead_letter=DeadLetterOptions(topic="orders.DLT", producer=my_producer, max_attempts=3)`:
+  after that many deliveries of the same `(topic, partition, offset)` the record is re-produced
+  *verbatim* (key, value, headers) to the dead-letter topic with `x-dlt-reason` (the Benzene status —
+  never an exception message or payload), `x-dlt-original-topic`/`-partition`/`-offset`, the block is
+  released, and the partition advances. A failure whose status is *final* (outside
+  `DEFAULT_RETRYABLE`) is dead-lettered on its first failure — retrying a `bad-request` cannot help.
+  If the dead-letter produce is not acknowledged, the offset stays uncommitted and the loop stops, so
+  the record is redelivered on restart rather than lost. Without `dead_letter` the block is unbounded
+  (there is nowhere to route the record, and dropping it would be silent loss); `commit=False` opts
+  out of offset management entirely.
 - **Outbound** — `KafkaMessageSender` implements the `benzene.core.MessageSender` port over
   `confluent-kafka` (optional extra), forwarding the header dictionary onto the record's Kafka headers
   so correlation/trace propagation rides across the hop. The send waits for the broker ack within

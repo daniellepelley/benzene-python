@@ -21,14 +21,24 @@ import benzene.kafka.consumer as consumer_module
 import pytest
 from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
 from benzene.kafka import (
+    DLT_ORIGINAL_OFFSET_HEADER,
+    DLT_ORIGINAL_PARTITION_HEADER,
+    DLT_ORIGINAL_TOPIC_HEADER,
+    DLT_REASON_HEADER,
     TOPIC_HEADER,
+    DeadLetterOptions,
     KafkaConsumerApp,
     KafkaMessageSender,
     build_kafka_consumer,
     decode_kafka_message,
     run_consumer_loop,
 )
-from benzene.kafka.testing import FakeKafkaMessage, KafkaMessageBuilder, RecordingKafkaConsumer
+from benzene.kafka.testing import (
+    FakeKafkaMessage,
+    KafkaMessageBuilder,
+    RecordingKafkaConsumer,
+    RecordingKafkaProducer,
+)
 from benzene.results import Result, Status
 
 
@@ -292,6 +302,265 @@ def test_loop_skips_records_carrying_a_broker_error() -> None:
     assert consumer.committed == []
 
 
+# --- dead-letter bound (a poison record must not wedge the partition) ---------------------------
+
+
+async def _always_unavailable(_request: PlaceOrder) -> Result:
+    """A *transient*-looking failure that never clears — the poison record the bound exists for."""
+    return Result.failure(Status.SERVICE_UNAVAILABLE)
+
+
+async def _always_bad_request(_request: PlaceOrder) -> Result:
+    """A *final* failure: deterministic, so a redelivery cannot possibly change the outcome."""
+    return Result.failure(Status.BAD_REQUEST)
+
+
+async def _bad_request_unless_ok(request: PlaceOrder) -> Result:
+    """A final failure for the poison sku, a success for ``ok`` (so a successor can commit)."""
+    return Result.created({}) if request.sku == "ok" else Result.failure(Status.BAD_REQUEST)
+
+
+def _record(offset: int, *, partition: int = 0, sku: str = "x") -> Any:
+    return (
+        KafkaMessageBuilder("orders:place", partition=partition, offset=offset)
+        .with_key(b"k1")
+        .with_body({"sku": sku})
+        .build()
+    )
+
+
+def _dlt_headers(produced: dict[str, Any]) -> dict[str, bytes]:
+    return dict(produced["headers"])
+
+
+def _offsets(messages: list[Any]) -> list[int]:
+    return [m.offset() for m in messages]
+
+
+def test_a_transient_failure_is_dead_lettered_only_after_the_attempt_bound() -> None:
+    # The watermark fix seeks back to a failed record; unbounded, that re-serves a poison record
+    # forever and the partition never advances. The bound ends it: after max_attempts deliveries of
+    # the same (topic, partition, offset), the record is routed to the dead-letter seam and the
+    # partition is unblocked.
+    app = KafkaConsumerApp(_app(_flaky))  # transient for the poison sku, success for "ok"
+    producer = RecordingKafkaProducer()
+    poison = [_record(5), _record(5), _record(5)]  # the seek-backs the broker would re-serve
+    successor = _record(6, sku="ok")
+    consumer = RecordingKafkaConsumer(records=[*poison, successor])
+
+    asyncio.run(
+        run_consumer_loop(
+            app,
+            consumer,
+            should_continue=_n_polls(4),
+            dead_letter=DeadLetterOptions(topic="orders.DLT", producer=producer, max_attempts=3),
+        )
+    )
+
+    assert [t.offset for t in consumer.seeks] == [5, 5]  # attempts 1 and 2 seek back as before
+    assert len(producer.produced) == 1  # the third failure routes it instead of seeking again
+    # The partition advances: the dead-lettered record's own offset is committed, and its successor
+    # is no longer buried behind a block that can never clear.
+    assert _offsets(consumer.committed) == [5, 6]
+
+
+def test_the_dead_letter_carries_the_original_bytes_and_the_diagnostic_headers() -> None:
+    # Replay is the point of a dead-letter topic, so the record must round-trip unmodified: the
+    # original key, value and headers, plus the four x-dlt-* diagnostics.
+    app = KafkaConsumerApp(_app(_always_bad_request))
+    producer = RecordingKafkaProducer()
+    poison = (
+        KafkaMessageBuilder("orders:place", kafka_topic="orders", partition=7, offset=42)
+        .with_header("x-correlation-id", "c1")
+        .with_key(b"k1")
+        .with_body({"sku": "A"})
+        .build()
+    )
+    consumer = RecordingKafkaConsumer(records=[poison])
+
+    asyncio.run(
+        run_consumer_loop(
+            app,
+            consumer,
+            should_continue=_n_polls(1),
+            dead_letter=DeadLetterOptions(topic="orders.DLT", producer=producer, max_attempts=1),
+        )
+    )
+
+    (produced,) = producer.produced
+    assert produced["topic"] == "orders.DLT"
+    assert produced["key"] == b"k1"
+    assert json.loads(produced["value"]) == {"sku": "A"}  # the wire body, verbatim
+    headers = _dlt_headers(produced)
+    assert headers["x-correlation-id"] == b"c1"  # the original headers ride along
+    assert headers[TOPIC_HEADER] == b"orders:place"
+    assert headers[DLT_REASON_HEADER] == b"bad-request"  # the status, never an exception message
+    assert headers[DLT_ORIGINAL_TOPIC_HEADER] == b"orders"
+    assert headers[DLT_ORIGINAL_PARTITION_HEADER] == b"7"
+    assert headers[DLT_ORIGINAL_OFFSET_HEADER] == b"42"
+    assert producer.flushed == [10.0]  # produce is fire-and-buffer: only a flush proves delivery
+
+
+def test_a_final_status_is_dead_lettered_on_the_first_failure() -> None:
+    # Consistency with the RabbitMQ consumer: a status outside DEFAULT_RETRYABLE is deterministic,
+    # so spending the retry budget on it just delays the partition for no possible gain.
+    app = KafkaConsumerApp(_app(_bad_request_unless_ok))
+    producer = RecordingKafkaProducer()
+    consumer = RecordingKafkaConsumer(records=[_record(5), _record(6, sku="ok")])
+
+    asyncio.run(
+        run_consumer_loop(
+            app,
+            consumer,
+            should_continue=_n_polls(2),
+            dead_letter=DeadLetterOptions(topic="orders.DLT", producer=producer, max_attempts=3),
+        )
+    )
+
+    assert consumer.seeks == []  # never re-served: a bad-request cannot become good
+    assert len(producer.produced) == 1
+    assert _offsets(consumer.committed) == [5, 6]
+
+
+def test_the_attempt_count_is_per_offset_and_is_released_with_the_block() -> None:
+    # The counter lives on the block entry itself, keyed by (topic, partition, offset): a
+    # dead-lettered record takes its count with it, so the next record starts from a full budget
+    # rather than inheriting a spent one (and nothing accumulates per record).
+    app = KafkaConsumerApp(_app(_always_unavailable))
+    producer = RecordingKafkaProducer()
+    consumer = RecordingKafkaConsumer(records=[_record(5), _record(5), _record(6), _record(6)])
+
+    asyncio.run(
+        run_consumer_loop(
+            app,
+            consumer,
+            should_continue=_n_polls(4),
+            dead_letter=DeadLetterOptions(topic="orders.DLT", producer=producer, max_attempts=2),
+        )
+    )
+
+    assert _offsets(consumer.committed) == [5, 6]
+    assert [t.offset for t in consumer.seeks] == [5, 6]  # one seek each, then each is routed
+    assert len(producer.produced) == 2
+
+
+def test_a_failed_dead_letter_produce_stops_the_loop_without_committing() -> None:
+    # No-loss over availability (.NET's trade): if the record cannot be routed anywhere, committing
+    # past it would drop it silently. Leave the offset uncommitted and stop, so a restart redelivers.
+    app = KafkaConsumerApp(_app(_always_unavailable))
+    producer = RecordingKafkaProducer(fail=True)
+    consumer = RecordingKafkaConsumer(records=[_record(5), _record(6, sku="ok")])
+
+    asyncio.run(
+        run_consumer_loop(
+            app,
+            consumer,
+            should_continue=_n_polls(2),
+            dead_letter=DeadLetterOptions(topic="orders.DLT", producer=producer, max_attempts=1),
+        )
+    )
+
+    assert consumer.committed == []  # nothing may advance past a record that went nowhere
+    assert len(consumer.records) == 1  # the loop returned; the successor was never polled
+
+
+def test_an_unacknowledged_dead_letter_produce_is_a_failure_too() -> None:
+    # produce() only buffers locally; a flush that leaves messages in flight means the broker never
+    # acknowledged, so treating it as routed would lose the record exactly as a raise would.
+    app = KafkaConsumerApp(_app(_always_unavailable))
+    producer = RecordingKafkaProducer(remaining=1)
+    consumer = RecordingKafkaConsumer(records=[_record(5)])
+
+    asyncio.run(
+        run_consumer_loop(
+            app,
+            consumer,
+            should_continue=_n_polls(1),
+            dead_letter=DeadLetterOptions(topic="orders.DLT", producer=producer, max_attempts=1),
+        )
+    )
+    assert consumer.committed == []
+
+
+def test_a_delivery_error_on_the_dead_letter_is_a_failure_too() -> None:
+    app = KafkaConsumerApp(_app(_always_unavailable))
+    producer = RecordingKafkaProducer(delivery_error="broker refused")
+    consumer = RecordingKafkaConsumer(records=[_record(5)])
+
+    asyncio.run(
+        run_consumer_loop(
+            app,
+            consumer,
+            should_continue=_n_polls(1),
+            dead_letter=DeadLetterOptions(topic="orders.DLT", producer=producer, max_attempts=1),
+        )
+    )
+    assert consumer.committed == []
+
+
+def test_without_dead_letter_options_a_poison_record_still_blocks_its_partition() -> None:
+    # The bound is opt-in: with no seam configured there is nowhere to route the record, and
+    # dropping it would be the silent data loss the watermark fix exists to prevent.
+    app = KafkaConsumerApp(_app(_always_unavailable))
+    consumer = RecordingKafkaConsumer(records=[_record(5), _record(5), _record(5), _record(5)])
+
+    asyncio.run(run_consumer_loop(app, consumer, should_continue=_n_polls(4)))
+
+    assert consumer.committed == []
+    assert [t.offset for t in consumer.seeks] == [5, 5, 5, 5]
+
+
+def test_the_dead_letter_produce_runs_via_to_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    # produce/flush are blocking librdkafka calls like poll/commit — never on the event loop.
+    routed: list[str] = []
+    real_to_thread = asyncio.to_thread
+
+    async def spy(func: Any, *args: Any, **kwargs: Any) -> Any:
+        routed.append(getattr(func, "__name__", repr(func)))
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(consumer_module.asyncio, "to_thread", spy)
+
+    app = KafkaConsumerApp(_app(_always_bad_request))
+    producer = RecordingKafkaProducer()
+    consumer = RecordingKafkaConsumer(records=[_record(5)])
+
+    asyncio.run(
+        run_consumer_loop(
+            app,
+            consumer,
+            should_continue=_n_polls(1),
+            dead_letter=DeadLetterOptions(topic="orders.DLT", producer=producer, max_attempts=1),
+        )
+    )
+    # No seek at all: the record was routed, then the partition committed past it.
+    assert routed == ["poll", "_publish_dead_letter", "commit"]
+
+
+def test_the_dead_letter_is_logged_at_error_with_the_destination(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = KafkaConsumerApp(_app(_always_bad_request))
+    producer = RecordingKafkaProducer()
+    consumer = RecordingKafkaConsumer(records=[_record(5)])
+
+    with caplog.at_level(logging.ERROR, logger="benzene.kafka.consumer"):
+        asyncio.run(
+            run_consumer_loop(
+                app,
+                consumer,
+                should_continue=_n_polls(1),
+                dead_letter=DeadLetterOptions(
+                    topic="orders.DLT", producer=producer, max_attempts=1
+                ),
+            )
+        )
+
+    logged = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(logged) == 1
+    assert "orders.DLT" in logged[0] and "bad-request" in logged[0]
+
+
 # --- outbound producer -------------------------------------------------------------------------
 
 
@@ -389,9 +658,7 @@ def test_build_kafka_consumer_disables_auto_commit_so_at_least_once_stays_true(
     recorded: dict[str, Any] = {}
     _stub_confluent(monkeypatch, recorded)
 
-    build_kafka_consumer(
-        bootstrap_servers="broker:9092", group_id="orders", topics=["orders-in"]
-    )
+    build_kafka_consumer(bootstrap_servers="broker:9092", group_id="orders", topics=["orders-in"])
 
     assert recorded["config"]["enable.auto.commit"] is False
     assert recorded["config"]["bootstrap.servers"] == "broker:9092"
