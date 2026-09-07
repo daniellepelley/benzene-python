@@ -196,7 +196,7 @@ also what an attacker sending random `kid`s looks like. A validator that refetch
 an unauthenticated caller drive one outbound request per token, aiming this service at its own IdP. So
 every fetch, scheduled or forced, passes one gate:
 
-| | |
+| Bound | What it buys |
 |---|---|
 | **Floor between attempts** (`min_refresh_interval`, 300s) | At most **one** outbound fetch per document per interval, however many unknown `kid`s arrive. Failed attempts spend the budget too, so a down IdP is not hammered. |
 | **Single-flight** | Concurrent misses coalesce behind one lock — eight simultaneous requests for a just-rotated key cause one fetch, not eight. |
