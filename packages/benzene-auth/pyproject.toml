@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "benzene-auth"
 version = "0.1.0b2"
-description = "Benzene authentication middleware — Basic auth, JWT/OAuth2 bearer tokens, and an API Gateway custom authorizer adapter."
+description = "Benzene authentication middleware — Basic auth, JWT/OAuth2 bearer tokens with JWKS/OIDC key rotation, and an API Gateway custom authorizer adapter."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -17,6 +17,8 @@ keywords = [
     "authentication",
     "basic-auth",
     "jwt",
+    "jwks",
+    "oidc",
     "oauth2",
     "bearer-token",
     "api-gateway",
@@ -37,8 +39,12 @@ classifiers = [
 dependencies = ["benzene-core>=0.1.0b1"]
 
 [project.optional-dependencies]
-# Only needed for JwtValidator's real JWT decode; the middleware and tests need no PyJWT.
+# Only needed for the real JWT decode; the middleware and its tests need no PyJWT at all.
+#   [jwt]  — PyJWT alone: enough for JwtValidator against an HMAC secret.
+#   [jwks] — PyJWT with its crypto backend, which the asymmetric keys (RS256/ES256) a JWKS almost
+#            always carries need; this is the extra for JwksValidator.
 jwt = ["PyJWT>=2.0"]
+jwks = ["PyJWT[crypto]>=2.0"]
 
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"

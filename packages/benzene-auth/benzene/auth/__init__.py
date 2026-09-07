@@ -11,6 +11,11 @@ not ``await next()`` ends the pipeline. This distribution (``benzene-auth``) add
 * **Bearer/OAuth2** — ``bearer_token_interception`` reads ``authorization: Bearer <token>`` and
   validates it; :class:`JwtValidator` decodes a JWT with PyJWT (the optional ``[jwt]`` extra, imported
   lazily), returning ``None`` for any invalid token rather than raising.
+* **JWKS / OIDC discovery** — :class:`JwksValidator` is the *rotation-aware* validator: it resolves
+  the verification key per token by the header's ``kid`` from a cached JWKS document (found by OIDC
+  discovery from an issuer, or configured directly), so an identity provider rotating its signing key
+  is a non-event instead of an outage. Its refresh policy is deliberately bounded — see
+  :mod:`~benzene.auth.jwks`.
 * **API Gateway authorizer** — ``api_gateway_authorizer`` adapts the *same* ``validate`` seam into an
   AWS Lambda custom authorizer handler that emits an Allow/Deny IAM policy.
 
@@ -36,6 +41,18 @@ from .bearer import (
     bearer_token_interception,
     static_token_validator,
 )
+from .jwks import (
+    DEFAULT_CACHE_TTL,
+    DEFAULT_MIN_REFRESH_INTERVAL,
+    OPENID_CONFIGURATION_PATH,
+    JwksClient,
+    JwksDecoder,
+    JwksFetch,
+    JwksValidator,
+    openid_configuration_url,
+    stdlib_fetch,
+    unverified_header,
+)
 from .principal import Principal, get_principal, set_principal
 
 __all__ = [
@@ -53,6 +70,17 @@ __all__ = [
     "JwtValidator",
     "bearer_token_interception",
     "static_token_validator",
+    # jwks / oidc discovery
+    "DEFAULT_CACHE_TTL",
+    "DEFAULT_MIN_REFRESH_INTERVAL",
+    "JwksClient",
+    "JwksDecoder",
+    "JwksFetch",
+    "JwksValidator",
+    "OPENID_CONFIGURATION_PATH",
+    "openid_configuration_url",
+    "stdlib_fetch",
+    "unverified_header",
     # aws api gateway authorizer
     "api_gateway_authorizer",
 ]
