@@ -83,6 +83,10 @@ was right but incomplete is still a bug.
   carrying the data).
 - **T2.4 Serializer seam** for the message *body* only — never the envelope, descriptor or hashed
   documents; failure bodies stay JSON.
+- **T2.6 RabbitMQ publish is fire-and-forget.** The channel never calls `confirm_delivery()`, so an
+  `ok` Result means the frame was written, not that the broker accepted it. Persistence (T0.1) is
+  necessary but not sufficient for delivery; confirms are the other half. Only an injected
+  pre-confirming channel can get this today.
 - **T2.5 Timeout/deadline policy** (a hanging dependency never trips the breaker) and cache
   degrade-to-miss instead of failing the request.
 
@@ -101,6 +105,23 @@ already fixed. Confirmed stale, and dropped from this plan:
 
 **Rule: re-validate every item below against the merged tree before implementing it.** An analysis
 finding is a hypothesis about code that has since moved.
+
+## Tier 3 — the refining pass (run after the capabilities land, not before)
+
+The repo vendors specialist agents for exactly this, and they are the difference between "the code
+exists" and "it is production grade":
+
+- **`capability-scribe`** — **mandatory, not optional.** `docs/capability-matrix.md` currently states
+  outbox, claim check and schema registry as *"Not implemented"* and auth's JWKS as *"Partial"*.
+  Shipping those without updating it converts the port's most honest document into a false one. The
+  matrix must move in the same change as the capability.
+- **`ergonomics-champion`** — boilerplate-versus-magic on every new public API (outbox, claim check,
+  the stores). New packages are exactly where ceremony accumulates.
+- **`python-dx-champion`** — does the new surface feel like Python, and do its errors teach?
+- **`python-test-champion`** — is each new capability reachable through the shared harness, with the
+  failure paths (not just the happy path) covered?
+- **`docs-archivist`** — `work/` has accumulated an audit, six parity analyses and this plan; once
+  actioned they belong in `work/archive/` with an index, not in the way.
 
 ## Rules for every workstream
 
