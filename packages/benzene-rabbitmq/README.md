@@ -37,6 +37,10 @@ await sender.send_message("orders:created", order, headers={"x-correlation-id": 
   correlation/trace propagation rides across the hop. Connection *and* publish run on a worker thread
   under one lock, because a pika channel is not thread-safe; a missing `pika` raises a teaching
   `ImportError` naming `pip install "benzene-rabbitmq[rabbitmq]"` rather than failing every publish.
+  Publishing is **persistent by default** (AMQP delivery mode 2) — a durable queue *and* a persistent
+  message is the only combination that survives a broker restart; AMQP's own default is transient, so
+  the message would otherwise be lost on restart while the publish still reported success. Pass
+  `RabbitMqMessageSender(..., persistent=False)` for transient delivery on a loss-tolerant stream.
 
 The binding is duck-typed against `pika`, so decode, dispatch, and publish are exercised in memory with
 fakes — no broker, no SDK. Test through `benzene.rabbitmq.testing` (a native-delivery builder + a test

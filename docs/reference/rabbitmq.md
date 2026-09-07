@@ -68,8 +68,10 @@ await run_consumer_loop(app, channel, queue="orders")  # the self-hosted worker:
 ```python
 from benzene.rabbitmq import RabbitMqMessageSender
 
-sender = RabbitMqMessageSender("orders-events", host="localhost")
+sender = RabbitMqMessageSender("orders-events", host="localhost")           # persistent (mode 2)
 await sender.send_message("orders:created", order, headers={"x-correlation-id": "abc"})
+
+transient = RabbitMqMessageSender("metrics", host="localhost", persistent=False)  # opt out
 ```
 
 Implements the `benzene.core.MessageSender` port over a RabbitMQ channel: it serializes the message to
@@ -79,6 +81,14 @@ propagation rides across the hop), and carries the Benzene topic in the `topic` 
 `exchange` / `routing_key`, header-routed. A publish failure maps to `service-unavailable`. Inject a
 `channel` (any object exposing `basic_publish(exchange, routing_key, body, properties)`) for tests;
 otherwise a `pika` blocking connection is opened lazily from `host` (default `localhost`) on first use.
+
+Publishes are **persistent by default** (`persistent=True` → AMQP `delivery_mode=2`), matching .NET's
+`UseRabbitMqClient(channel, persistent: false)` opt-out. A durable queue *and* a persistent message is
+the only combination that survives a broker restart: AMQP's own default is delivery mode 1 (transient),
+which keeps the message in memory only, so it would be lost on restart while `send_message` still
+returned success. Pass `persistent=False` for transient delivery — cheaper for a high-throughput,
+loss-tolerant stream, at the cost of losing unconsumed messages when the broker restarts. The delivery
+mode is an AMQP broker property, not Benzene metadata: it does not appear in the wire envelope.
 
 ## Testing
 

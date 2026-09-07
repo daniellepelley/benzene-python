@@ -171,6 +171,14 @@ class _FakeChannel:
         )
 
 
+@dataclass
+class _StubBasicProperties:
+    """A stand-in for ``pika.BasicProperties`` carrying exactly the fields the sender sets."""
+
+    headers: dict[str, Any] = field(default_factory=dict)
+    delivery_mode: int | None = None
+
+
 def test_sender_forwards_headers_and_tags_the_topic() -> None:
     channel = _FakeChannel()
     sender = RabbitMqMessageSender("orders-events", "orders", channel=channel)
@@ -199,6 +207,42 @@ def test_recording_channel_serves_as_the_publish_sink_too() -> None:
     result = asyncio.run(sender.send_message("orders:created", {"sku": "A"}))
     assert result.is_successful
     assert channel.published[0]["properties"].headers[TOPIC_HEADER] == "orders:created"
+
+
+def test_sender_publishes_persistent_by_default() -> None:
+    # AMQP's own default is delivery mode 1 (transient): the broker holds the message in memory only,
+    # so it is silently lost on a restart even on a durable queue - and send_message still reported
+    # success. Persistent is the deliberate default here, as in .NET's Benzene.RabbitMq.
+    channel = _FakeChannel()
+    sender = RabbitMqMessageSender("orders-events", channel=channel)
+    result = asyncio.run(sender.send_message("orders:created", {"sku": "A"}))
+    assert result.is_successful
+    assert channel.published[0]["properties"].delivery_mode == 2
+
+
+def test_sender_honours_an_explicit_transient_opt_out() -> None:
+    # A high-throughput, loss-tolerant stream opts out explicitly; the default never opts out for it.
+    channel = _FakeChannel()
+    sender = RabbitMqMessageSender("orders-events", channel=channel, persistent=False)
+    result = asyncio.run(sender.send_message("orders:created", {"sku": "A"}))
+    assert result.is_successful
+    assert channel.published[0]["properties"].delivery_mode == 1
+
+
+def test_the_real_pika_properties_carry_the_delivery_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The SDK-free stand-in and pika.BasicProperties must agree: both carry headers *and* the
+    # delivery mode, so a fake-backed test proves what the real client sends.
+    pika = types.ModuleType("pika")
+    pika.BasicProperties = _StubBasicProperties  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pika", pika)
+    channel = _FakeChannel()
+    sender = RabbitMqMessageSender("orders-events", channel=channel)
+
+    assert asyncio.run(sender.send_message("orders:created", {"sku": "A"})).is_successful
+    properties = channel.published[0]["properties"]
+    assert isinstance(properties, _StubBasicProperties)
+    assert properties.delivery_mode == 2
+    assert properties.headers[TOPIC_HEADER] == "orders:created"
 
 
 # --- poison handling, idle backoff, and off-loop dispatch ---------------------------------------
@@ -481,7 +525,7 @@ def test_the_blocking_connection_is_opened_on_the_worker_thread(
     pika = types.ModuleType("pika")
     pika.BlockingConnection = _StubConnection  # type: ignore[attr-defined]
     pika.ConnectionParameters = lambda **kwargs: kwargs  # type: ignore[attr-defined]
-    pika.BasicProperties = FakeRabbitMqProperties  # type: ignore[attr-defined]
+    pika.BasicProperties = _StubBasicProperties  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "pika", pika)
 
     sender = RabbitMqMessageSender("orders-events", host="broker")

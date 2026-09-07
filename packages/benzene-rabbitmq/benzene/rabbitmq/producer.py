@@ -27,11 +27,21 @@ from benzene.results import Result, Status
 TOPIC_HEADER = "topic"
 
 
+#: AMQP delivery modes: 2 writes the message to disk on a durable queue, 1 keeps it in memory only.
+PERSISTENT_DELIVERY_MODE = 2
+TRANSIENT_DELIVERY_MODE = 1
+
+
 @dataclass
 class _AmqpProperties:
-    """A minimal ``pika.BasicProperties`` stand-in — used when the SDK is absent (tests, no broker)."""
+    """A minimal ``pika.BasicProperties`` stand-in — used when the SDK is absent (tests, no broker).
+
+    Carries the same fields the sender sets on the real ``pika.BasicProperties``, so a fake-backed test
+    asserts the shape the broker would actually receive.
+    """
 
     headers: dict[str, str] = field(default_factory=dict)
+    delivery_mode: int = PERSISTENT_DELIVERY_MODE
 
 
 class RabbitMqMessageSender:
@@ -49,6 +59,13 @@ class RabbitMqMessageSender:
     channel. An :class:`asyncio.Lock` is therefore held across lazy client creation *and* the publish,
     so one sender issues one publish at a time (use several senders — hence several channels — for
     parallel throughput).
+
+    Publishes are **persistent by default** (``delivery_mode=2``): a durable queue plus a persistent
+    message is the only combination that survives a broker restart, and AMQP's own default (1,
+    transient) would otherwise lose every message on restart while ``send_message`` still reported
+    success. Pass ``persistent=False`` for transient delivery — lower broker overhead for a
+    high-throughput, loss-tolerant stream, at the cost of losing unconsumed messages on a restart even
+    on a durable queue. Mirrors .NET's ``UseRabbitMqClient(channel, persistent: false)``.
     """
 
     def __init__(
@@ -58,12 +75,14 @@ class RabbitMqMessageSender:
         channel: Any | None = None,
         *,
         host: str | None = None,
+        persistent: bool = True,
         serializer: Callable[[Any], str] | None = None,
     ) -> None:
         self._exchange = exchange
         self._routing_key = routing_key
         self._channel = channel
         self._host = host
+        self._persistent = persistent
         self._serialize = serializer or encode_body
         #: Serializes client creation + publish: one pika channel, many ``to_thread`` workers.
         self._lock = asyncio.Lock()
@@ -90,13 +109,18 @@ class RabbitMqMessageSender:
         return self._channel
 
     def _properties(self, headers: dict[str, str]) -> Any:
-        """Build the AMQP properties carrying ``headers`` — real ``pika`` if present, else a stand-in."""
+        """Build the AMQP properties carrying ``headers`` — real ``pika`` if present, else a stand-in.
+
+        Always sets the delivery mode explicitly: leaving it unset takes AMQP's transient default, so a
+        message on a durable queue would still be lost on a broker restart.
+        """
+        delivery_mode = PERSISTENT_DELIVERY_MODE if self._persistent else TRANSIENT_DELIVERY_MODE
         try:
             import pika  # lazy: optional dependency
 
-            return pika.BasicProperties(headers=headers)
+            return pika.BasicProperties(headers=headers, delivery_mode=delivery_mode)
         except ImportError:
-            return _AmqpProperties(headers=headers)
+            return _AmqpProperties(headers=headers, delivery_mode=delivery_mode)
 
     async def send_message(
         self, topic: str, message: Any, headers: dict[str, str] | None = None
