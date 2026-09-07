@@ -60,6 +60,7 @@ benzene-results   benzene-core      benzene-http     benzene-grpc      benzene-m
 benzene-pydantic  benzene-testing   benzene-gcp      benzene-aws       benzene-azure
 benzene-kafka     benzene-rabbitmq  benzene-auth     benzene-cache     benzene-resilience
 benzene-openapi   benzene-otel      benzene-mesh-fleet benzene-codegen-client
+benzene-outbox
 ```
 
 > **`benzene-codegen-client` still needs its pending publisher registered.** It was added to

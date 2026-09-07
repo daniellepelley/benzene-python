@@ -39,7 +39,7 @@ python_version = "3.10"
 namespace_packages = true
 explicit_package_bases = true
 ignore_missing_imports = true # third-party (grpcio, pydantic, cloud SDKs) ship without stubs
-mypy_path = "packages/benzene-results:packages/benzene-core:packages/benzene-http:packages/benzene-grpc:packages/benzene-mesh:packages/benzene-pydantic:packages/benzene-testing:packages/benzene-gcp:packages/benzene-aws:packages/benzene-azure:packages/benzene-kafka:packages/benzene-resilience:packages/benzene-rabbitmq:packages/benzene-auth:packages/benzene-cache:packages/benzene-otel:packages/benzene-openapi:packages/benzene-mesh-fleet:packages/benzene-codegen-client:deploy/mesh"
+mypy_path = "packages/benzene-results:packages/benzene-core:packages/benzene-http:packages/benzene-grpc:packages/benzene-mesh:packages/benzene-pydantic:packages/benzene-testing:packages/benzene-gcp:packages/benzene-aws:packages/benzene-azure:packages/benzene-kafka:packages/benzene-resilience:packages/benzene-rabbitmq:packages/benzene-auth:packages/benzene-cache:packages/benzene-otel:packages/benzene-openapi:packages/benzene-mesh-fleet:packages/benzene-codegen-client:packages/benzene-outbox:deploy/mesh"
 files = [
     "packages/benzene-results/benzene",
     "packages/benzene-core/benzene",
@@ -60,6 +60,7 @@ files = [
     "packages/benzene-openapi/benzene",
     "packages/benzene-mesh-fleet/benzene",
     "packages/benzene-codegen-client/benzene",
+    "packages/benzene-outbox/benzene",
     "deploy/mesh/collector",
     "deploy/mesh/fleet",
     # The tests and the examples too. Type errors cluster in test code - it is where the awkward
@@ -106,6 +107,7 @@ pythonpath = [
     "packages/benzene-openapi",
     "packages/benzene-mesh-fleet",
     "packages/benzene-codegen-client",
+    "packages/benzene-outbox",
     "examples",
     "deploy/mesh",
 ]
