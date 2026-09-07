@@ -488,8 +488,8 @@ def test_the_event_log_defaults_to_a_generous_cap() -> None:
     # collector without changing what a test or a fixture sees.
     c = MeshCollector()
     assert c.snapshot()["events"] == []
-    assert MeshCollector(max_events=10)._events.maxlen == 10
-    assert MeshCollector()._events.maxlen == 10_000
+    assert MeshCollector(max_events=10)._max_events == 10
+    assert MeshCollector()._max_events == 10_000
 
 
 def test_a_restored_collector_rebuilds_span_ownership_from_the_retained_window() -> None:
@@ -537,6 +537,140 @@ def test_restore_honours_the_cap_and_keeps_the_newest_events() -> None:
     capped.restore(source.snapshot())  # a snapshot written by a bigger (or uncapped) collector
 
     assert [event["spanId"] for event in capped.snapshot()["events"]] == ["s3", "s4"]
+
+
+def _issue(fingerprint: str, **fields: object) -> dict:
+    issue: dict = {
+        "fingerprint": fingerprint,
+        "classification": "exception",
+        "service": "orders",
+        "topic": "order:create",
+        "count": 1,
+    }
+    issue.update(fields)
+    return issue
+
+
+def test_span_ownership_is_evicted_with_the_events_that_own_it() -> None:
+    # The leak the `max_events` cap left open: the span-owner index grew one entry per span ever
+    # seen, for the life of the process, even though it is only ever read for a *retained* event's
+    # parent. It must stay in lockstep with the window instead.
+    c = MeshCollector(max_events=3)
+    _register(c, "orders", ["order:create"])
+    for n in range(50):
+        c.ingest_traces({"events": [_trace_event(n)]})
+
+    assert len(c._span_owner) == 3
+    assert set(c._span_owner) == {event.span_id for event in c._events}
+
+
+def test_span_ownership_survives_a_redelivered_span_still_in_the_window() -> None:
+    # At-least-once delivery means the same span can be ingested twice. When the older copy ages
+    # out, the newer one is still retained and its owner entry must stay — the index tracks the
+    # window, not any single event.
+    c = MeshCollector(max_events=2)
+    _register(c, "orders", ["order:create"])
+    c.ingest_traces({"events": [_trace_event(1)]})
+    c.ingest_traces({"events": [_trace_event(1)]})  # redelivery of the same span
+    c.ingest_traces({"events": [_trace_event(2)]})  # evicts the first copy of s1
+
+    assert set(c._span_owner) == {event.span_id for event in c._events} == {"s1", "s2"}
+
+
+def test_an_aged_out_parent_span_degrades_the_observed_signal_instead_of_raising() -> None:
+    # §4.2's observed-provider signal is `.get`-tolerant by design: when the caller's span has left
+    # the window there is simply no observed caller — the declared graph is untouched and the query
+    # still answers.
+    c = MeshCollector(max_events=1)
+    _register(c, "payments", ["payments:capture"])
+    _register(c, "orders", ["order:create"], produces=["payments:capture"])
+    c.ingest_traces({"events": [_trace_event(1, "orders", "order:create")]})
+    c.ingest_traces(
+        {
+            "events": [
+                {
+                    "traceId": "t1",
+                    "spanId": "s2",
+                    "parentSpanId": "s1",  # owner already evicted
+                    "service": "payments",
+                    "topic": "payments:capture",
+                    "status": "ok",
+                    "startedAt": "2026-08-15T09:00:02Z",
+                }
+            ]
+        }
+    )
+
+    topic = c.query_topic({"topic": "payments:capture"})
+    assert topic["providers"] == ["orders"]  # declared, never trace-derived
+    assert topic["providerActivity"] == {"orders": {}}  # unobserved is a candidate, not a removal
+
+
+def test_the_merged_issue_map_is_capped_at_max_issues() -> None:
+    c = MeshCollector(max_issues=2)
+    for n in range(50):
+        c.ingest_issues({"service": "orders", "issues": [_issue(f"f{n}")]})
+
+    fingerprints = [issue["fingerprint"] for issue in c.query_fleet({})["issues"]]
+    assert fingerprints == ["f48", "f49"]  # the two least-recently-merged survive, in first-seen order
+
+
+def test_a_recurring_issue_outlives_newer_one_offs() -> None:
+    # The retention rule is least-recently-merged, not oldest-first-seen: an issue that keeps
+    # recurring is live signal and must survive, however long ago it was first filed.
+    c = MeshCollector(max_issues=2)
+    c.ingest_issues({"service": "orders", "issues": [_issue("recurring")]})
+    c.ingest_issues({"service": "orders", "issues": [_issue("one-off")]})
+    c.ingest_issues({"service": "orders", "issues": [_issue("recurring")]})  # heard from again
+    c.ingest_issues({"service": "orders", "issues": [_issue("newcomer")]})  # evicts `one-off`
+
+    issues = {issue["fingerprint"]: issue for issue in c.query_fleet({})["issues"]}
+    assert set(issues) == {"recurring", "newcomer"}
+    assert issues["recurring"]["count"] == 2  # merged, not re-inserted
+
+
+def test_merging_into_a_known_fingerprint_never_evicts() -> None:
+    c = MeshCollector(max_issues=2)
+    c.ingest_issues({"service": "orders", "issues": [_issue("f1"), _issue("f2")]})
+    c.ingest_issues({"service": "orders", "issues": [_issue("f1", count=4)]})  # a merge, at the cap
+
+    issues = {issue["fingerprint"]: issue for issue in c.query_fleet({})["issues"]}
+    assert set(issues) == {"f1", "f2"}
+    assert issues["f1"]["count"] == 5
+
+
+def test_synthesized_drift_issues_are_bounded_too() -> None:
+    # The growth vector G1 names: `contract-drift` is synthesized per observed-undeclared
+    # (service, topic), so one misconfigured emitter with parameterised topic ids would otherwise
+    # grow the map forever.
+    c = MeshCollector(max_issues=4)
+    _register(c, "orders", ["order:create"])
+    for n in range(100):
+        c.ingest_traces({"events": [_trace_event(n, "orders", f"order:item:{n}")]})
+
+    assert len(c.query_fleet({})["issues"]) == 4
+    assert set(c._issue_recency) == set(c._issues)  # the eviction queue never drifts from the map
+
+
+def test_the_issue_map_defaults_to_a_generous_cap() -> None:
+    # Far above any real fleet's distinct-fingerprint count, but bounded, so a collector ingesting
+    # steadily stops growing with uptime.
+    assert MeshCollector()._max_issues == 1_024
+    assert MeshCollector(max_issues=10)._max_issues == 10
+
+
+def test_restore_honours_the_issue_cap_and_keeps_the_newest_issues() -> None:
+    source = MeshCollector()
+    for n in range(5):
+        source.ingest_issues({"service": "orders", "issues": [_issue(f"f{n}")]})
+
+    capped = MeshCollector(max_issues=2)
+    capped.restore(source.snapshot())  # a snapshot written by a bigger collector
+
+    assert [issue["fingerprint"] for issue in capped.query_fleet({})["issues"]] == ["f3", "f4"]
+    # And the restored collector keeps enforcing the cap on new signal.
+    capped.ingest_issues({"service": "orders", "issues": [_issue("f5")]})
+    assert [issue["fingerprint"] for issue in capped.query_fleet({})["issues"]] == ["f4", "f5"]
 
 
 class _SpyToThread:

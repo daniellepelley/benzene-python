@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections import Counter, deque
+from collections import Counter, OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -60,6 +60,14 @@ _FEEDS = ("descriptor", "health", "traces", "issues")
 # fixture's or ordinary burst's event count, but bounded, so a long-lived collector's memory, snapshot
 # size, and full-scan queries stop growing with uptime.
 _DEFAULT_MAX_EVENTS = 10_000
+
+# How many distinct issue fingerprints one collector keeps merged by default, least-recently-merged
+# evicted first. Far above the distinct-fingerprint count of a healthy fleet — the key space is
+# `service|topic|version|classification|discriminator`, so it is only unbounded when something is
+# generating identities (parameterised topic ids, a noisy misconfigured emitter, the `contract-drift`
+# issue the collector synthesizes per observed-undeclared edge). 1024 matches the reference
+# collector's `maxIssues`, so a cross-language fleet behaves the same under that pressure.
+_DEFAULT_MAX_ISSUES = 1_024
 
 # Merged issue exemplars keep the newest few (mesh.md §4.1).
 _MAX_EXEMPLARS = 3
@@ -123,13 +131,31 @@ class MeshCollector:
 
     The trace-event log is a **bounded window**: ``max_events`` (default 10 000) newest events are
     retained and the oldest are evicted, the way :class:`~benzene.mesh.QueueTraceExporter` bounds the
-    sending side. Everything derived from a *declaration* (the service catalog, the producer/consumer
-    graph, merged issues) is unbounded and permanent — only the raw event log, and the trace-derived
-    stats scanned out of it, are windowed.
+    sending side. The span-owner index rides along with it: an entry exists exactly while some
+    retained event carries that span id, so the index can never outgrow the window it indexes.
+
+    The merged issue map is bounded too, by ``max_issues`` (default 1024) distinct fingerprints,
+    **least-recently-merged evicted first**. Issues legitimately outlive individual events — one seen
+    once an hour is still real — so they are deliberately *not* pruned against the event window: every
+    report refreshes its fingerprint's position, so a recurring issue survives indefinitely while a
+    one-off from a decommissioned topic ages out behind newer signal. Recency is the collector's own
+    (when it last heard the fingerprint) rather than the reported ``lastSeen``, which is optional on
+    the wire — the collector's own synthesized ``contract-drift`` issues carry none — and clock-skewed
+    across a fleet; ranking on a field that can be absent or optimistic would evict live signal in
+    favour of a stale entry. In the ordinary case, where reports arrive in time order, the two orders
+    pick the same victim. Merging into a fingerprint already known never evicts anything: the map only
+    grows on a genuinely new fingerprint.
+
+    Everything derived from a *declaration* — the service catalog and the producer/consumer graph —
+    stays permanent: it is bounded by the size of the fleet, not by uptime.
     """
 
     def __init__(
-        self, *, store: CollectorStore | None = None, max_events: int = _DEFAULT_MAX_EVENTS
+        self,
+        *,
+        store: CollectorStore | None = None,
+        max_events: int = _DEFAULT_MAX_EVENTS,
+        max_issues: int = _DEFAULT_MAX_ISSUES,
     ) -> None:
         self._services: dict[str, _Service] = {}
         self._topics: set[str] = set()  # every topic ever seen (registered or traced); grows only
@@ -137,14 +163,24 @@ class MeshCollector:
             set()
         )  # topics some service ever declared as a handler (for removed-topic detection)
         self._max_events = max_events
-        # Bounded: the newest `max_events` trace events, oldest evicted (see the class docstring).
-        self._events: deque[_Event] = deque(maxlen=max_events)
+        self._max_issues = max_issues
+        # Bounded by `_append_event`, which is the only thing that may append to it: the newest
+        # `max_events` trace events, oldest evicted (see the class docstring).
+        self._events: deque[_Event] = deque()
         # span id -> the service that emitted it. Used only for the §4.2 observed-signal (liveness,
         # drift) below — NEVER for graph membership (`_providers_of`/`_consumers_of` are declared-only).
-        # Tolerant of eviction by construction: every lookup is a `.get`, and a parent span whose event
-        # has aged out of the window simply yields no observed caller.
+        # Pruned with the events that own it, so it stays as bounded as the window; tolerant of that
+        # eviction by construction, since every lookup is a `.get` and a parent span whose event has
+        # aged out of the window simply yields no observed caller.
         self._span_owner: dict[str, str] = {}
-        self._issues: dict[str, dict[str, Any]] = {}  # fingerprint -> merged issue
+        # span id -> how many retained events carry it, so a span redelivered at-least-once keeps its
+        # owner entry until the *last* copy leaves the window.
+        self._span_refs: Counter[str] = Counter()
+        self._issues: dict[str, dict[str, Any]] = {}  # fingerprint -> merged issue, first-seen order
+        # The same fingerprints in least-recently-merged order — the eviction queue for `max_issues`.
+        # Kept beside `_issues` rather than reordering it, so the issue *list* a query answers with
+        # keeps the first-seen order it has always had.
+        self._issue_recency: OrderedDict[str, None] = OrderedDict()
         self._store: CollectorStore = store or NullCollectorStore()
         # Set while an ingest runs under `persist_off_loop`, so the blocking store write is hoisted out
         # of the mutation and awaited on a worker thread instead of running on the event loop.
@@ -206,8 +242,7 @@ class MeshCollector:
                 status=str(raw.get("status", "")),
                 started_at=raw.get("startedAt"),
             )
-            self._events.append(event)
-            self._span_owner[event.span_id] = event.service
+            self._append_event(event)
             self._topics.add(event.topic)
             callee = self._service(event.service)  # a traced service becomes known (possibly anonymous)
             self._flag_drift_if_undeclared(callee, event.topic, callee.consumed, event.trace_id)
@@ -218,6 +253,34 @@ class MeshCollector:
                 if caller is not None:  # only a registered caller has a `produces` to diverge from
                     self._flag_drift_if_undeclared(caller, event.topic, caller.produced, event.trace_id)
         return self._persisted({"accepted": len(events)})
+
+    def _append_event(self, event: _Event) -> None:
+        """Add one event to the retained window, evicting the oldest once it is over ``max_events``.
+
+        The single place events enter the window, so the span-owner index can be maintained in
+        lockstep and never outlive the events it indexes: it is an *index over* ``_events``, and an
+        entry that survives its last event is a leak that also answers the §4.2 observed signal from
+        data the collector no longer holds. The reference count keeps that exact under at-least-once
+        delivery, where the same span can be ingested more than once and one copy can age out while
+        another is still retained. An event with no span id contributes no index entry (nothing can
+        parent to it — a lookup is guarded on a non-empty parent id).
+        """
+        self._events.append(event)
+        if event.span_id:
+            self._span_refs[event.span_id] += 1
+            self._span_owner[event.span_id] = event.service  # latest report of an id wins, as before
+        while len(self._events) > self._max_events:
+            self._forget_event(self._events.popleft())
+
+    def _forget_event(self, evicted: _Event) -> None:
+        """Drop an evicted event's claim on the span-owner index, and the entry with the last claim."""
+        span_id = evicted.span_id
+        if not span_id:
+            return
+        self._span_refs[span_id] -= 1
+        if self._span_refs[span_id] <= 0:
+            del self._span_refs[span_id]
+            self._span_owner.pop(span_id, None)
 
     def _flag_drift_if_undeclared(
         self, record: _Service, topic: str, declared: list[str], trace_id: str
@@ -266,7 +329,7 @@ class MeshCollector:
             merged = dict(issue)
             merged["count"] = _safe_int(issue.get("count", 0))
             merged["exemplarTraceIds"] = incoming_exemplars[-_MAX_EXEMPLARS:]  # keep the newest
-            self._issues[fingerprint] = merged
+            self._admit_issue(fingerprint, merged)
             return
         # Merge by fingerprint (mesh.md §4.1): count is a delta; firstSeen/lastSeen span; exemplars keep
         # the newest ≤3; every other field is latest-wins (identity fields are fingerprint-pinned).
@@ -286,14 +349,32 @@ class MeshCollector:
         last = issue.get("lastSeen")
         if last is not None:
             existing["lastSeen"] = max(existing.get("lastSeen") or last, last)
+        self._issue_recency.move_to_end(fingerprint)  # heard from again: last in line to be evicted
+
+    def _admit_issue(self, fingerprint: str, issue: dict[str, Any]) -> None:
+        """Add a *new* fingerprint to the merged map, making room under ``max_issues`` first.
+
+        Room is made by dropping the least-recently-merged fingerprint — see the class docstring for
+        why recency is the collector's own rather than the reported ``lastSeen``. Only a new
+        fingerprint can push the map over the cap; a merge into one already held never evicts.
+        """
+        if self._max_issues <= 0:  # a collector configured to keep no merged issues at all
+            return
+        while len(self._issues) >= self._max_issues and self._issue_recency:
+            stalest, _ = self._issue_recency.popitem(last=False)
+            self._issues.pop(stalest, None)
+        self._issues[fingerprint] = issue
+        self._issue_recency[fingerprint] = None
 
     # --- persistence -----------------------------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
         """The whole catalog as a JSON-able dict — what a :class:`CollectorStore` persists.
 
         ``events`` holds the retained window only — at most ``max_events`` (default 10 000) newest
-        trace events, oldest first — so a snapshot has a bounded size no matter how long the collector
-        has been up. Services, the declared graph, and merged issues are complete, never windowed.
+        trace events, oldest first — and ``issues`` at most ``max_issues`` (default 1024) merged
+        fingerprints, so a snapshot has a bounded size no matter how long the collector has been up.
+        Services and the declared graph are complete, never windowed: they are bounded by the size of
+        the fleet rather than by uptime.
         """
         return {
             "version": _SNAPSHOT_VERSION,
@@ -371,10 +452,16 @@ class MeshCollector:
             self._services[record.name] = record
         self._topics = set(snapshot.get("topics", []))
         self._ever_consumed = set(snapshot.get("everConsumed", []))
-        # A snapshot written by a collector with a larger (or no) cap is trimmed to this one's window:
-        # a bounded deque built from an iterable keeps the *last* `maxlen` items — the newest events.
-        self._events = deque(
-            (
+        # A snapshot written by a collector with a larger (or no) cap is trimmed to this one's window,
+        # keeping the newest events: replaying them through `_append_event` evicts from the front as it
+        # goes, and rebuilds the span-owner index — a pure index over `_events`, not itself persisted —
+        # in the one place that maintains it, so a restart cannot resurrect an entry for an event this
+        # collector no longer holds.
+        self._events = deque()
+        self._span_owner = {}
+        self._span_refs = Counter()
+        for raw in snapshot.get("events", []):
+            self._append_event(
                 _Event(
                     trace_id=str(raw.get("traceId", "")),
                     span_id=str(raw.get("spanId", "")),
@@ -384,16 +471,16 @@ class MeshCollector:
                     status=str(raw.get("status", "")),
                     started_at=raw.get("startedAt"),
                 )
-                for raw in snapshot.get("events", [])
-            ),
-            maxlen=self._max_events,
-        )
-        # Rebuild the span-owner index from the restored events — a pure index over `_events`, not
-        # itself persisted, needed again after restart for the §4.2 observed-signal derivation.
-        self._span_owner = {event.span_id: event.service for event in self._events}
+            )
         # Deep-copied so the restored collector never shares nested issue dicts with the snapshot it
         # was given (the JSON-file store hands back fresh parses; an in-memory snapshot would not).
-        self._issues = copy.deepcopy(snapshot.get("issues", {}))
+        # Re-admitted one at a time, so a snapshot written by a collector with a larger (or no) issue
+        # cap is trimmed the same way the events are: the newest survive, and the restored collector
+        # starts enforcing its own cap immediately rather than one restore behind.
+        self._issues = {}
+        self._issue_recency = OrderedDict()
+        for fingerprint, issue in copy.deepcopy(snapshot.get("issues", {})).items():
+            self._admit_issue(str(fingerprint), issue)
 
     def _persisted(self, result: dict[str, Any]) -> dict[str, Any]:
         """Write the catalog through the store after a mutating ingest, then return ``result``.

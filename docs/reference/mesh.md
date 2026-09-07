@@ -521,7 +521,20 @@ The trace/event log the collector keeps behind its queries is bounded: `MeshColl
 retains the most recent N events (10 000 by default) so a long-lived host's memory and snapshot size
 stay flat rather than growing with traffic. Only the observed signals — invocation stats, per-edge
 liveness — are windowed by it; the declared graph comes from each service's registered descriptor and
-is never trimmed.
+is never trimmed. The span-owner index behind the observed-provider signal rides along with the
+window: a parent span that has aged out simply yields no observed caller (an unobserved declared edge
+is a decommission *candidate*, never a removal), so the index cannot outgrow the events it indexes.
+
+The merged issue map is bounded the same way, by `MeshCollector(max_issues=...)` distinct fingerprints
+(1024 by default, matching the reference collector), **least-recently-merged evicted first**. Issues
+are deliberately *not* pruned against the event window — one seen once an hour is still real — but the
+fingerprint space is only bounded in a healthy fleet: parameterised topic ids, a noisy emitter, or the
+`contract-drift` issue the collector synthesizes per observed-undeclared edge can generate identities
+without limit. Every report refreshes its fingerprint's place in line, so a recurring issue survives
+indefinitely while a one-off from a decommissioned topic ages out behind newer signal, and merging
+into a fingerprint already held never evicts anything. Recency is the collector's own — when it last
+heard the fingerprint — rather than the reported `lastSeen`, which is optional on the wire and
+clock-skewed across a fleet; where reports arrive in time order the two agree on the victim anyway.
 
 The snapshot is a plain JSON-able dict — `collector.snapshot()` / `collector.restore(snap)` are public,
 so you can persist it anywhere (S3, a database) by implementing the two-method protocol over them.
