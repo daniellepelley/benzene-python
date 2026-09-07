@@ -41,7 +41,7 @@ from benzene.azure.testing import (
     queue_text_message,
     timer_request,
 )
-from benzene.core import Registry, encode_body
+from benzene.core import BatchResult, FailedMessage, Registry, encode_body
 from benzene.results import Result, Status, is_successful
 
 # --- inbound decoders --------------------------------------------------------------------------
@@ -291,3 +291,79 @@ def test_a_missing_azure_sdk_raises_a_teaching_import_error_out_of_send_message(
     assert name in message
     assert dependency in message
     assert f"pip install benzene-azure[{extra}]" in message
+
+
+# --- batch sends (T2.1) -------------------------------------------------------------------------
+
+
+def _failure(result: BatchResult, index: int) -> FailedMessage:
+    """The failure recorded at ``index``, asserting there is one (and narrowing it for mypy)."""
+    failure = result.failure_for(index)
+    assert failure is not None, f"expected message {index} to have failed"
+    return failure
+
+
+class _FakeBatchingEventGridClient:
+    """``send`` takes either one event or a list — the SDK's own overload; batches pass the list."""
+
+    def __init__(self, fail_chunks: set[int] | None = None) -> None:
+        self.calls: list[list[dict]] = []
+        self._fail = fail_chunks or set()
+
+    def send(self, events) -> None:
+        index = len(self.calls)
+        self.calls.append(list(events) if isinstance(events, list) else [events])
+        if index in self._fail:
+            raise RuntimeError("grid down")
+
+
+def _grid_pairs(count: int) -> list[tuple[str, dict]]:
+    return [("orders:created", {"id": str(n)}) for n in range(count)]
+
+
+def test_event_grid_batch_chunks_to_a_hundred_events_per_call() -> None:
+    fake = _FakeBatchingEventGridClient()
+    sender = EventGridMessageSender(client=fake, topic_endpoint="https://t/api/events", key="k")
+    result = asyncio.run(sender.send_batch(_grid_pairs(250), headers={"traceparent": "tp"}))
+    assert result.all_succeeded
+    assert [len(call) for call in fake.calls] == [100, 100, 50]
+    assert fake.calls[0][0]["eventType"] == "orders:created"
+    assert fake.calls[0][0]["headers"]["traceparent"] == "tp"
+
+
+def test_event_grid_batch_failure_fails_only_that_chunks_indices() -> None:
+    fake = _FakeBatchingEventGridClient(fail_chunks={1})
+    sender = EventGridMessageSender(client=fake, topic_endpoint="https://t/api/events", key="k")
+    result = asyncio.run(sender.send_batch(_grid_pairs(250)))
+    assert result.failed_indexes == tuple(range(100, 200))  # chunk 2 is atomic; 1 and 3 stand
+    assert "grid down" in (_failure(result, 100).detail or "")
+    assert result.failure_for(0) is None and result.failure_for(200) is None
+
+
+def test_queue_storage_batch_is_a_documented_sequential_fallback() -> None:
+    # A Storage Queue has no batch-send API at all, so this is N calls — reported honestly, with a
+    # per-message outcome each, rather than faked as one atomic send.
+    class _FlakyQueue:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        def send_message(self, content: str) -> None:
+            self.sent.append(content)
+            if json.loads(content)["body"] == encode_body({"id": "1"}):
+                raise RuntimeError("queue down")
+
+    fake = _FlakyQueue()
+    result = asyncio.run(QueueStorageMessageSender(client=fake).send_batch(_grid_pairs(3)))
+    assert len(fake.sent) == 3  # every message attempted; the failure aborted nothing
+    assert result.failed_indexes == (1,)
+    assert _failure(result, 1).status == Status.SERVICE_UNAVAILABLE
+    assert "queue down" in (_failure(result, 1).detail or "")
+    assert json.loads(fake.sent[0])["topic"] == "orders:created"
+
+
+def test_a_missing_azure_sdk_raises_out_of_send_batch_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "azure.storage.queue", None)
+    sender = QueueStorageMessageSender("https://acct.queue.core.windows.net/orders")
+    with pytest.raises(ImportError) as excinfo:
+        asyncio.run(sender.send_batch(_grid_pairs(2)))
+    assert "pip install benzene-azure[storage]" in str(excinfo.value)

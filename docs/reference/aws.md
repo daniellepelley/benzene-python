@@ -92,6 +92,33 @@ the wire body and embeds headers *inside* it, under the reserved `_benzeneHeader
 the payload shape a plain (non-Benzene) consumer of the stream/bus would see. Lambda's invoke Payload
 *is* the envelope already. A send failure maps to `service-unavailable`, never a raise.
 
+### Batch sends
+
+SNS, SQS, EventBridge and Kinesis also implement `benzene.core.BatchMessageSender`, so a thousand
+events cost a hundred round trips instead of a thousand:
+
+```python
+result = await sqs_sender.send_batch([("orders:created", order) for order in orders])
+resend = [orders[f.index] for f in result.failures]     # per-entry outcomes, at your own indices
+```
+
+| Sender | Native call | Chunk | Failure model |
+|---|---|---|---|
+| `SqsMessageSender` | `send_message_batch` | 10 | per-entry — each `Id` carries the caller index, and the response's `Failed` list maps straight back |
+| `SnsMessageSender` | `publish_batch` | 10 | per-entry, same `Id`-carries-index trick |
+| `EventBridgeMessageSender` | `put_events` | 10 | **positional** — `PutEvents` has no per-entry id, so response entry *i* pairs with request entry *i* of that chunk |
+| `KinesisMessageSender` | `put_records` | 500 | positional, with `FailedRecordCount` gating the walk |
+| `LambdaMessageSender` | — | — | **no batch API**: `Invoke` takes one payload, so `send_batch` is a documented sequential fallback (N invokes), each invoke's decoded `Result` reported at its own index |
+
+The caps are AWS's own documented per-call limits. A whole-chunk error (throttle, expired
+credentials, a dropped connection) fails only that chunk's indices and the loop carries on, so
+earlier chunks' successes are never discarded. AWS's `SenderFault` decides the status: `True` (a
+malformed entry, which will fail again identically) becomes `bad-request`, everything else
+`service-unavailable` — so `with_retry` resends the service's failures and leaves yours alone. Each
+chunk runs in one `asyncio.to_thread` hop, and every entry is built by the same helpers
+`send_message` uses, so batching changes how messages are transmitted and never what a message is. A
+missing `boto3` still raises the teaching `ImportError` out of `send_batch`, never a failure entry.
+
 Azure Functions and Kubernetes services have no equivalent native "invoke another function directly"
 primitive — the cross-platform way to reach the same synchronous-call outcome is over HTTP or gRPC
 (`benzene.http.HttpMessageSender` / `benzene.grpc.GrpcMessageSender`), which is why `LambdaMessageSender`

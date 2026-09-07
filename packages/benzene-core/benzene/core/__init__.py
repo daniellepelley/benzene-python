@@ -19,7 +19,14 @@ the ``benzene.core`` subpackage to the shared ``benzene`` namespace.
 from __future__ import annotations
 
 from .casting import Cast, NoCastPathError, SchemaCasters, casting_handler
-from .clients import MessageSender
+from .clients import (
+    BatchMessageSender,
+    BatchResult,
+    FailedMessage,
+    MessageSender,
+    chunked,
+    send_batch_sequentially,
+)
 from .context import Context
 from .contract import (
     CONTRACT_OPENAPI,
@@ -131,6 +138,8 @@ __all__ = [
     "Cast",
     "Container",
     "Context",
+    "BatchMessageSender",
+    "BatchResult",
     "CorrelationIdMessageSender",
     "NoCastPathError",
     "SchemaCasters",
@@ -155,7 +164,10 @@ __all__ = [
     "HealthReport",
     "Lifetime",
     "MessageHandlingError",
+    "FailedMessage",
     "MessageSender",
+    "chunked",
+    "send_batch_sequentially",
     "DEFAULT_METADATA_KEYS",
     "DEFAULT_TOPIC_KEY",
     "DEFAULT_VERSION_KEY",

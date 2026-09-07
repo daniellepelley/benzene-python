@@ -20,6 +20,25 @@ breakers to hammer.
 Each ``send_message`` runs its blocking Azure SDK call via :func:`asyncio.to_thread`, so an
 ``await sender.send_message(...)`` never blocks the event loop (matching the consumer loops and the
 other transports' clients).
+
+**Batches.** Every sender here also implements :class:`~benzene.core.BatchMessageSender` —
+``send_batch([(topic, message), ...])``, reporting a per-message outcome — but Azure's batching
+model is not AWS's, and the difference is visible in the results:
+
+* :class:`ServiceBusMessageSender` and :class:`EventHubMessageSender` batch by **size**: the SDK
+  hands out a batch object that refuses a message once it is full, so messages are packed until it
+  says stop and each full batch is sent. The send is **atomic per batch** — the broker takes all of
+  it or none — so a failed send fails exactly that batch's messages, at their caller indices, and
+  the batches around it are unaffected. A single message too large for an *empty* batch is its own
+  ``bad-request`` failure (it cannot get smaller on a retry) and does not abort the rest.
+* :class:`EventGridMessageSender` publishes up to 100 events per ``send`` call, likewise atomic per
+  chunk.
+* :class:`QueueStorageMessageSender` has **no batch API at all** — a Storage Queue takes one message
+  per call — so its ``send_batch`` is a documented *sequential fallback*: N round trips, never
+  presented as one, with each message's own outcome reported. Nothing here fakes atomicity.
+
+Every batch entry is built by the same ``_make_message`` / ``_make_event`` helper the single send
+uses, so batching changes how messages are transmitted and never what a message is.
 """
 
 from __future__ import annotations
@@ -28,11 +47,18 @@ import asyncio
 import base64
 import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
-from benzene.core import encode_body, to_jsonable
+from benzene.core import (
+    BatchResult,
+    FailedMessage,
+    chunked,
+    encode_body,
+    send_batch_sequentially,
+    to_jsonable,
+)
 from benzene.results import Result, Status
 
 from .events import TOPIC_PROPERTY
@@ -60,6 +86,26 @@ def _service_bus_message(body: str | bytes, properties: dict[str, str]) -> Any:
     # the seam, which would leak the SDK's types into an optional import.
     application_properties: Any = properties
     return ServiceBusMessage(body, application_properties=application_properties)
+
+
+def _event_hub_event(body: str | bytes, properties: dict[str, str]) -> Any:
+    """The default :class:`EventHubMessageSender` ``event_factory``: a real ``EventData``.
+
+    The Event Hub twin of :func:`_service_bus_message`, and for the same two reasons: it is the seam
+    an injected factory replaces (so the egress contract is testable with no SDK installed), and it
+    turns a missing extra into an ImportError naming it rather than a ``service-unavailable`` result
+    that retry middleware and circuit breakers would hammer forever.
+    """
+    try:
+        from azure.eventhub import EventData  # lazy: optional dependency
+    except ImportError as exc:
+        raise ImportError(
+            "EventHubMessageSender requires azure-eventhub — install it with "
+            "'pip install benzene-azure[eventhub]'."
+        ) from exc
+    event = EventData(body)
+    event.properties = dict(properties)
+    return event
 
 
 def _require_config(
@@ -161,6 +207,65 @@ class ServiceBusMessageSender:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
 
+    async def send_batch(
+        self, messages: Sequence[tuple[str, Any]], headers: dict[str, str] | None = None
+    ) -> BatchResult:
+        """Pack messages into ``ServiceBusMessageBatch`` objects and send each one.
+
+        Service Bus batches by size, not by count: ``create_message_batch()`` hands out a batch that
+        raises ``ValueError`` once the next message would not fit, which is the signal to send what
+        is packed and start another. The send is **atomic per batch**, so a failure is reported
+        against every caller index that batch carried — and no others.
+        """
+        if not messages:
+            return BatchResult()  # nothing to send is no broker call at all
+        sender = self._get_sender()  # ImportError here: a missing SDK is never a message outcome
+        failures = await asyncio.to_thread(
+            self._send_batches, sender, list(enumerate(messages)), headers
+        )
+        return BatchResult(tuple(failures))
+
+    def _send_batches(
+        self,
+        sender: Any,
+        pending: list[tuple[int, tuple[str, Any]]],
+        headers: dict[str, str] | None,
+    ) -> list[FailedMessage]:
+        failures: list[FailedMessage] = []
+        position = 0
+        while position < len(pending):
+            batch = sender.create_message_batch()
+            packed: list[int] = []
+            while position < len(pending):
+                index, (topic, message) = pending[position]
+                try:
+                    wire_message = self._make_message(topic, message, headers)
+                except Exception as ex:  # one unserializable payload is that entry's failure alone
+                    failures.append(FailedMessage(index, Status.BAD_REQUEST, str(ex)))
+                    position += 1
+                    continue
+                try:
+                    batch.add_message(wire_message)
+                except ValueError as ex:
+                    if not packed:
+                        # It does not fit an *empty* batch, so no batch will ever take it; a retry
+                        # cannot make it smaller. Fail this one message and carry on with the rest.
+                        failures.append(FailedMessage(index, Status.BAD_REQUEST, str(ex)))
+                        position += 1
+                        continue
+                    break  # the batch is full: send it and start another with this message
+                packed.append(index)
+                position += 1
+            if not packed:
+                continue
+            try:
+                sender.send_messages(batch)
+            except Exception as ex:  # atomic: the broker took none of this batch
+                failures.extend(
+                    FailedMessage(index, Status.SERVICE_UNAVAILABLE, str(ex)) for index in packed
+                )
+        return failures
+
 
 class EventHubMessageSender:
     """Sends to an Event Hub, Benzene topic carried in the event's ``properties`` (a native channel).
@@ -180,6 +285,7 @@ class EventHubMessageSender:
         eventhub_name: str | None = None,
         producer: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
+        event_factory: Callable[[str | bytes, dict[str, str]], Any] | None = None,
     ) -> None:
         # eventhub_name is NOT required: a Service Bus/Event Hub connection string may carry the
         # entity in its own EntityPath, and the SDK accepts None for the name in that case.
@@ -193,6 +299,7 @@ class EventHubMessageSender:
         self._eventhub_name = eventhub_name
         self._producer = producer
         self._serialize = serializer or encode_body
+        self._event_factory = event_factory or _event_hub_event
 
     def _get_producer(self) -> Any:
         if self._producer is None:
@@ -204,14 +311,15 @@ class EventHubMessageSender:
             )
         return self._producer
 
-    def _send_sync(self, topic: str, message: Any, headers: dict[str, str] | None) -> None:
-        from azure.eventhub import EventData  # lazy: optional dependency
-
-        properties: dict[str | bytes, Any] = {str(k): str(v) for k, v in (headers or {}).items()}
+    def _make_event(self, topic: str, message: Any, headers: dict[str, str] | None) -> Any:
+        # The SDK object is built by ``self._event_factory`` (default: ``_event_hub_event``), so
+        # this stays a plain dict[str, str] and the lazy SDK import lives in the factory.
+        properties = {str(k): str(v) for k, v in (headers or {}).items()}
         properties[TOPIC_PROPERTY] = topic
-        event = EventData(self._serialize(message))
-        event.properties = properties
+        return self._event_factory(self._serialize(message), properties)
 
+    def _send_sync(self, topic: str, message: Any, headers: dict[str, str] | None) -> None:
+        event = self._make_event(topic, message, headers)
         producer = self._get_producer()
         batch = producer.create_batch()
         batch.add(event)
@@ -222,9 +330,74 @@ class EventHubMessageSender:
     ) -> Result:
         try:
             await asyncio.to_thread(self._send_sync, topic, message, headers)
+        except ImportError:
+            raise  # a missing SDK is a deployment error, never a service-unavailable result
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
+
+    async def send_batch(
+        self, messages: Sequence[tuple[str, Any]], headers: dict[str, str] | None = None
+    ) -> BatchResult:
+        """Pack events into ``EventDataBatch`` objects and send each one.
+
+        Like Service Bus, an Event Hub batch is bounded by *size*: ``create_batch()`` hands out a
+        batch whose ``add`` raises ``ValueError`` once the next event will not fit, and the send is
+        **atomic per batch**, so a failure is reported against exactly the caller indices that batch
+        carried. All events go into unkeyed batches: an ``EventDataBatch``'s partition key is fixed
+        at creation and this sender does not expose one, so there is nothing to group by (a keyed
+        producer would need per-key batches, and .NET's client groups for exactly that reason).
+        """
+        if not messages:
+            return BatchResult()  # nothing to send is no broker call at all
+        producer = self._get_producer()
+        failures = await asyncio.to_thread(
+            self._send_batches, producer, list(enumerate(messages)), headers
+        )
+        return BatchResult(tuple(failures))
+
+    def _send_batches(
+        self,
+        producer: Any,
+        pending: list[tuple[int, tuple[str, Any]]],
+        headers: dict[str, str] | None,
+    ) -> list[FailedMessage]:
+        failures: list[FailedMessage] = []
+        position = 0
+        while position < len(pending):
+            batch = producer.create_batch()
+            packed: list[int] = []
+            while position < len(pending):
+                index, (topic, message) = pending[position]
+                try:
+                    event = self._make_event(topic, message, headers)
+                except ImportError:
+                    raise  # a missing SDK is a deployment error, never a per-message outcome
+                except Exception as ex:  # one unserializable payload fails alone
+                    failures.append(FailedMessage(index, Status.BAD_REQUEST, str(ex)))
+                    position += 1
+                    continue
+                try:
+                    batch.add(event)
+                except ValueError as ex:
+                    if not packed:
+                        # Too large for an *empty* batch: no batch will ever take it, and a retry
+                        # cannot make it smaller. Fail this one event and carry on with the rest.
+                        failures.append(FailedMessage(index, Status.BAD_REQUEST, str(ex)))
+                        position += 1
+                        continue
+                    break  # the batch is full: send it and start another with this event
+                packed.append(index)
+                position += 1
+            if not packed:
+                continue
+            try:
+                producer.send_batch(batch)
+            except Exception as ex:  # atomic: the hub took none of this batch
+                failures.extend(
+                    FailedMessage(index, Status.SERVICE_UNAVAILABLE, str(ex)) for index in packed
+                )
+        return failures
 
 
 class QueueStorageMessageSender:
@@ -308,6 +481,26 @@ class QueueStorageMessageSender:
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
+
+    async def send_batch(
+        self, messages: Sequence[tuple[str, Any]], headers: dict[str, str] | None = None
+    ) -> BatchResult:
+        """**Sequential fallback**: a Storage Queue takes one message per call, so this is N calls.
+
+        ``QueueClient`` exposes no batch-send API — unlike Service Bus, there is no batch object to
+        fill — so rather than dress a loop up as one atomic send, this says what it is. The seam's
+        contract still holds: every message is attempted, one failure aborts nothing, and each
+        failure is reported at the caller's index with the status ``send_message`` returned. Reach
+        for Service Bus or Event Hub when the throughput of a real batch API is what you need.
+        """
+        return await send_batch_sequentially(self, messages, headers)
+
+
+EVENT_GRID_BATCH_LIMIT = 100
+"""Events per ``EventGridPublisherClient.send`` call — the chunk size .NET's
+``EventGridBatchMessageClient`` uses, and comfortably inside Event Grid's 1 MB per-request limit for
+typical events. (The service reports an oversized request for the whole call, which arrives as that
+chunk's failures; drop this if your events are large.)"""
 
 
 class EventGridMessageSender:
@@ -405,3 +598,39 @@ class EventGridMessageSender:
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
         return Result.ok()
+
+    async def send_batch(
+        self, messages: Sequence[tuple[str, Any]], headers: dict[str, str] | None = None
+    ) -> BatchResult:
+        """Publish up to :data:`EVENT_GRID_BATCH_LIMIT` events per ``send`` call.
+
+        ``EventGridPublisherClient.send`` takes a list as readily as a single event, and a chunk is
+        **atomic**: it is accepted whole or it raises, so a failure is reported against every caller
+        index in that chunk and none outside it.
+        """
+        client = self._get_client()  # ImportError here: a missing SDK is never a message outcome
+        failures: list[FailedMessage] = []
+        for chunk in chunked(messages, EVENT_GRID_BATCH_LIMIT):
+            failures.extend(await asyncio.to_thread(self._send_chunk, client, chunk, headers))
+        return BatchResult(tuple(failures))
+
+    def _send_chunk(
+        self, client: Any, chunk: list[tuple[int, tuple[str, Any]]], headers: dict[str, str] | None
+    ) -> list[FailedMessage]:
+        events, failures, sent = [], [], []
+        for index, (topic, message) in chunk:
+            try:
+                events.append(self._make_event(topic, message, headers))
+            except Exception as ex:  # one unserializable payload is that entry's failure alone
+                failures.append(FailedMessage(index, Status.BAD_REQUEST, str(ex)))
+                continue
+            sent.append(index)
+        if not events:
+            return failures
+        try:
+            client.send(events)
+        except Exception as ex:  # atomic: the topic took none of this chunk
+            failures.extend(
+                FailedMessage(index, Status.SERVICE_UNAVAILABLE, str(ex)) for index in sent
+            )
+        return failures

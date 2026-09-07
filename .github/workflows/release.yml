@@ -15,7 +15,7 @@ name: Release
 #      benzene-mesh, benzene-pydantic, benzene-testing, benzene-gcp, benzene-aws, benzene-azure,
 #      benzene-kafka, benzene-resilience, benzene-rabbitmq, benzene-auth, benzene-cache,
 #      benzene-openapi, benzene-otel, benzene-mesh-fleet, benzene-codegen-client,
-#      benzene-outbox), all pointing at:
+#      benzene-outbox, benzene-claim-check), all pointing at:
 #         owner/repo = daniellepelley/benzene-python
 #         workflow   = release.yml
 #         environment = pypi

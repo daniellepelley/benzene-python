@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "benzene-claim-check"
+version = "0.1.0b1"
+description = "Benzene claim check — offload an oversized message body to a blob store and send a reference in its place."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Benzene" }]
+keywords = [
+    "benzene",
+    "claim-check",
+    "payload-offload",
+    "large-message",
+    "s3",
+    "azure-blob",
+    "hexagonal",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+dependencies = ["benzene-core>=0.1.0b1"]
+
+[project.optional-dependencies]
+# Only the durable stores need a cloud SDK; the in-memory store and both middleware halves need none.
+s3 = ["boto3>=1.26"]
+azure = ["azure-storage-blob>=12.0", "azure-identity>=1.13"]
+
+[project.urls]
+Homepage = "https://github.com/daniellepelley/benzene-python"
+Specification = "https://github.com/daniellepelley/Benzene/tree/main/docs/specification"
+
+# PEP 420 namespace package — see benzene-results/pyproject.toml.
+[tool.hatch.build.targets.wheel]
+packages = ["benzene"]

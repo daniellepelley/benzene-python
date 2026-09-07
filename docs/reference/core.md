@@ -515,6 +515,79 @@ client = with_retry(with_correlation_id(sender), attempts=5)   # wraps any Messa
 
 (`RetryingMessageSender` / `CorrelationIdMessageSender` are the classes the sugar returns.)
 
+### Batch sends
+
+Most brokers take N messages per API call — SQS `SendMessageBatch`, SNS `PublishBatch`, EventBridge
+`PutEvents`, Kinesis `PutRecords`, a Service Bus / Event Hub batch, Event Grid — so publishing a
+thousand events one `send_message` at a time is a thousand round trips it need not be. A sender that
+can do better implements the second port, `BatchMessageSender`:
+
+```python
+from benzene.core import BatchMessageSender     # a Protocol; structural, nothing to subclass
+
+result = await sender.send_batch(
+    [("orders:created", order) for order in orders],   # (topic, message) pairs; topics may differ
+    headers={"x-correlation-id": "c1"},                # per call, applied to every entry
+)
+if not result:                                         # falsy when anything failed
+    resend = [messages[failure.index] for failure in result.failures]
+```
+
+**The result reports per-message outcomes, and that is the point.** Every one of these APIs is a
+partial-failure API: `SendMessageBatch` answers with `Successful` *and* `Failed` lists, `PutEvents`
+with a per-entry error. A batch result that collapsed to one status would hide exactly the messages
+a caller must resend, so `BatchResult` carries `failures: tuple[FailedMessage, ...]` and nothing
+else — `FailedMessage(index, status, detail)`, where `index` is the position in the list *you*
+passed (never the chunk's), `status` is a normal Benzene status, and `detail` is the provider's own
+error code and message. `all_succeeded` (and `__bool__`) is the empty-failures case; `failed_indexes`
+and `failure_for(index)` are the lookups. Failures always come back ordered by index, whatever order
+the provider listed them in.
+
+- **Chunking is the sender's job**, not yours: hand `send_batch` a thousand messages and each
+  transport splits to its own documented cap (SQS/SNS/EventBridge 10, Kinesis 500, Event Grid 100;
+  Service Bus and Event Hub pack by size until the SDK's batch object says it is full).
+- **A chunk that fails, fails only its own indices.** Earlier chunks' successes are kept and later
+  chunks are still attempted, so the caller resends what did not land instead of duplicating what
+  did.
+- **Statuses are chosen for retryability.** A provider fault is `service-unavailable`; a caller fault
+  (AWS's `SenderFault`, a message too large for an empty batch) is `bad-request` — outside
+  `DEFAULT_RETRYABLE`, so a retry leaves it alone instead of resending it forever.
+- **Ordering.** Entries keep your order within a call and chunks go in order, but none of these
+  transports promises cross-call ordering, and resending a failed subset necessarily reorders it
+  relative to what landed first time. Where order matters, key the transport (a Kinesis partition
+  key, an SQS FIFO message group) and treat batching as throughput within that key.
+- **A missing optional SDK still raises** its teaching `ImportError` rather than becoming N failure
+  entries — a forgotten extra is a deployment error, not a message outcome.
+
+`with_retry` and `with_correlation_id` are batch senders too, so the decorators compose exactly as
+before. Retry is the interesting one: it re-sends **only** the entries whose failure is transient,
+and maps their failures back onto your original indices — resending the whole batch would duplicate
+every message that already landed.
+
+```python
+client = with_retry(with_correlation_id(sqs_sender), attempts=3)
+await client.send_batch(messages)    # native SendMessageBatch underneath; only failures are resent
+```
+
+A decorator wrapping a sender that has *no* `send_batch` falls back to `send_batch_sequentially`,
+which is also the public helper a transport with no batch API uses:
+
+```python
+from benzene.core import send_batch_sequentially
+
+result = await send_batch_sequentially(http_sender, messages)   # N sends, per-message outcomes
+```
+
+It is honest about what it is — N round trips, never presented as atomic — and it still attempts
+every message, aborts nothing on a failure, and reports each outcome at the caller's index.
+`chunked(items, size)` is the shared splitter, pairing each item with its original index (mirrors
+.NET's `BatchSend.Chunk`), for a sender of your own.
+
+> `benzene.mesh`'s `with_trace_propagation` is not yet batch-aware: wrapping a sender in it hides
+> that sender's `send_batch`. Compose it inside a batch-aware decorator
+> (`with_retry(with_trace_propagation(sender))`, which falls back to sequential sends) or set
+> `traceparent` yourself in `headers=` until it grows the same three-line `send_batch`.
+
 ## In-process transport
 
 `benzene.core.inprocess` is a `MessageSender` that dispatches straight to a handler pipeline built
@@ -609,7 +682,8 @@ make a blocking SDK call safe: sharing one event loop works because the consumer
 `decode_response`, `encode_response`, `error_payload`, `exact_version`, `highest_version`, `message`, `message_router`,
 `resolve_version`, `read_message_metadata`, `MetadataKeys`, `DEFAULT_METADATA_KEYS`,
 `DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `MessageSender`, `with_retry`, `with_correlation_id`,
-`RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `SchemaCasters`,
+`RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `BatchMessageSender`,
+`BatchResult`, `FailedMessage`, `chunked`, `send_batch_sequentially`, `SchemaCasters`,
 `casting_handler`, `Cast`, `NoCastPathError`, `ServiceSpec`, `TopicSpec`, `spec_interception`,
 `ContractDocument`, `ContractRequest`, `ContractEvent`, `ContractSource`, `HttpMapping`,
 `CONTRACT_OPENAPI`, `is_reserved_topic`, `resolve_contract`,

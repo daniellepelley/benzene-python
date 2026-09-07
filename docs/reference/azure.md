@@ -85,7 +85,30 @@ for the v2-model wiring.
   carries them as *extension attributes*. Over `azure-eventgrid` (`[eventgrid]`).
 
 All four implement `benzene.core.MessageSender`, import their SDK lazily, and map a send failure to
-`service-unavailable` (never raising for a domain outcome).
+`service-unavailable` (never raising for a domain outcome). `ServiceBusMessageSender` takes an
+injectable `message_factory` and `EventHubMessageSender` an `event_factory` (`(body, properties) ->
+SDK object`), so the whole egress contract is testable with no Azure SDK installed; what goes on the
+wire is unchanged either way.
+
+### Batch sends
+
+All four also implement `benzene.core.BatchMessageSender` — `await sender.send_batch([(topic,
+message), ...])`, returning a `BatchResult` whose `failures` name the caller's own indices. Azure's
+batching model is **atomic per batch**, not per entry like AWS's, and the results say so:
+
+| Sender | Native call | Chunk | Failure model |
+|---|---|---|---|
+| `ServiceBusMessageSender` | `create_message_batch()` + `add_message` until it refuses, then `send_messages(batch)` | size-bounded | atomic per batch: a failed send fails exactly that batch's indices |
+| `EventHubMessageSender` | `create_batch()` + `add` until it refuses, then `send_batch(batch)` | size-bounded | atomic per batch |
+| `EventGridMessageSender` | `send([events])` | 100 | atomic per chunk |
+| `QueueStorageMessageSender` | — | — | **no batch API**: a Storage Queue takes one message per call, so `send_batch` is a documented sequential fallback (N calls), each with its own outcome |
+
+Service Bus and Event Hub bound a batch by *size*, so messages are packed until the SDK's batch
+object raises and the full batch is sent. A message too large for an *empty* batch is its own
+`bad-request` failure — no batch will ever take it and a retry cannot make it smaller — and it does
+not abort the messages around it. Event Hub events all go into unkeyed batches: an `EventDataBatch`'s
+partition key is fixed at creation and this sender exposes none, so there is nothing to group by. A
+missing SDK still raises the teaching `ImportError` out of `send_batch`, never a failure entry.
 
 ## Testing
 
