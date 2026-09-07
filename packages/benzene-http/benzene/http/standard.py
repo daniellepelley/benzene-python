@@ -5,7 +5,11 @@ A conforming service exposes a small set of well-known HTTP paths under a ``/ben
 - ``/benzene/invoke`` (R4) — the **wire-envelope endpoint**: POST a ``{topic, headers, body}`` message
   envelope and get the response envelope back, so the service is invokable uniformly across transports.
 - ``/benzene/health`` (R3) — the **health aggregate**: the ``{isHealthy, healthChecks}`` report, 200
-  when healthy and 503 when not.
+  when healthy and 503 when not. This is also the port's **readiness** surface: the spec reserves no
+  ``benzene:readiness`` topic and this port will not invent one, so a draining instance expresses
+  itself here instead — register
+  :func:`~benzene.core.health.shutdown_readiness_check` and the aggregate flips to 503 the moment
+  shutdown begins, taking the pod out of a Kubernetes Service with no new path and no new topic.
 - ``/benzene/spec`` (R5) — the **derived spec document**: what the service serves, projected from its
   registry. It answers the Contract Document (contract-document.md — the format every language's
   client generator parses) by default, and this port's native
@@ -70,6 +74,11 @@ class StandardPaths:
 
     prefix: str = DEFAULT_PREFIX
     invoke: bool = True
+    #: The checks behind ``/benzene/health`` — and therefore what a ``readinessProbe`` reads. Adding
+    #: :func:`~benzene.core.health.shutdown_readiness_check` here (linked to a
+    #: :class:`~benzene.core.WorkerHost`'s stop signal) is what makes a draining pod answer 503 and
+    #: leave the Service while it finishes in-flight work. Point a ``livenessProbe`` at something
+    #: else once you do: a draining instance is not broken, and restarting it aborts its own drain.
     health: HealthChecks | None = None
     spec: SpecSource | None = None
     contract: ContractSource | None = None

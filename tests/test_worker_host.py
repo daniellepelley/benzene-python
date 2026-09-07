@@ -14,7 +14,9 @@ fakes those loops are tested with, with no queue, broker or ASGI server anywhere
 from __future__ import annotations
 
 import asyncio
+import signal
 import sys
+import threading
 import types
 from dataclasses import dataclass
 from typing import Any
@@ -412,3 +414,305 @@ def test_a_background_leg_that_crashes_winds_the_others_down_and_propagates() ->
     with pytest.raises(RuntimeError, match="discovery API refused"):
         asyncio.run(asyncio.wait_for(host.run(), timeout=5))
     assert log == ["http:stopped"]
+
+
+# --- draining on SIGTERM (T0.5) -------------------------------------------------------------------
+#
+# A queue-only pod - a Kafka consumer and an SQS consumer and no HTTP leg at all - has no uvicorn to
+# catch the orchestrator's SIGTERM, and Python's default disposition terminates the interpreter
+# outright: no finally, no commit, no delete_message. So WorkerHost installs the handler itself.
+#
+# These tests never raise a real signal: they capture what the host registers on the running loop and
+# invoke it directly, which is exactly what the kernel would do and cannot race the test runner.
+
+
+def _spy_on_signal_handlers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[dict[int, Any], list[tuple[str, int]]]:
+    """Stand in for the loop's signal table, so a test can fire a signal without raising one.
+
+    Returns the live table (signal number → the zero-argument callback currently registered for it)
+    and an install/remove journal, which is how the uvicorn-coexistence test proves who won.
+    """
+    loop = asyncio.get_running_loop()
+    table: dict[int, Any] = {}
+    journal: list[tuple[str, int]] = []
+
+    def add(sig: int, callback: Any, *args: Any) -> None:
+        table[sig] = lambda: callback(*args)
+        journal.append(("add", sig))
+
+    def remove(sig: int) -> bool:
+        journal.append(("remove", sig))
+        return table.pop(sig, None) is not None
+
+    monkeypatch.setattr(loop, "add_signal_handler", add)
+    monkeypatch.setattr(loop, "remove_signal_handler", remove)
+    return table, journal
+
+
+def test_a_queue_only_host_drains_on_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The defect: with no HTTP leg nothing catches SIGTERM, so the pod dies mid-handler."""
+    log: list[str] = []
+    host = (
+        WorkerHost()
+        .add("sqs", _polling_worker("sqs", log))
+        .add("kafka", _polling_worker("kafka", log))
+    )
+
+    async def scenario() -> None:
+        table, _ = _spy_on_signal_handlers(monkeypatch)
+        running = asyncio.create_task(host.run())
+        await asyncio.sleep(0.02)
+        assert signal.SIGTERM in table, "nobody would catch SIGTERM in a queue-only process"
+        table[signal.SIGTERM]()  # the kernel delivering the orchestrator's TERM
+        await asyncio.wait_for(running, timeout=5)
+
+    asyncio.run(scenario())
+    assert sorted(log) == ["kafka:stopped", "sqs:stopped"]  # both wound down, neither abandoned
+
+
+def test_sigint_drains_the_host_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    log: list[str] = []
+    host = WorkerHost().add("sqs", _polling_worker("sqs", log))
+
+    async def scenario() -> None:
+        table, _ = _spy_on_signal_handlers(monkeypatch)
+        running = asyncio.create_task(host.run())
+        await asyncio.sleep(0.02)
+        table[signal.SIGINT]()
+        await asyncio.wait_for(running, timeout=5)
+
+    asyncio.run(scenario())
+    assert log == ["sqs:stopped"]
+
+
+def test_the_in_flight_message_is_finished_and_deleted_before_the_loop_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point of a graceful drain: at-least-once must not turn into duplicated work.
+
+    Without a handler the interpreter dies inside the handler, delete_message never runs, and the
+    message reappears after the visibility timeout for another pod to run the side effects again.
+    """
+    handled: list[str] = []
+
+    async def place(request: PlaceOrder) -> Result:
+        handled.append("started")
+        await asyncio.sleep(0.05)  # still in flight when the signal lands
+        handled.append("finished")
+        return Result.created({"sku": request.sku})
+
+    registry = Registry().register("orders:place", place, request_type=PlaceOrder)
+    app = SqsConsumerApp(BenzeneMessageApplication(registry, MiddlewarePipeline()))
+    message = (
+        SqsMessageBuilder("orders:place").with_body({"sku": "A"}).with_receipt_handle("r1").build()
+    )
+    client = RecordingSqsClient(messages=[message])
+
+    host = WorkerHost().add(
+        "sqs", sqs_consumer_worker(app, client, "https://sqs.example/q", wait_time_seconds=0)
+    )
+
+    async def scenario() -> None:
+        table, _ = _spy_on_signal_handlers(monkeypatch)
+        running = asyncio.create_task(host.run())
+        while "started" not in handled:
+            await asyncio.sleep(0.005)
+        table[signal.SIGTERM]()  # mid-handler
+        await asyncio.wait_for(running, timeout=5)
+
+    asyncio.run(scenario())
+    assert handled == ["started", "finished"]  # not abandoned
+    assert client.deleted == ["r1"]  # ...and committed, so no other pod re-runs it
+
+
+def test_a_second_signal_escalates_to_immediate_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An operator's second Ctrl-C must not be ignored, even inside a generous drain budget."""
+    cancelled: list[str] = []
+
+    async def deaf(stop: StopSignal) -> None:
+        try:
+            await asyncio.sleep(60)  # never notices the stop signal
+        except asyncio.CancelledError:
+            cancelled.append("deaf")
+            raise
+
+    host = WorkerHost(shutdown_timeout=60).add("deaf", deaf)
+
+    async def scenario() -> None:
+        table, _ = _spy_on_signal_handlers(monkeypatch)
+        running = asyncio.create_task(host.run())
+        await asyncio.sleep(0.02)
+        table[signal.SIGTERM]()
+        await asyncio.sleep(0.02)
+        table[signal.SIGTERM]()  # the impatient second one
+        await asyncio.wait_for(running, timeout=2)  # far inside the 60s budget
+
+    asyncio.run(scenario())
+    assert cancelled == ["deaf"]
+
+
+def test_a_leg_that_never_notices_the_signal_is_cancelled_at_the_drain_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stuck handler bounds the drain, it does not block shutdown forever."""
+    cancelled: list[str] = []
+
+    async def deaf(stop: StopSignal) -> None:
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.append("deaf")
+            raise
+
+    host = WorkerHost(shutdown_timeout=0.05).add("deaf", deaf)
+
+    async def scenario() -> None:
+        table, _ = _spy_on_signal_handlers(monkeypatch)
+        running = asyncio.create_task(host.run())
+        await asyncio.sleep(0.02)
+        table[signal.SIGTERM]()
+        await asyncio.wait_for(running, timeout=5)
+
+    asyncio.run(scenario())
+    assert cancelled == ["deaf"]
+
+
+def test_signal_handlers_are_removed_when_the_host_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second WorkerHost in the same process (tests, notebooks) must start from a clean table."""
+    left_behind: dict[int, Any] = {}
+
+    async def scenario() -> None:
+        table, _ = _spy_on_signal_handlers(monkeypatch)
+
+        async def quick(stop: StopSignal) -> None:
+            return None
+
+        await asyncio.wait_for(WorkerHost().add("quick", quick).run(), timeout=5)
+        left_behind.update(table)
+
+    asyncio.run(scenario())
+    assert left_behind == {}
+
+
+def test_an_asgi_leg_still_owns_the_signal_and_both_paths_converge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not fight uvicorn: it installs on serve() and, being last, wins the loop's handler table.
+
+    That is fine, because uvicorn's handler flips should_exit, serve() returns, and the leg's finally
+    sets the very same stop signal the host's handler would have set. Both paths converge.
+    """
+    log: list[str] = []
+
+    class SignalOwningAsgiServer(FakeAsgiServer):
+        """Duck-typed against uvicorn.Server, including its install_signal_handlers()."""
+
+        async def serve(self) -> None:
+            loop = asyncio.get_running_loop()
+            loop.add_signal_handler(signal.SIGTERM, self.handle_exit)
+            await super().serve()
+
+        def handle_exit(self) -> None:
+            self.should_exit = True
+
+    server = SignalOwningAsgiServer()
+    host = (
+        WorkerHost()
+        .add("http", asgi_server_worker(server))
+        .add("sqs", _polling_worker("sqs", log))
+    )
+
+    async def scenario() -> list[tuple[str, int]]:
+        table, journal = _spy_on_signal_handlers(monkeypatch)
+        running = asyncio.create_task(host.run())
+        while not server.served:
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.01)
+        table[signal.SIGTERM]()  # whoever registered last is who the kernel calls
+        await asyncio.wait_for(running, timeout=5)
+        return journal
+
+    journal = asyncio.run(scenario())
+
+    # the host registers first, at run() entry, and the server's serve() overwrites it
+    assert journal[0] == ("add", signal.SIGTERM)
+    assert journal.count(("add", signal.SIGTERM)) == 2
+    assert server.should_exit  # uvicorn's own handler is the one that fired
+    assert log == ["sqs:stopped"]  # ...and the queue leg still drained
+
+
+def test_an_unsupported_platform_degrades_to_no_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows raises NotImplementedError; a host must still start and run."""
+    log: list[str] = []
+    host = WorkerHost().add("sqs", _polling_worker("sqs", log))
+
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+
+        def refuse(*_args: Any, **_kwargs: Any) -> None:
+            raise NotImplementedError("add_signal_handler is not supported on this platform")
+
+        monkeypatch.setattr(loop, "add_signal_handler", refuse)
+        running = asyncio.create_task(host.run())
+        await asyncio.sleep(0.02)
+        host.stop.set()  # the documented fallback: set it yourself
+        await asyncio.wait_for(running, timeout=5)
+
+    asyncio.run(scenario())
+    assert log == ["sqs:stopped"]
+
+
+def test_a_host_off_the_main_thread_installs_nothing_and_still_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """signal handlers are a main-thread-only facility; a worker thread must not fail to start."""
+    log: list[str] = []
+    installed: list[int] = []
+    outcome: list[str] = []
+
+    def in_a_thread() -> None:
+        host = WorkerHost().add("sqs", _polling_worker("sqs", log))
+
+        async def scenario() -> None:
+            loop = asyncio.get_running_loop()
+            monkeypatch.setattr(
+                loop, "add_signal_handler", lambda sig, *_a: installed.append(sig)
+            )
+            running = asyncio.create_task(host.run())
+            await asyncio.sleep(0.02)
+            host.stop.set()
+            await asyncio.wait_for(running, timeout=5)
+
+        asyncio.run(scenario())
+        outcome.append("ran")
+
+    thread = threading.Thread(target=in_a_thread)
+    thread.start()
+    thread.join(timeout=10)
+
+    assert outcome == ["ran"]
+    assert installed == []  # never even attempted off the main thread
+
+
+def test_signals_none_hands_signal_ownership_back_to_the_embedder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log: list[str] = []
+    host = WorkerHost(signals=None).add("sqs", _polling_worker("sqs", log))
+
+    async def scenario() -> None:
+        table, journal = _spy_on_signal_handlers(monkeypatch)
+        running = asyncio.create_task(host.run())
+        await asyncio.sleep(0.02)
+        assert table == {} and journal == []
+        host.stop.set()
+        await asyncio.wait_for(running, timeout=5)
+
+    asyncio.run(scenario())
+    assert log == ["sqs:stopped"]

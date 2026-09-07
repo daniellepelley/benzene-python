@@ -35,25 +35,61 @@ transport packages ship one-line factories for theirs
 :func:`benzene.http.uvicorn_worker`), each of which is a closure over the public loop function above.
 Nothing here is privileged: a worker is an ordinary ``async def`` you can write yourself.
 
-Two things this host deliberately does **not** do, because they belong to the legs:
+**Signals, and why the host now catches them.** This host used to leave signals entirely to
+``uvicorn.Server.serve()``, which installs its own SIGINT/SIGTERM handling on the main thread. That
+reasoning is sound *for a process that has an HTTP leg* — and wrong for the one this framework exists
+to make easy: a Kafka consumer and an SQS consumer and nothing else. There is no uvicorn in that
+process, so nothing catches Kubernetes' SIGTERM, and Python's default disposition terminates the
+interpreter outright: no ``finally``, no ``consumer.close()``, no offset commit, no
+``delete_message``. Every rolling deploy then duplicates work proportional to the in-flight set.
 
-* **It starts no threads and installs no signal handlers.** ``uvicorn.Server.serve()`` installs its
-  own SIGINT/SIGTERM handling and only works on the main thread, so :meth:`WorkerHost.run` is called
-  from the main thread and leaves signals to it. On a signal uvicorn returns, its worker's
-  ``finally`` sets the stop signal, and the consumer loops see it on their next iteration.
+So :meth:`WorkerHost.run` installs a handler that trips its own :class:`StopSignal`, and the two
+paths **converge** rather than compete:
+
+* **With an HTTP leg.** The host registers at ``run()`` entry; ``uvicorn.Server.serve()`` registers
+  afterwards and, being last, owns the loop's handler table. Its handler flips ``should_exit``,
+  ``serve()`` returns, and :func:`~benzene.http.asgi_server_worker`'s ``finally`` sets the very same
+  stop signal the host's handler would have set. Nothing is fought over, because the host never
+  re-registers on top of uvicorn.
+* **Without one.** The host's own handler is still there, and it sets the stop signal directly.
+
+Either way the consumer loops see ``should_continue()`` go false on their next iteration, finish the
+message already in flight, commit it, and return — bounded by ``shutdown_timeout``, after which a leg
+that never noticed is cancelled rather than allowed to hang the pod. A **second** signal escalates
+immediately: an operator's second Ctrl-C cancels the legs instead of waiting out the budget.
+
+Signal handling is best-effort by design. It is attempted only on the main thread, only for the
+signals passed (``signals=None`` hands ownership back to an embedding host), and any refusal —
+Windows' :class:`NotImplementedError`, a non-main thread, a loop that will not take it — is logged at
+INFO and skipped. A host never fails to start because the platform has no signals; you set
+:attr:`WorkerHost.stop` yourself there.
+
+One thing this host still deliberately does **not** do, because it belongs to the legs:
+
 * **It does not make blocking SDK calls safe.** Sharing one event loop is only sound because the
   consumer loops route their ``boto3``/``confluent-kafka`` calls through :func:`asyncio.to_thread`
   themselves. A worker that blocks the loop starves its siblings, and no supervisor can fix that.
+
+To tell an orchestrator *"stop routing to me, I am draining"*, pair the stop signal with
+:class:`~benzene.core.health.ShutdownState`: ``ShutdownState().link_to(host.stop)`` registered as a
+:func:`~benzene.core.health.shutdown_readiness_check` flips the existing ``benzene:healthcheck``
+aggregate — and so ``GET /benzene/health`` — to 503 the moment the drain starts. No new topic, no new
+path: a Kubernetes ``readinessProbe`` already pointed at ``/benzene/health`` takes the pod out of the
+Service while the in-flight work finishes.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable, Coroutine
+import logging
+import signal
+import threading
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from typing import Any
 
 __all__ = [
+    "DEFAULT_SHUTDOWN_SIGNALS",
     "DuplicateWorkerError",
     "background_worker",
     "NoWorkersError",
@@ -61,6 +97,13 @@ __all__ = [
     "Worker",
     "WorkerHost",
 ]
+
+logger = logging.getLogger(__name__)
+
+#: The signals a :class:`WorkerHost` catches unless told otherwise: SIGTERM (what Kubernetes sends a
+#: pod it is terminating) and SIGINT (Ctrl-C). Both mean "wind down", and both are what a queue-only
+#: process would otherwise die on with work uncommitted.
+DEFAULT_SHUTDOWN_SIGNALS: tuple[signal.Signals, ...] = (signal.SIGTERM, signal.SIGINT)
 
 
 class StopSignal:
@@ -128,8 +171,11 @@ class WorkerHost:
     loop functions they wrap (:func:`~benzene.aws.run_sqs_consumer_loop`,
     :func:`~benzene.kafka.run_consumer_loop`) remain public and unchanged.
 
-    Call :meth:`run` from the main thread: it starts no threads of its own so that a worker hosting
-    an ASGI server keeps its native SIGINT/SIGTERM handling.
+    Shutdown is also *initiated* here: :meth:`run` catches SIGTERM/SIGINT and trips the stop signal,
+    which is what makes a queue-only process (no uvicorn anywhere) drain instead of dying mid-handler.
+    Call it from the main thread — signal handling is a main-thread-only facility, and it starts no
+    threads of its own so a worker hosting an ASGI server keeps its native handling too. See the
+    module docstring for why the two paths converge rather than fight.
 
         host = WorkerHost()
         host.add("http", uvicorn_worker(http_app, port=8080))
@@ -137,16 +183,33 @@ class WorkerHost:
         await host.run()
     """
 
-    def __init__(self, *, shutdown_timeout: float | None = 30.0) -> None:
+    def __init__(
+        self,
+        *,
+        shutdown_timeout: float | None = 30.0,
+        signals: Sequence[signal.Signals] | None = DEFAULT_SHUTDOWN_SIGNALS,
+    ) -> None:
         """``shutdown_timeout`` bounds how long a *sibling* gets to notice the stop signal.
 
         The default of 30 seconds is chosen to clear an SQS long-poll (20s at most) so a polling
         worker returns on its own rather than being cancelled mid-message. Pass ``None`` to wait
         indefinitely for well-behaved workers, or a smaller number for a tighter shutdown budget.
+        It is also the **drain deadline**: the same budget applies whether shutdown was started by a
+        leg finishing or by a signal, so one stuck handler bounds the drain instead of hanging the
+        pod past its ``terminationGracePeriodSeconds``. Keep it under that grace period — a drain the
+        orchestrator SIGKILLs through is not a drain.
+
+        ``signals`` are the signals to catch (:data:`DEFAULT_SHUTDOWN_SIGNALS` by default). Pass
+        ``None`` — or an empty sequence — when an embedding host owns signal handling and this host
+        is wound down by setting :attr:`stop` instead. Installing is best-effort: a non-main thread
+        or a platform without :meth:`~asyncio.loop.add_signal_handler` logs at INFO and continues.
         """
         self._workers: list[tuple[str, Worker]] = []
         self._shutdown_timeout = shutdown_timeout
+        self._signals: tuple[signal.Signals, ...] = tuple(signals or ())
         self._stop = StopSignal()
+        self._tasks: list[asyncio.Task[None]] = []
+        self._signals_seen = 0
 
     @property
     def stop(self) -> StopSignal:
@@ -187,10 +250,15 @@ class WorkerHost:
                 'host.add("sqs", sqs_consumer_worker(app, client, queue_url)).'
             )
 
+        self._signals_seen = 0
+        # Registered before any leg has actually executed, so an ASGI leg's own install lands on top
+        # of this one rather than under it - see the module docstring on convergence.
+        installed = self._install_signal_handlers()
         tasks = [
             asyncio.create_task(self._supervise(worker), name=f"benzene-worker:{name}")
             for name, worker in self._workers
         ]
+        self._tasks = tasks
         try:
             results = await self._gather_then_wind_down(tasks)
         except asyncio.CancelledError:
@@ -199,6 +267,11 @@ class WorkerHost:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
+        finally:
+            # Restore the table: a second host in the same process (tests, notebooks, a supervisor
+            # that runs one host after another) must not inherit this one's handlers.
+            self._remove_signal_handlers(installed)
+            self._tasks = []
 
         for outcome in results:
             if isinstance(outcome, BaseException) and not isinstance(
@@ -218,8 +291,21 @@ class WorkerHost:
             self._stop.set()
 
     async def _gather_then_wind_down(self, tasks: list[asyncio.Task[None]]) -> list[object]:
-        """Wait for the first worker to finish, then give the rest ``shutdown_timeout`` to follow."""
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        """Wait for shutdown to start, then give every leg ``shutdown_timeout`` to follow.
+
+        Shutdown starts either because a worker finished (its ``finally`` sets the stop signal) or
+        because a signal set it while every leg is still running happily. Waiting on the stop signal
+        as well as on the tasks is what makes the drain deadline apply to the second case too —
+        without it a signalled host would sit in ``FIRST_COMPLETED`` forever behind a leg that never
+        checks ``should_continue``.
+        """
+        stop_waiter = asyncio.create_task(self._stop.wait(), name="benzene-worker-host:stop")
+        try:
+            await asyncio.wait([*tasks, stop_waiter], return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stop_waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_waiter
         pending = [task for task in tasks if not task.done()]
         if pending:
             _, still_running = await asyncio.wait(pending, timeout=self._shutdown_timeout)
@@ -231,6 +317,78 @@ class WorkerHost:
         return [
             task.exception() if not task.cancelled() else asyncio.CancelledError() for task in tasks
         ]
+
+    # --- signals -------------------------------------------------------------------------------
+
+    def _install_signal_handlers(self) -> tuple[signal.Signals, ...]:
+        """Best-effort: catch the configured signals, and never fail to start because we cannot."""
+        if not self._signals:
+            return ()
+        if threading.current_thread() is not threading.main_thread():
+            logger.info(
+                "benzene: WorkerHost.run() was called off the main thread, so no shutdown signal "
+                "handler was installed (Python only delivers signals to the main thread). Wind this "
+                "host down by setting host.stop from the thread that owns signals."
+            )
+            return ()
+        loop = asyncio.get_running_loop()
+        installed: list[signal.Signals] = []
+        for sig in self._signals:
+            try:
+                loop.add_signal_handler(sig, self._handle_signal, sig)
+            except (NotImplementedError, RuntimeError, ValueError, OSError) as exc:
+                # Windows has no add_signal_handler; some embedded loops refuse it. Either way a
+                # missing handler is a degraded shutdown, not a failed start-up.
+                logger.info(
+                    "benzene: could not install a %s handler on this event loop (%s: %s), so this "
+                    "host will not drain on that signal. Set host.stop yourself to wind it down.",
+                    getattr(sig, "name", sig),
+                    type(exc).__name__,
+                    exc,
+                )
+            else:
+                installed.append(sig)
+        return tuple(installed)
+
+    def _remove_signal_handlers(self, installed: Sequence[signal.Signals]) -> None:
+        if not installed:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - run() is always awaited on a running loop
+            return
+        for sig in installed:
+            with contextlib.suppress(NotImplementedError, RuntimeError, ValueError, OSError):
+                loop.remove_signal_handler(sig)
+
+    def _handle_signal(self, sig: signal.Signals) -> None:
+        """The first signal drains; a second one stops waiting and cancels.
+
+        Runs on the event loop (``add_signal_handler``), not in a C-level signal frame, so it may do
+        ordinary work. It only sets flags and cancels — the actual winding down is the legs' own.
+        """
+        name = getattr(sig, "name", sig)
+        self._signals_seen += 1
+        self._stop.set()
+        if self._signals_seen == 1:
+            logger.info(
+                "benzene: %s received - draining %s worker(s); in-flight work has %s to finish, "
+                "then stragglers are cancelled. Send %s again to stop waiting.",
+                name,
+                len(self._workers),
+                "no deadline"
+                if self._shutdown_timeout is None
+                else f"{self._shutdown_timeout:g}s",
+                name,
+            )
+            return
+        logger.warning(
+            "benzene: %s received again while already draining - cancelling in-flight workers now. "
+            "Work that was mid-handler will not be committed.",
+            name,
+        )
+        for task in self._tasks:
+            task.cancel()
 
 
 def background_worker(start: Callable[[], Coroutine[Any, Any, None]]) -> Worker:

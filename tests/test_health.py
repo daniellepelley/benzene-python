@@ -16,6 +16,8 @@ from benzene.core import (
     Registry,
     health_interception,
 )
+from benzene.core.health import ShutdownState, shutdown_readiness_check
+from benzene.core.worker import StopSignal, WorkerHost
 
 
 def _app(checks: HealthChecks) -> BenzeneMessageApplication:
@@ -116,3 +118,90 @@ def test_report_payload_matches_the_heartbeat_health_shape() -> None:
     # exactly the {isHealthy, healthChecks} shape the mesh Heartbeat carries
     assert set(payload) == {"isHealthy", "healthChecks"}
     assert payload["healthChecks"]["db"]["isHealthy"] is True
+
+
+# --- the shutdown / draining latch ----------------------------------------------------------------
+#
+# T0.5(b). A draining instance has to tell Kubernetes "stop routing to me" — and it does so through
+# the *existing* benzene:healthcheck aggregate and the existing /benzene/health 200/503 mapping, not
+# through a new reserved topic. The canonical spec reserves seven topics and benzene:readiness is not
+# one of them, so a readiness probe pointed at /benzene/health is the whole mechanism.
+
+
+def test_a_draining_instance_reports_unhealthy_on_the_existing_healthcheck_topic() -> None:
+    state = ShutdownState()
+    checks = HealthChecks().add("db", lambda: True).add(
+        "shutdown", shutdown_readiness_check(state)
+    )
+
+    assert _hit(_app(checks))["statusCode"] == "ok"  # serving: a readiness probe sees 200
+
+    state.mark_shutting_down()
+
+    response = _hit(_app(checks))
+    assert response["statusCode"] == "service-unavailable"  # → HTTP 503 → out of the Service
+    body = json.loads(response["body"])
+    assert body["isHealthy"] is False
+    assert body["healthChecks"]["db"] == {"isHealthy": True}  # not broken — draining
+    assert body["healthChecks"]["shutdown"]["isHealthy"] is False
+
+
+def test_the_draining_report_keeps_the_conformance_pinned_aggregate_shape() -> None:
+    """No new keys, no new topic: only one more entry in the frozen healthChecks map."""
+    state = ShutdownState()
+    state.mark_shutting_down()
+    report = asyncio.run(HealthChecks().add("shutdown", shutdown_readiness_check(state)).run())
+    payload = report.to_payload()
+
+    assert set(payload) == {"isHealthy", "healthChecks"}
+    assert set(payload["healthChecks"]) == {"shutdown"}
+    assert set(payload["healthChecks"]["shutdown"]) <= {"isHealthy", "detail"}
+
+
+def test_the_latch_is_one_way() -> None:
+    state = ShutdownState()
+    assert state.is_shutting_down is False
+    state.mark_shutting_down()
+    state.mark_shutting_down()  # idempotent
+    assert state.is_shutting_down is True
+
+
+def test_the_latch_links_to_a_worker_hosts_stop_signal() -> None:
+    """The Python analogue of .NET's LinkTo(IHostApplicationLifetime.ApplicationStopping)."""
+
+    async def scenario() -> tuple[bool, bool]:
+        host = WorkerHost()
+        state = ShutdownState().link_to(host.stop)
+        before = state.is_shutting_down
+        host.stop.set()  # what the SIGTERM handler does
+        return before, state.is_shutting_down
+
+    assert asyncio.run(scenario()) == (False, True)
+
+
+def test_linking_to_an_already_stopped_signal_latches_immediately() -> None:
+    async def scenario() -> bool:
+        stop = StopSignal()
+        stop.set()
+        return ShutdownState().link_to(stop).is_shutting_down
+
+    assert asyncio.run(scenario()) is True
+
+
+def test_a_linked_latch_stays_tripped_even_if_the_signal_object_is_dropped() -> None:
+    """One-way: reading through a link latches, so the state never reverts."""
+
+    async def scenario() -> tuple[bool, bool]:
+        stop = StopSignal()
+        state = ShutdownState().link_to(stop)
+        stop.set()
+        first = state.is_shutting_down
+        return first, state.is_shutting_down
+
+    assert asyncio.run(scenario()) == (True, True)
+
+
+def test_the_shutdown_check_is_healthy_while_the_service_is_serving() -> None:
+    result = shutdown_readiness_check(ShutdownState())()
+    assert isinstance(result, HealthCheckResult)
+    assert result.is_healthy is True
