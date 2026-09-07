@@ -25,6 +25,7 @@ from .clients import (
     FailedMessage,
     MessageSender,
     chunked,
+    delegate_batch,
     send_batch_sequentially,
 )
 from .context import Context
@@ -131,6 +132,7 @@ from .worker import (
 )
 
 __all__ = [
+    "delegate_batch",
     "DEFAULT_SHUTDOWN_SIGNALS",
     "shutdown_readiness_check",
     "ShutdownState",

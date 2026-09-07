@@ -347,3 +347,29 @@ def test_lambda_has_no_batch_invoke_so_it_falls_back_to_sequential_sends() -> No
     assert len(fake.calls) == 3
     assert result.failed_indexes == (1,)
     assert _failure(result, 1).status == "not-found"
+
+
+def test_an_unserializable_entry_fails_alone_and_is_reported_once() -> None:
+    # A serialization failure is that entry's `bad-request`, never an abort of the batch — and when
+    # the call around it also fails, the entry must not be reported twice at two different statuses.
+    def picky(message):
+        if message["id"] == "1":
+            raise TypeError("not JSON serializable")
+        return encode_body(message)
+
+    fake = _FakeBatchSqs()
+    result = asyncio.run(SqsMessageSender("q", client=fake, serializer=picky).send_batch(_batch(3)))
+    assert result.failed_indexes == (1,)
+    assert _failure(result, 1).status == Status.BAD_REQUEST
+    assert [entry["Id"] for entry in fake.calls[0]["Entries"]] == ["0", "2"]  # the rest still went
+
+    class Boom(_FakeBatchSqs):
+        def send_message_batch(self, **kwargs):
+            raise RuntimeError("sqs down")
+
+    boom = asyncio.run(SqsMessageSender("q", client=Boom(), serializer=picky).send_batch(_batch(3)))
+    assert boom.failed_indexes == (0, 1, 2)  # each exactly once
+    assert (
+        _failure(boom, 1).status == Status.BAD_REQUEST
+    )  # still the caller's fault, not the call's
+    assert _failure(boom, 0).status == Status.SERVICE_UNAVAILABLE

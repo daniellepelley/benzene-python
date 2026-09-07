@@ -19,11 +19,12 @@ import contextvars
 import os
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
-from benzene.core import Context, Middleware, Next
+from benzene.core import BatchResult, Context, Middleware, Next, delegate_batch
 from benzene.results import Result, Status
 
 # The trace the current invocation is inside — (trace_id, span_id) — set by the trace middleware so an
@@ -232,11 +233,27 @@ class TracePropagatingMessageSender:
     async def send_message(
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
+        return await self._inner.send_message(topic, message, self._with_traceparent(headers))
+
+    async def send_batch(
+        self, messages: Sequence[tuple[str, Any]], headers: dict[str, str] | None = None
+    ) -> BatchResult:
+        """Forward the ``traceparent`` for a batch, or fall back if the inner sender has none.
+
+        Without this the decorator would silently *remove* a capability: wrapping a batch-capable
+        sender for tracing would leave an object that no longer satisfies
+        :class:`~benzene.core.BatchMessageSender`, so a caller's ``send_batch`` would disappear
+        the moment tracing was switched on. One publish action carries one span, so every entry
+        gets the same ``traceparent`` — exactly what the correlation decorator does with its id.
+        """
+        return await delegate_batch(self._inner, messages, self._with_traceparent(headers))
+
+    def _with_traceparent(self, headers: dict[str, str] | None) -> dict[str, str]:
         out = dict(headers or {})
         traceparent = current_traceparent()
         if traceparent and not any(key.lower() == self._header.lower() for key in out):
             out[self._header] = traceparent
-        return await self._inner.send_message(topic, message, out)
+        return out
 
 
 def with_trace_propagation(inner: Any, **options: Any) -> TracePropagatingMessageSender:

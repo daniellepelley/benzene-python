@@ -169,3 +169,19 @@ async def send_batch_sequentially(
         if not result.is_successful:
             failures.append(FailedMessage(index, result.status, "; ".join(result.messages) or None))
     return BatchResult(tuple(failures))
+
+
+async def delegate_batch(
+    inner: Any, messages: Sequence[tuple[str, Any]], headers: dict[str, str] | None
+) -> BatchResult:
+    """Send through ``inner``'s native ``send_batch`` when it has one, else one message at a time.
+
+    The structural-typing pay-off: a decorator does not need to know whether the sender it wraps
+    talks to SQS (native batch) or to an HTTP endpoint (no such thing), and gains batching for free
+    the day that sender grows a ``send_batch``.
+    """
+    send_batch = getattr(inner, "send_batch", None)
+    if send_batch is None:
+        return await send_batch_sequentially(inner, messages, headers)
+    result: BatchResult = await send_batch(messages, headers)
+    return result

@@ -27,29 +27,13 @@ from .clients import (
     BatchResult,
     FailedMessage,
     MessageSender,
-    send_batch_sequentially,
+    delegate_batch,
 )
 
 #: The failure statuses a retry treats as transient by default (a fresh attempt might succeed).
 DEFAULT_RETRYABLE: frozenset[str] = frozenset(
     {Status.SERVICE_UNAVAILABLE, Status.TIMEOUT, Status.TOO_MANY_REQUESTS}
 )
-
-
-async def _delegate_batch(
-    inner: Any, messages: Sequence[tuple[str, Any]], headers: dict[str, str] | None
-) -> BatchResult:
-    """Send through ``inner``'s native ``send_batch`` when it has one, else one message at a time.
-
-    The structural-typing pay-off: a decorator does not need to know whether the sender it wraps
-    talks to SQS (native batch) or to an HTTP endpoint (no such thing), and gains batching for free
-    the day that sender grows a ``send_batch``.
-    """
-    send_batch = getattr(inner, "send_batch", None)
-    if send_batch is None:
-        return await send_batch_sequentially(inner, messages, headers)
-    result: BatchResult = await send_batch(messages, headers)
-    return result
 
 
 class RetryingMessageSender:
@@ -98,7 +82,7 @@ class RetryingMessageSender:
         outstanding = list(enumerate(messages))
         failures: dict[int, FailedMessage] = {}
         for attempt in range(1, self._attempts + 1):
-            result = await _delegate_batch(self._inner, [pair for _, pair in outstanding], headers)
+            result = await delegate_batch(self._inner, [pair for _, pair in outstanding], headers)
             for index, _pair in outstanding:
                 failures.pop(index, None)  # this attempt is the new truth for what it carried
             for failure in result.failures:
@@ -150,7 +134,7 @@ class CorrelationIdMessageSender:
         header channel the seam deliberately does not have; a caller that wants one id per message
         sends them one at a time, or sets the header itself.
         """
-        return await _delegate_batch(self._inner, messages, self._with_id(headers))
+        return await delegate_batch(self._inner, messages, self._with_id(headers))
 
     def _with_id(self, headers: dict[str, str] | None) -> dict[str, str]:
         out = dict(headers or {})

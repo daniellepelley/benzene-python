@@ -98,13 +98,15 @@ KINESIS_BATCH_LIMIT = 500
 """``PutRecords`` accepts at most 500 records per call (AWS Kinesis API reference)."""
 
 
-def _chunk_failed(chunk: list[tuple[int, Any]], detail: str) -> list[FailedMessage]:
-    """Fail every caller index in one chunk — a whole-call error (throttle, network, credentials).
+def _chunk_failed(sent: list[tuple[int, Any]], detail: str) -> list[FailedMessage]:
+    """Fail every caller index the chunk actually carried — a whole-call error (throttle, network,
+    expired credentials).
 
     Only *this* chunk: earlier chunks' successes are kept and later chunks are still attempted, so
-    the caller resends exactly what did not land instead of duplicating what did.
+    the caller resends exactly what did not land instead of duplicating what did. ``sent`` excludes
+    entries already failed on the way in (an unserializable payload), so no index is reported twice.
     """
-    return [FailedMessage(index, Status.SERVICE_UNAVAILABLE, detail) for index, _message in chunk]
+    return [FailedMessage(index, Status.SERVICE_UNAVAILABLE, detail) for index, _message in sent]
 
 
 def _entry_status(sender_fault: Any) -> str:
@@ -186,7 +188,7 @@ class SnsMessageSender:
     def _publish_chunk(
         self, client: Any, chunk: list[tuple[int, tuple[str, Any]]], headers: dict[str, str] | None
     ) -> list[FailedMessage]:
-        entries, failures = [], []
+        entries, failures, sent = [], [], []
         for index, (topic, message) in chunk:
             try:
                 entries.append(
@@ -198,6 +200,8 @@ class SnsMessageSender:
                 )
             except Exception as ex:  # one unserializable payload is that entry's failure alone
                 failures.append(FailedMessage(index, Status.BAD_REQUEST, str(ex)))
+                continue
+            sent.append((index, message))
         if not entries:
             return failures
         try:
@@ -205,7 +209,7 @@ class SnsMessageSender:
                 TopicArn=self._topic_arn, PublishBatchRequestEntries=entries
             )
         except Exception as ex:
-            return failures + _chunk_failed(chunk, str(ex))
+            return failures + _chunk_failed(sent, str(ex))
         for failed in response.get("Failed", []):
             detail = f"{failed.get('Code')}: {failed.get('Message', '')}".strip()
             failures.append(
@@ -266,7 +270,7 @@ class SqsMessageSender:
     def _send_chunk(
         self, client: Any, chunk: list[tuple[int, tuple[str, Any]]], headers: dict[str, str] | None
     ) -> list[FailedMessage]:
-        entries, failures = [], []
+        entries, failures, sent = [], [], []
         for index, (topic, message) in chunk:
             try:
                 entries.append(
@@ -278,12 +282,14 @@ class SqsMessageSender:
                 )
             except Exception as ex:  # one unserializable payload is that entry's failure alone
                 failures.append(FailedMessage(index, Status.BAD_REQUEST, str(ex)))
+                continue
+            sent.append((index, message))
         if not entries:
             return failures
         try:
             response = client.send_message_batch(QueueUrl=self._queue_url, Entries=entries)
         except Exception as ex:
-            return failures + _chunk_failed(chunk, str(ex))
+            return failures + _chunk_failed(sent, str(ex))
         for failed in response.get("Failed", []):
             detail = f"{failed.get('Code')}: {failed.get('Message', '')}".strip()
             failures.append(
