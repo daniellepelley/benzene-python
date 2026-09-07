@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-from benzene.core import Container, MessageSender, build_application
+from benzene.core import MessageSender, build_application, use_instance
 from benzene.rabbitmq import RabbitMqConsumerApp, RabbitMqMessageSender, run_consumer_loop
 from orders_domain import OrdersStartUp
 
@@ -36,12 +36,8 @@ def build_rabbitmq_orders_app() -> RabbitMqConsumerApp:
     routing_key = os.environ.get("BENZENE_RABBITMQ_ROUTING_KEY", "")
     host = os.environ.get("BENZENE_RABBITMQ_URL", "localhost")
 
-    def use_rabbitmq(services: Container) -> None:
-        services.add_instance(
-            MessageSender, RabbitMqMessageSender(exchange, routing_key, host=host)
-        )
-
-    definition, _ = build_application(OrdersStartUp, overrides=[use_rabbitmq])
+    sender = RabbitMqMessageSender(exchange, routing_key, host=host)
+    definition, _ = build_application(OrdersStartUp, overrides=[use_instance(MessageSender, sender)])
     return RabbitMqConsumerApp.from_definition(definition)
 
 

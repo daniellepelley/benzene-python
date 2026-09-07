@@ -11,6 +11,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 
+import pytest
 from benzene.core import (
     SPEC_TOPIC,
     BenzeneMessageApplication,
@@ -121,7 +122,9 @@ def test_spec_derives_topics_and_schemas_from_the_registry() -> None:
         router, application=BenzeneMessageApplication(registry), standard_paths=StandardPaths(spec=spec)
     )
 
-    response = asyncio.run(app.handle("GET", "/benzene/spec"))
+    # ?type=native is where this port's own {service, topics} payload lives now; the bare path
+    # answers the Contract Document (covered below).
+    response = asyncio.run(app.handle("GET", "/benzene/spec", "type=native"))
     assert response.status_code == 200
     doc = json.loads(response.body)
     assert doc["service"] == "greeter"
@@ -131,6 +134,54 @@ def test_spec_derives_topics_and_schemas_from_the_registry() -> None:
     assert topics["say:hello"]["requestSchema"]["properties"]["name"] == {"type": "string"}
 
 
+def test_spec_declares_the_topics_a_service_produces() -> None:
+    # A handler registration makes a service that topic's *consumer* (mesh.md §2.3); what it *sends*
+    # is declared, never inferred — and the derived spec document carries it, so a mesh that pulls
+    # /benzene/spec (rather than being pushed a descriptor) can see provider edges at all.
+    _, registry = _router_and_registry()
+    spec = ServiceSpec.derive(registry, service="greeter", produces=("greet:sent", "audit:log"))
+
+    doc = spec.to_payload()
+    assert [t["id"] for t in doc["produces"]] == ["audit:log", "greet:sent"]  # sorted by id
+    assert doc["produces"][0]["requestSchema"] == {}  # a bare topic id declares no schema
+    assert [t["id"] for t in doc["topics"]] == ["say:hello"]  # the consumed side is untouched
+
+
+def test_spec_omits_produces_when_a_service_declares_none() -> None:
+    # Omit, don't null (nor an empty array) — an undeclared outbound side leaves the field absent, so
+    # the document a service without one serves is unchanged from before `produces` existed.
+    _, registry = _router_and_registry()
+    assert "produces" not in ServiceSpec.derive(registry, service="greeter").to_payload()
+
+
+def test_spec_accepts_an_outbound_definition_with_its_schema() -> None:
+    # The richer form: anything shaped like benzene.mesh's OutboundDefinition (topic/version/types) —
+    # its payload schema is derived exactly the way a registered topic's is.
+    @dataclass(frozen=True)
+    class _Outbound:
+        topic: str
+        version: str = ""
+        request_type: type | None = None
+        response_type: type | None = None
+
+    _, registry = _router_and_registry()
+    spec = ServiceSpec.derive(
+        registry, service="greeter", produces=[_Outbound("greet:sent", "v2", Greet)]
+    )
+
+    produced = spec.to_payload()["produces"][0]
+    assert produced["id"] == "greet:sent"
+    assert produced["version"] == "v2"
+    assert produced["requestSchema"]["properties"]["name"] == {"type": "string"}
+
+
+def test_spec_rejects_a_bare_string_of_produced_topics() -> None:
+    # A str is iterable: accepting one silently would declare one topic per character.
+    _, registry = _router_and_registry()
+    with pytest.raises(TypeError, match="single string"):
+        ServiceSpec.derive(registry, service="greeter", produces="greet:sent")
+
+
 def test_spec_source_may_be_a_callable_redrived_each_request() -> None:
     router, registry = _router_and_registry()
     app = BenzeneHttpApp(
@@ -138,7 +189,7 @@ def test_spec_source_may_be_a_callable_redrived_each_request() -> None:
         application=BenzeneMessageApplication(registry),
         standard_paths=StandardPaths(spec=lambda: ServiceSpec.derive(registry, service="greeter")),
     )
-    doc = json.loads(asyncio.run(app.handle("GET", "/benzene/spec")).body)
+    doc = json.loads(asyncio.run(app.handle("GET", "/benzene/spec", "type=native")).body)
     assert doc["service"] == "greeter"
 
 

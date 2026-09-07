@@ -17,7 +17,9 @@ from __future__ import annotations
 from .consumer import (
     KafkaConsumerApp,
     KafkaMessage,
+    build_kafka_consumer,
     decode_kafka_message,
+    kafka_consumer_worker,
     run_consumer_loop,
 )
 from .producer import TOPIC_HEADER, KafkaMessageSender
@@ -27,6 +29,8 @@ __all__ = [
     "KafkaMessage",
     "KafkaMessageSender",
     "TOPIC_HEADER",
+    "build_kafka_consumer",
     "decode_kafka_message",
+    "kafka_consumer_worker",
     "run_consumer_loop",
 ]

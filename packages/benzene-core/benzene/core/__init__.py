@@ -2,8 +2,9 @@
 
 The middle layer of the Benzene Python port (distribution ``benzene-core``): the handler registry
 and ``@message`` decorator, the middleware pipeline, the per-invocation DI container, request/
-response mapping, the message-router terminal middleware, and the ``BenzeneMessageApplication``
-envelope entry point. Depends only on ``benzene-results``.
+response mapping, the message-router terminal middleware, the ``BenzeneMessageApplication``
+envelope entry point, plus :class:`WorkerHost` for running several transports in one process.
+Depends only on ``benzene-results``.
 
 Install this to run handlers through the transport-neutral ``BenzeneMessage`` envelope without
 pulling in any specific transport binding:
@@ -20,7 +21,24 @@ from __future__ import annotations
 from .casting import Cast, NoCastPathError, SchemaCasters, casting_handler
 from .clients import MessageSender
 from .context import Context
-from .dependencies import Container, Lifetime, Scope, ServiceNotRegisteredError
+from .contract import (
+    CONTRACT_OPENAPI,
+    ContractDocument,
+    ContractEvent,
+    ContractRequest,
+    ContractSource,
+    HttpMapping,
+    is_reserved_topic,
+    resolve_contract,
+)
+from .dependencies import (
+    Container,
+    Lifetime,
+    Scope,
+    ServiceNotRegisteredError,
+    ServiceOverride,
+    use_instance,
+)
 from .envelope import (
     VERSION_HEADER,
     VERSION_HEADER_NAMES,
@@ -29,6 +47,7 @@ from .envelope import (
     encode_response,
     error_payload,
     resolve_version,
+    successful_from,
 )
 from .errors import MessageHandlingError
 from .handler import Handler, HandlerDefinition, definition_of, infer_request_type, message
@@ -74,8 +93,25 @@ from .registry import (
 )
 from .router import message_router
 from .schema import Schema, json_schema
-from .spec import SPEC_TOPIC, ServiceSpec, SpecSource, TopicSpec, spec_interception
+from .spec import (
+    SPEC_TOPIC,
+    OutboundTopic,
+    ProducesSource,
+    ServiceSpec,
+    SpecSource,
+    SupportsOutboundDefinitions,
+    TopicSpec,
+    spec_interception,
+)
 from .startup import AppDefinition, BenzeneStartUp, application_from, build_application
+from .worker import (
+    DuplicateWorkerError,
+    NoWorkersError,
+    StopSignal,
+    Worker,
+    WorkerHost,
+    background_worker,
+)
 
 __all__ = [
     "BenzeneMessageApplication",
@@ -116,9 +152,20 @@ __all__ = [
     "Next",
     "Schema",
     "json_schema",
+    "CONTRACT_OPENAPI",
+    "ContractDocument",
+    "ContractEvent",
+    "ContractRequest",
+    "ContractSource",
+    "HttpMapping",
+    "is_reserved_topic",
+    "resolve_contract",
     "SPEC_TOPIC",
+    "OutboundTopic",
+    "ProducesSource",
     "ServiceSpec",
     "SpecSource",
+    "SupportsOutboundDefinitions",
     "TopicSpec",
     "spec_interception",
     "read_message_metadata",
@@ -145,7 +192,16 @@ __all__ = [
     "message",
     "message_router",
     "resolve_version",
+    "successful_from",
     "to_camel",
     "to_jsonable",
     "to_request",
+    "ServiceOverride",
+    "use_instance",
+    "DuplicateWorkerError",
+    "NoWorkersError",
+    "StopSignal",
+    "Worker",
+    "WorkerHost",
+    "background_worker",
 ]

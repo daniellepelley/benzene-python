@@ -47,6 +47,7 @@ from .sqs_consumer import (
     decode_sqs_message,
     run_consumer_loop,
     run_sqs_consumer_loop,
+    sqs_consumer_worker,
 )
 
 __all__ = [
@@ -72,5 +73,6 @@ __all__ = [
     "run_consumer_loop",
     "run_sqs_consumer_loop",
     "s3_record_envelope",
+    "sqs_consumer_worker",
     "to_lambda_handler",
 ]

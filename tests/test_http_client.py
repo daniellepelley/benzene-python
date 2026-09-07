@@ -10,6 +10,8 @@ from benzene.core import MessageSender, message
 from benzene.http import BenzeneHttpApp, HttpMessageSender, HttpReply, HttpRouter, http_endpoint
 from benzene.results import Result
 
+from ._async import run
+
 
 def _sender(reply: HttpReply, captured: dict | None = None) -> HttpMessageSender:
     async def transport(url: str, headers: dict, body: str) -> HttpReply:
@@ -34,7 +36,42 @@ def test_failure_response_maps_status_and_detail() -> None:
     reply = HttpReply(404, '{"status": "not-found", "detail": "no such order"}')
     result = asyncio.run(_sender(reply).send_message("orders:get", {"id": "x"}))
     assert result.status == "not-found"
-    assert result.errors == ("no such order",)
+    assert result.messages == ("no such order",)
+
+
+def test_failure_response_carries_the_peer_structured_errors() -> None:
+    """errors is authoritative when present (section 1.3), and each entry arrives whole.
+
+    This client used to read `detail` alone, so a peer that had gone to the trouble of saying which
+    field failed and which rule rejected it had both dropped one hop later - by the same framework
+    that had just taught its handlers to send them.
+    """
+    reply = HttpReply(
+        422,
+        json.dumps(
+            {
+                "benzeneStatus": "validation-error",
+                "detail": "sku is required",
+                "errors": [{"message": "sku is required", "field": "sku", "code": "missing"}],
+            }
+        ),
+    )
+
+    result = asyncio.run(_sender(reply).send_message("orders:place", {}))
+
+    assert result.status == "validation-error"
+    assert len(result.errors) == 1
+    assert (result.errors[0].field, result.errors[0].code) == ("sku", "missing")
+
+
+def test_failure_response_falls_back_to_detail_as_one_opaque_message() -> None:
+    """And specifically does NOT split it on ", " - a rule RFC 9457's revision withdrew, because
+    error messages contain commas."""
+    reply = HttpReply(400, json.dumps({"benzeneStatus": "bad-request", "detail": "one, two"}))
+
+    result = asyncio.run(_sender(reply).send_message("orders:place", {}))
+
+    assert result.messages == ("one, two",)
 
 
 def test_it_forwards_headers_and_the_topic() -> None:
@@ -116,10 +153,10 @@ def test_stdlib_transport_posts_and_maps_status_over_a_real_socket() -> None:
     thread.start()
     try:
         transport = stdlib_transport()
-        ok = asyncio.run(transport(f"http://localhost:{port}/ok", {"content-type": "application/json"}, "5"))
+        ok = run(transport(f"http://localhost:{port}/ok", {"content-type": "application/json"}, "5"))
         assert ok.status_code == 201
         assert json.loads(ok.body) == {"echo": 5}
-        missing = asyncio.run(transport(f"http://localhost:{port}/missing", {}, "{}"))
+        missing = run(transport(f"http://localhost:{port}/missing", {}, "{}"))
         assert missing.status_code == 404  # HTTPError mapped to a reply, not raised
         assert json.loads(missing.body)["detail"] == "nope"
     finally:
@@ -164,13 +201,13 @@ def test_connection_failure_becomes_a_service_unavailable_result() -> None:
         _raising_sender(urllib.error.URLError("refused")).send_message("orders:place", {})
     )
     assert result.status == "service-unavailable"
-    assert "refused" in " ".join(result.errors)
+    assert "refused" in " ".join(result.messages)
 
 
 def test_any_transport_exception_becomes_a_service_unavailable_result() -> None:
     result = asyncio.run(_raising_sender(RuntimeError("socket exploded")).send_message("t", {}))
     assert result.status == "service-unavailable"
-    assert "socket exploded" in " ".join(result.errors)
+    assert "socket exploded" in " ".join(result.messages)
 
 
 def test_transport_timeout_becomes_a_timeout_result() -> None:

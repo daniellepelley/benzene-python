@@ -5,7 +5,7 @@ back on the way in. Several Benzene statuses collapse to one gRPC code (all succ
 so a gRPC server MUST also attach a ``benzene-status`` **trailer** carrying the raw status string
 verbatim — and a client, seeing that trailer, uses it in preference to re-deriving from the code. This
 module is the mapping tables plus that trailer rule; the gRPC *transport* binding (server/client over
-``grpcio``) builds on top and is the next step.
+``grpcio``) builds on top, in :mod:`benzene.grpc.server` and :mod:`benzene.grpc.client`.
 
 gRPC status codes are represented by their canonical **names** (``"OK"``, ``"InvalidArgument"``, …) as
 strings, so the mapping needs no ``grpcio`` dependency — a transport binding translates these to
@@ -53,11 +53,22 @@ _REVERSE: dict[str, str] = {
 }
 
 
-def to_grpc(status: str) -> str:
-    """Map a Benzene status to a gRPC ``StatusCode`` name (server side). Unknown failures → ``Internal``."""
+def to_grpc(status: str, is_result_successful: bool | None = None) -> str:
+    """Map a Benzene status to a gRPC ``StatusCode`` name (server side), wire-contracts.md 4.2.
+
+    A status in the section 3 vocabulary maps by its own row. ``is_result_successful`` decides only
+    for an **application-defined** status, which has no row: a failed one falls to ``Internal``, and
+    one carried on a result explicitly marked successful (the ``Set(status, payload, isSuccessful)``
+    escape hatch) maps to ``OK`` rather than being reported as a server error. Left unset, an unknown
+    status is treated as a failure - the safe default for a caller that cannot tell. The same rule
+    the HTTP binding's ``to_http`` applies, kept symmetrical on purpose.
+    """
     if is_successful(status):
         return "OK"
-    return _FORWARD.get(status, "Internal")
+    known = _FORWARD.get(status)
+    if known is not None:
+        return known
+    return "OK" if is_result_successful else "Internal"
 
 
 def from_grpc(code: str, trailer: str | None = None) -> str:

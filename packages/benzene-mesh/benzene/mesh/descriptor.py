@@ -1,20 +1,24 @@
 """The ServiceDescriptor — a service's self-description, derived from its registries (mesh.md §2).
 
 At startup a mesh-enabled service projects two registries into a **ServiceDescriptor**: its handler
-registry (:class:`~benzene.core.Registry`) into ``topics`` — what it **provides** — and its outbound
-registry (:class:`~benzene.mesh.OutboundRegistry`, §2.3) into ``consumes`` — what it **consumes** —
+registry (:class:`~benzene.core.Registry`) into ``topics`` — what it **consumes** — and its outbound
+registry (:class:`~benzene.mesh.OutboundRegistry`, §2.3) into ``produces`` — what it **produces** —
 alongside the service identity and placement. This is what the mesh UI shows and what a peer checks
 a contract against, and — as of the 2026-08 revision — what a collector builds the producer/consumer
 graph from directly (mesh.md §4): the graph needs no traffic to exist. It is derived, never
 hand-written — :meth:`ServiceDescriptor.derive` reads both registries, so the descriptor is always
 the truth of what the service serves and calls.
 
-``descriptorHash`` is a content hash over the *contract* (identity, placement, topics, consumes,
+A service that registers a handler for a topic is that topic's **consumer**, not its provider —
+standard pub/sub terminology (Kafka/SQS/SNS/EventBridge: the receiver is the "consumer"). The
+outbound/``produces`` side is the **provider**.
+
+``descriptorHash`` is a content hash over the *contract* (identity, placement, topics, produces,
 schemas) — it detects this service's own redeploys and is deliberately **never compared across
 ports**. It is computed over a canonical JSON form (keys sorted lexicographically, no insignificant
 whitespace) with ``instanceId``, ``degraded``, ``profile``, and ``descriptorHash`` itself excluded,
 so it is invariant to which instance emitted it but sensitive to the service version, the topic set,
-and the consumed-topic set.
+and the produced-topic set.
 """
 
 from __future__ import annotations
@@ -79,21 +83,21 @@ class ServiceDescriptor:
 
     info: ServiceInfo
     topics: tuple[TopicDescriptor, ...]
-    consumes: tuple[TopicDescriptor, ...] = ()
+    produces: tuple[TopicDescriptor, ...] = ()
 
     @classmethod
     def derive(
         cls,
         registry: Registry,
         info: ServiceInfo,
-        consumes: OutboundRegistry | Iterable[OutboundDefinition] | None = None,
+        produces: OutboundRegistry | Iterable[OutboundDefinition] | None = None,
     ) -> ServiceDescriptor:
         """Project a registry + :class:`ServiceInfo` into a descriptor (topics sorted by id, version).
 
-        ``consumes`` — an :class:`~benzene.mesh.OutboundRegistry` (or any iterable of
-        :class:`~benzene.mesh.OutboundDefinition`) — projects into the descriptor's own ``consumes``
+        ``produces`` — an :class:`~benzene.mesh.OutboundRegistry` (or any iterable of
+        :class:`~benzene.mesh.OutboundDefinition`) — projects into the descriptor's own ``produces``
         field the same way the registry projects into ``topics``: sorted by id then version, schemas
-        derived the identical way (§2.1). Omitted (the default) yields an empty ``consumes`` — a
+        derived the identical way (§2.1). Omitted (the default) yields an empty ``produces`` — a
         service that genuinely declares no outbound topics, not a degraded/unknown state (mesh.md
         §2.3 reserves that distinction for a *port* that hasn't implemented outbound registration at
         all, which this one has).
@@ -113,13 +117,13 @@ class ServiceDescriptor:
             )
         )
         outbound_definitions: Iterable[OutboundDefinition]
-        if consumes is None:
+        if produces is None:
             outbound_definitions = ()
-        elif isinstance(consumes, OutboundRegistry):
-            outbound_definitions = consumes.definitions()
+        elif isinstance(produces, OutboundRegistry):
+            outbound_definitions = produces.definitions()
         else:
-            outbound_definitions = consumes
-        consumed = tuple(
+            outbound_definitions = produces
+        produced = tuple(
             sorted(
                 (
                     TopicDescriptor(
@@ -133,7 +137,7 @@ class ServiceDescriptor:
                 key=lambda t: (t.id, t.version),
             )
         )
-        return cls(info=info, topics=topics, consumes=consumed)
+        return cls(info=info, topics=topics, produces=produced)
 
     def descriptor_hash(self) -> str:
         """``"sha256:" + hex(sha256(canonical-json))`` over the contract (mesh.md §2.2)."""
@@ -162,7 +166,7 @@ class ServiceDescriptor:
         if info.placement:
             payload["placement"] = dict(info.placement)
         payload["topics"] = [topic.to_payload() for topic in self.topics]
-        payload["consumes"] = [topic.to_payload() for topic in self.consumes]
+        payload["produces"] = [topic.to_payload() for topic in self.produces]
         if info.degraded:
             payload["degraded"] = list(info.degraded)
         if info.profile:

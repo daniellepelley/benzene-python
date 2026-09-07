@@ -15,8 +15,13 @@ from __future__ import annotations
 
 import os
 
-from benzene.core import Container, MessageSender, build_application
-from benzene.kafka import KafkaConsumerApp, KafkaMessageSender, run_consumer_loop
+from benzene.core import MessageSender, build_application, use_instance
+from benzene.kafka import (
+    KafkaConsumerApp,
+    KafkaMessageSender,
+    build_kafka_consumer,
+    run_consumer_loop,
+)
 from orders_domain import OrdersStartUp
 
 
@@ -34,28 +39,18 @@ def build_kafka_orders_app() -> KafkaConsumerApp:
         )
     bootstrap = os.environ.get("BENZENE_KAFKA_BOOTSTRAP", "localhost:9092")
 
-    def use_kafka(services: Container) -> None:
-        services.add_instance(MessageSender, KafkaMessageSender(topic, bootstrap_servers=bootstrap))
-
-    definition, _ = build_application(OrdersStartUp, overrides=[use_kafka])
+    sender = KafkaMessageSender(topic, bootstrap_servers=bootstrap)
+    definition, _ = build_application(OrdersStartUp, overrides=[use_instance(MessageSender, sender)])
     return KafkaConsumerApp.from_definition(definition)
 
 
 async def main() -> None:  # pragma: no cover - the real broker entry point
     """Subscribe a real consumer and run the loop (requires ``benzene-kafka[kafka]`` + a broker)."""
-    import os
-
-    from confluent_kafka import Consumer
-
-    consumer = Consumer(
-        {
-            "bootstrap.servers": os.environ.get("BENZENE_KAFKA_BOOTSTRAP", "localhost:9092"),
-            "group.id": os.environ.get("BENZENE_KAFKA_GROUP", "orders"),
-            "enable.auto.commit": False,  # the loop commits on success (at-least-once)
-            "auto.offset.reset": "earliest",
-        }
+    consumer = build_kafka_consumer(
+        bootstrap_servers=os.environ.get("BENZENE_KAFKA_BOOTSTRAP", "localhost:9092"),
+        group_id=os.environ.get("BENZENE_KAFKA_GROUP", "orders"),
+        topics=[os.environ["BENZENE_KAFKA_CONSUME_TOPIC"]],
     )
-    consumer.subscribe([os.environ["BENZENE_KAFKA_CONSUME_TOPIC"]])
     try:
         await run_consumer_loop(build_kafka_orders_app(), consumer)
     finally:

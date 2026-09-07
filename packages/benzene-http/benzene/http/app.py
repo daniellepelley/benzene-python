@@ -22,6 +22,7 @@ as a raw ASGI ``__call__`` for hosting under uvicorn/hypercorn/etc.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import parse_qsl
@@ -31,16 +32,17 @@ from benzene.core import (
     AppDefinition,
     BenzeneMessageApplication,
     Container,
+    HttpMapping,
     MiddlewarePipeline,
     Registry,
     application_from,
     error_payload,
     resolve_version,
 )
-from benzene.results import Result, Status
+from benzene.results import Result, Status, is_successful
 
 from .routing import HttpRouter
-from .standard import StandardPaths
+from .standard import NATIVE_SPEC_TYPE, StandardPaths
 from .status import to_http
 
 #: HTTP codes that must be sent without content (RFC 9110 sections 15.3.5 and 15.4.5).
@@ -119,7 +121,7 @@ class BenzeneHttpApp:
         body: str = "",
     ) -> HttpResponse:
         if self._standard is not None:
-            standard = await self._handle_standard(method, path, headers or {}, body)
+            standard = await self._handle_standard(method, path, query_string, headers or {}, body)
             if standard is not None:
                 return standard
 
@@ -163,14 +165,10 @@ class BenzeneHttpApp:
             "body": json.dumps(request_data),
         }
         response = await self._application.handle(envelope)
-        return HttpResponse(
-            status_code=to_http(response["statusCode"]),
-            headers=dict(response["headers"]),
-            body=response["body"],
-        )
+        return _to_http_response(response)
 
     async def _handle_standard(
-        self, method: str, path: str, headers: dict[str, str], body: str
+        self, method: str, path: str, query_string: str, headers: dict[str, str], body: str
     ) -> HttpResponse | None:
         """Serve a well-known profile surface, or ``None`` if the request is not one (→ route it)."""
         std = self._standard
@@ -208,23 +206,32 @@ class BenzeneHttpApp:
                 status_code, {"content-type": "application/json"}, json.dumps(report.to_payload())
             )
 
-        # R5 — /benzene/spec: the derived spec document (topics + payload schemas from the registry).
-        if std.spec is not None and verb == "GET" and path == std.spec_path:
-            spec = std.resolved_spec()
-            if spec is not None:
+        # R5 — /benzene/spec: the derived spec document. ?type= picks the format (the R5 spelling is
+        # ?type=benzene&format=json): the Contract Document by default — the shape every language's
+        # client generator parses, and what a caller asking for nothing must get — with this port's
+        # native {service, topics} payload still reachable at ?type=native. `format` is accepted and
+        # ignored: JSON is the only rendering this port produces.
+        if (
+            (std.spec is not None or std.contract is not None)
+            and verb == "GET"
+            and path == std.spec_path
+        ):
+            query = dict(parse_qsl(query_string or ""))
+            if query.get("type", "").strip().lower() == NATIVE_SPEC_TYPE:
+                spec = std.resolved_spec()
+                document = None if spec is None else spec.to_payload()
+            else:
+                contract = std.resolved_contract(_http_mappings(self._router))
+                document = None if contract is None else contract.to_payload()
+            if document is not None:
                 return HttpResponse(
-                    200, {"content-type": "application/json"}, json.dumps(spec.to_payload())
+                    200, {"content-type": "application/json"}, json.dumps(document)
                 )
 
         return None
 
     def _error(self, status: str, detail: str) -> HttpResponse:
-        payload = error_payload(Result.failure(status, detail))
-        return HttpResponse(
-            status_code=to_http(status),
-            headers={"content-type": "application/json"},
-            body=json.dumps(payload),
-        )
+        return http_problem_response(Result.failure(status, detail))
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         """ASGI entry point: an ``http`` request, or the ``lifespan`` startup/shutdown protocol."""
@@ -304,3 +311,78 @@ async def _read_body(receive: Any) -> str:
         # The host must never crash on request content: a non-UTF-8 body can't be a valid Benzene
         # payload, so hand back a string the downstream JSON guard rejects as bad-request instead.
         return raw.decode("utf-8", errors="replace")
+
+
+def http_problem_response(result: Result[Any]) -> HttpResponse:
+    """Render a failed :class:`~benzene.results.Result` as an HTTP problem response (§4.1).
+
+    Two things this adds to the transport-neutral document ``error_payload`` builds, both of which
+    §4.1 makes mandatory for an HTTP failure whose negotiated format is JSON:
+
+    * the ``status`` member, which RFC 9457 defines as the integer HTTP response code and which
+      MUST equal the code actually sent. It is absent from the neutral document precisely because
+      most transports have no HTTP response for it to equal.
+    * ``content-type: application/problem+json`` rather than ``application/json``. Clients must
+      accept either, so this is safe for existing readers, but emitting it is what makes the
+      response a standards-conformant problem response rather than merely a JSON body.
+    """
+    http_status = to_http(result.status, result.is_successful)
+    payload = error_payload(result)
+    payload["status"] = http_status
+    return HttpResponse(
+        status_code=http_status,
+        headers={"content-type": "application/problem+json"},
+        body=json.dumps(payload),
+    )
+
+
+def _http_mappings(router: HttpRouter) -> dict[tuple[str, str], list[HttpMapping]]:
+    """This host's routes as a Contract Document ``httpMappings`` table, keyed by (topic, version).
+
+    A route resolves to one handler, so the key is the registry's own ``(topic, version)`` and not
+    the topic alone — a topic served at two versions on two routes must not advertise both routes on
+    both entries. Registration order is preserved, which is also the order the router matches in.
+    """
+    mappings: dict[tuple[str, str], list[HttpMapping]] = {}
+    for endpoint in router.endpoints():
+        mappings.setdefault((endpoint.topic, endpoint.version), []).append(
+            HttpMapping(method=endpoint.method, path=endpoint.path)
+        )
+    return mappings
+
+
+def _to_http_response(envelope: Mapping[str, Any]) -> HttpResponse:
+    """Render a Benzene response envelope as an HTTP response.
+
+    On success this is the envelope's own body and headers with the status translated. On failure
+    the body is already the transport-neutral problem document (§1.3), and §4.1 requires two HTTP
+    specifics on top: the ``status`` member equal to the HTTP code actually being sent, and
+    ``content-type: application/problem+json``. A failure body that is not a JSON object (a legacy
+    peer, or an empty body) is passed through untouched rather than guessed at.
+    """
+    status = envelope.get("statusCode") or ""
+    # isSuccessful is authoritative and MUST be preferred over anything derived from the status
+    # text (section 1.2). It is what distinguishes a health report answered with
+    # service-unavailable - a 503 for the probe, but a body that is the report and not a problem
+    # document - from an ordinary failure at the same status. Falling back to the status class
+    # covers a sender that predates the member.
+    stated = envelope.get("isSuccessful")
+    successful = is_successful(status) if stated is None else bool(stated)
+    http_status = to_http(status, successful)
+    headers = dict(envelope.get("headers") or {})
+    body = envelope.get("body") or ""
+
+    if successful or not body:
+        return HttpResponse(status_code=http_status, headers=headers, body=body)
+
+    try:
+        problem = json.loads(body)
+    except (ValueError, TypeError):
+        return HttpResponse(status_code=http_status, headers=headers, body=body)
+
+    if not isinstance(problem, dict):
+        return HttpResponse(status_code=http_status, headers=headers, body=body)
+
+    problem["status"] = http_status
+    headers["content-type"] = "application/problem+json"
+    return HttpResponse(status_code=http_status, headers=headers, body=json.dumps(problem))

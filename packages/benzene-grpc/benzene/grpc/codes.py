@@ -31,9 +31,15 @@ _NAME_TO_CODE: dict[str, grpc.StatusCode] = {
 _CODE_TO_NAME: dict[grpc.StatusCode, str] = {code: name for name, code in _NAME_TO_CODE.items()}
 
 
-def status_to_code(status: str) -> grpc.StatusCode:
-    """A Benzene status → the ``grpc.StatusCode`` a server sets (via the conformant name mapping)."""
-    return _NAME_TO_CODE.get(to_grpc(status), grpc.StatusCode.INTERNAL)
+def status_to_code(status: str, is_result_successful: bool | None = None) -> grpc.StatusCode:
+    """A Benzene status → the ``grpc.StatusCode`` a server sets (via the conformant name mapping).
+
+    ``is_result_successful`` carries the result's own success classification through to
+    :func:`~benzene.grpc.status.to_grpc`, which needs it to decide an **application-defined**
+    status: one marked successful is ``OK``, not ``Internal``. Dropping it here would leave that
+    section 4.2 rule implemented but unreachable from the transport.
+    """
+    return _NAME_TO_CODE.get(to_grpc(status, is_result_successful), grpc.StatusCode.INTERNAL)
 
 
 def code_to_status(code: grpc.StatusCode) -> str:

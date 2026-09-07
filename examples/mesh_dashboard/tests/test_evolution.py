@@ -45,14 +45,14 @@ def test_straggler_instance_marks_the_service_drifted() -> None:
     assert orders["previousSpecHash"] is not None
 
 
-def test_divergent_providers_flag_a_schema_mismatch() -> None:
+def test_divergent_consumers_flag_a_schema_mismatch() -> None:
     artifacts = build_evolution_artifacts()
     topics = {t["topic"]: t for t in artifacts["topics"]["topics"]}
 
     reserve = topics["inventory:reserve"]
     assert reserve["schemaMismatch"] is True
-    providers = {p["service"] for p in reserve["producers"]}
-    assert providers == {"inventory", "inventory-legacy"}
+    consumers = {c["service"] for c in reserve["consumers"]}
+    assert consumers == {"inventory", "inventory-legacy"}
 
 
 def test_write_evolution_artifacts_round_trips_to_disk(tmp_path: Path) -> None:

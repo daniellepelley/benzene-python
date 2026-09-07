@@ -151,7 +151,7 @@ class _FakeLambdaClient:
 
 
 def test_aws_lambda_discovery_filters_by_tag_and_paginates():
-    pages = [
+    pages: list[list[dict[str, object]]] = [
         [
             {"FunctionName": "orders", "FunctionArn": "arn:orders", "Runtime": "python3.12"},
             {"FunctionName": "untagged", "FunctionArn": "arn:untagged", "Runtime": "python3.12"},
@@ -197,73 +197,73 @@ def test_aws_lambda_discovery_custom_tag_key_and_empty_page_is_empty_list():
     assert run(AwsLambdaDiscovery(client=empty).discover()) == []
 
 
-class _FakeAzureResourceClient:
-    """A stand-in for an ``azure-mgmt-resource`` client (only the ``resources.list()`` feed used)."""
+class _FakeResourceClient:
+    """A stand-in for an ``azure.mgmt.resource.ResourceManagementClient`` (only ``resources.list``)."""
 
     def __init__(self, resources: list[object]) -> None:
-        self.resources = SimpleNamespace(list=lambda: list(resources))
-
-
-def _azure_resource(name: str, *, tags: dict | None = None, host: str | None = None):
-    """One Azure resource as the SDK models it: a name, tags, and a ``defaultHostName``."""
-    return SimpleNamespace(name=name, tags=tags, default_host_name=host)
+        self.resources = SimpleNamespace(list=lambda: iter(resources))
 
 
 def test_azure_discovery_maps_tagged_resources_to_endpoints():
-    fake = _FakeAzureResourceClient(
-        [
-            _azure_resource(
-                "orders-app",
-                tags={"benzene:service": "orders", "team": "checkout"},
-                host="orders.azurewebsites.net",
-            ),
-            # No hostname to route to → skipped, never emitted with a blank address.
-            _azure_resource("storage-account", tags={"benzene:service": "storage"}),
-        ]
+    # One resource carries the service tag + a hostname (an object-shaped SDK model, attrs not keys);
+    # one has no tags at all (falls back to its resource name); one has tags but no hostname (skipped —
+    # no resolvable address, matching the Discovery contract's "never emit a blank address" invariant).
+    tagged = SimpleNamespace(
+        name="orders-app",
+        tags={"benzene:service": "orders", "env": "prod"},
+        default_host_name="orders-app.azurewebsites.net",
     )
+    untagged = SimpleNamespace(name="payments-app", tags=None, default_host_name="payments-app.azurewebsites.net")
+    no_address = SimpleNamespace(name="broken-app", tags={"benzene:service": "broken"}, default_host_name=None)
+    fake = _FakeResourceClient([tagged, untagged, no_address])
 
     endpoints = run(AzureDiscovery("sub-1", client=fake).discover())
 
     assert endpoints == [
         ServiceEndpoint(
-            name="orders",  # the `benzene:service` tag names the service, not the resource name
-            address="orders.azurewebsites.net",
-            metadata={"benzene:service": "orders", "team": "checkout"},
-        )
-    ]
-
-
-def test_azure_discovery_falls_back_to_the_resource_name_when_untagged():
-    # An untagged (but addressable) resource is still reachable, so it is discovered under its own
-    # resource name — the tag names a service, it does not gate membership.
-    fake = _FakeAzureResourceClient([_azure_resource("inventory", host="inventory.azurewebsites.net")])
-
-    assert run(AzureDiscovery("sub-1", client=fake).discover()) == [
-        ServiceEndpoint(name="inventory", address="inventory.azurewebsites.net", metadata={})
-    ]
-
-
-def test_azure_discovery_reads_a_custom_service_tag_and_a_dict_shaped_resource():
-    # A resource can arrive as a plain mapping (the raw REST shape) and the tag key is configurable.
-    fake = _FakeAzureResourceClient(
-        [
-            {
-                "name": "payments-app",
-                "tags": {"mesh:service": "payments"},
-                "fqdn": "payments.internal",  # the FQDN fallback when there is no defaultHostName
-            }
-        ]
-    )
-
-    assert run(AzureDiscovery("sub-1", client=fake, service_tag="mesh:service").discover()) == [
+            name="orders",
+            address="orders-app.azurewebsites.net",
+            metadata={"benzene:service": "orders", "env": "prod"},
+        ),
         ServiceEndpoint(
-            name="payments", address="payments.internal", metadata={"mesh:service": "payments"}
+            name="payments-app",  # no benzene:service tag -> falls back to the resource name
+            address="payments-app.azurewebsites.net",
+            metadata={},
+        ),
+    ]
+
+
+def test_azure_discovery_reads_dict_shaped_resources_and_fqdn_fallback():
+    # A dict-shaped resource (as some SDK calls or a raw REST response would hand back) with only an
+    # `fqdn`, no `default_host_name` — proving both the dict-vs-attr duck-typing and the fqdn fallback.
+    resource = {"name": "shipping-app", "tags": {"benzene:service": "shipping"}, "fqdn": "shipping.example.com"}
+    fake = _FakeResourceClient([resource])
+
+    endpoints = run(AzureDiscovery("sub-1", client=fake).discover())
+
+    assert endpoints == [
+        ServiceEndpoint(
+            name="shipping",
+            address="shipping.example.com",
+            metadata={"benzene:service": "shipping"},
         )
     ]
 
 
-def test_azure_discovery_empty_subscription_is_an_empty_list():
-    assert run(AzureDiscovery("sub-1", client=_FakeAzureResourceClient([])).discover()) == []
+def test_azure_discovery_custom_service_tag_and_empty_list_is_empty_list():
+    resource = SimpleNamespace(
+        name="orders-app", tags={"team": "orders"}, default_host_name="orders-app.azurewebsites.net"
+    )
+    fake = _FakeResourceClient([resource])
+
+    endpoints = run(AzureDiscovery("sub-1", client=fake, service_tag="team").discover())
+
+    assert endpoints == [
+        ServiceEndpoint(name="orders", address="orders-app.azurewebsites.net", metadata={"team": "orders"})
+    ]
+
+    empty = _FakeResourceClient([])
+    assert run(AzureDiscovery("sub-1", client=empty).discover()) == []
 
 
 class _FakeCoreV1Api:

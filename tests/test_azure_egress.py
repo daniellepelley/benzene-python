@@ -81,7 +81,7 @@ def test_service_bus_sender_maps_a_send_failure_to_service_unavailable() -> None
         ServiceBusMessageSender(sender=Boom(), message_factory=_stub_factory).send_message("t", {})
     )
     assert result.status == Status.SERVICE_UNAVAILABLE
-    assert "bus down" in " ".join(result.errors)
+    assert "bus down" in " ".join(result.messages)
 
 
 def test_the_default_message_factory_builds_the_sdk_message_from_body_and_properties(
@@ -170,3 +170,73 @@ def test_a_missing_service_bus_sdk_building_the_client_raises_a_teaching_import_
             ).send_message("orders:created", {"id": "1"})
         )
     assert "pip install benzene-azure[servicebus]" in str(excinfo.value)
+
+
+# --- missing connection details fail at construction, naming what is missing --------------------
+
+
+def test_service_bus_sender_missing_connection_string_names_the_class_and_the_argument() -> None:
+    # The overwhelmingly common cause is an unset environment variable passed straight through as
+    # None. That used to surface as an SDK error on the MESSAGE path, naming neither the Benzene
+    # class nor the argument. It is now a start-up failure naming both, plus the injected
+    # alternative - the same "refuse to boot rather than fail every message" rule the rest of
+    # Benzene applies to misconfiguration.
+    with pytest.raises(ValueError) as caught:
+        ServiceBusMessageSender(entity_name="q")
+
+    message = str(caught.value)
+    assert "ServiceBusMessageSender" in message
+    assert "connection_string=" in message
+    assert "sender=" in message
+
+
+def test_service_bus_sender_missing_entity_name_names_that_argument_instead() -> None:
+    with pytest.raises(ValueError) as caught:
+        ServiceBusMessageSender(connection_string="Endpoint=sb://x/;")
+
+    assert "entity_name=" in str(caught.value)
+
+
+def test_service_bus_sender_missing_everything_names_both_arguments() -> None:
+    with pytest.raises(ValueError) as caught:
+        ServiceBusMessageSender()
+
+    message = str(caught.value)
+    assert "connection_string=" in message
+    assert "entity_name=" in message
+
+
+def test_service_bus_sender_with_an_injected_sender_needs_no_connection_details_at_all() -> None:
+    # The other half of the contract: injecting a client must stay free of the config the lazy path
+    # needs, or the check above would make the testable seam unusable.
+    fake = _FakeServiceBusSender()
+
+    # Through the injectable factory, so the config contract is enforced with no Azure SDK present
+    # (the default factory's own SDK call is pinned by the two tests above).
+    result = asyncio.run(
+        ServiceBusMessageSender(sender=fake, message_factory=_stub_factory).send_message(
+            "orders:created", {}
+        )
+    )
+
+    assert is_successful(result.status)
+    assert len(fake.sent) == 1
+
+
+def test_a_fully_configured_sender_constructs_without_touching_the_broker() -> None:
+    # Construction must stay lazy: the check reads arguments only, it does not dial the broker.
+    ServiceBusMessageSender(connection_string="Endpoint=sb://x/;", entity_name="q")
+
+
+def test_send_failures_after_construction_are_still_results_not_exceptions() -> None:
+    # The never-raise contract still holds for everything on the message path - a broker outage
+    # must not take a worker down. Only misconfiguration, which is known at construction, raises.
+    class Boom:
+        def send_messages(self, message: Any) -> None:
+            raise RuntimeError("broker down")
+
+    result = asyncio.run(
+        ServiceBusMessageSender(sender=Boom(), message_factory=_stub_factory).send_message("t", {})
+    )
+
+    assert result.status == Status.SERVICE_UNAVAILABLE

@@ -1,4 +1,4 @@
-# Getting started on Azure
+# Getting started: Benzene on Azure Functions
 
 Take a Benzene service you already have and host it on **Azure Functions** — over HTTP, Service
 Bus, and Event Hub — without touching a single handler. This guide starts from the transport-neutral
@@ -10,6 +10,17 @@ The whole point of the ports-and-adapters design carries straight over: the hand
 domain wiring are the *same* objects on Azure as on your laptop; only the host that mounts them onto
 Azure Functions' triggers is Azure-specific. This is the same layered adoption story as
 [Getting started](getting-started.md), one level up — you add a host, not a rewrite.
+
+## What you'll build
+
+One Function App hosting one set of order handlers, behind three triggers:
+
+- **HTTP** — `POST /orders` places an order.
+- **Service Bus and Event Hub** — one `orders:created` subscriber answers the event from either
+  trigger.
+- **Egress** — placing an order publishes `orders:created` back out over Service Bus.
+
+All of it runs in memory first — local runs and the deploy come at the end.
 
 ## Prerequisites
 
@@ -69,7 +80,9 @@ A Benzene service on Azure has two parts, and only the second is Azure-specific:
 | **Service Bus** | the `topic` application property | one message, one scope | raises → retry / dead-letter |
 | **Event Hub** | the `topic` property | a batch, **one scope per event**, in order | raises → stops at first failure |
 
-Those are the three triggers `benzene.azure` supports today. Everything below wires exactly these.
+These are the three triggers this guide wires. `benzene.azure` binds more — Queue Storage, Blob
+Storage, Cosmos DB change feed, Timer, and Event Grid — through the same host; see the
+[`benzene.azure` reference](reference/azure.md) for the full set.
 
 ## 3. Build the host
 
@@ -191,9 +204,10 @@ A failure raises and stops at the first failing event, matching Event Hub checkp
 batch is redelivered from that point, so design subscribers to be idempotent). `handle_event_hub`
 also accepts a single event for a `cardinality="one"` trigger.
 
-> These three are the entirety of what `benzene.azure` binds. There is no Queue Storage, Blob,
-> Cosmos DB, Event Grid, Timer, or Kafka trigger in the Python port today — don't declare one
-> expecting Benzene to route it.
+> `benzene.azure` also binds the Queue Storage, Blob Storage, Cosmos DB change feed, Timer, and
+> Event Grid triggers, each with the same entry-point-helper shape (`queue_storage_function`,
+> `blob_function`, `cosmos_function`, `timer_function`, `event_grid_function`). This guide sticks to
+> the three above; the [`benzene.azure` reference](reference/azure.md#overview) covers the rest.
 
 ## 6. Test every trigger in memory
 
@@ -347,7 +361,9 @@ sender = ServiceBusMessageSender(connection_string=conn, entity_name="orders")
 
 Your handlers depend only on the `MessageSender` interface, never on this class — which is why the
 same handler publishes over Service Bus in production and a `FakeMessageSender` in the tests above.
-Service Bus is the only outbound client `benzene.azure` ships.
+`benzene.azure` also ships `EventHubMessageSender`, `QueueStorageMessageSender`, and
+`EventGridMessageSender`, each behind the same port — see
+[Outbound clients](reference/azure.md#outbound-clients).
 
 ## Troubleshooting
 
@@ -389,5 +405,3 @@ Service Bus is the only outbound client `benzene.azure` ships.
   — the language-neutral host/binding contract (§1) every port implements.
 - [wire-contracts specification](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/wire-contracts.md)
   — the status → HTTP mapping (§4.1) and the envelope shape.
-</content>
-</invoke>

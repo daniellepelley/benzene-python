@@ -35,7 +35,7 @@ def _fleet() -> MeshCollector:
         {
             "service": "orders",
             "topics": [{"id": "order:create", "version": "1", "requestSchema": _ORDER_SCHEMA}],
-            "consumes": [{"id": "stock:reserve"}],
+            "produces": [{"id": "stock:reserve"}],
             "descriptorHash": "h-ord",
         }
     )
@@ -66,7 +66,7 @@ def _fleet() -> MeshCollector:
             "health": {"isHealthy": False},
         }
     )
-    # orders declares it consumes stock:reserve (-> consumer edge); this trace of the call feeds
+    # orders declares it produces stock:reserve (-> provider edge); this trace of the call feeds
     # invocation/error stats only, never graph membership.
     c.ingest_traces(
         {
@@ -147,8 +147,8 @@ def test_topics_carry_consumers_producers_and_reserved_flag() -> None:
     by_topic = {t["topic"]: t for t in arts["topics"]["topics"]}
 
     reserve = by_topic["stock:reserve"]
-    assert reserve["producers"] == [{"service": "inventory"}]
-    assert reserve["consumers"] == [{"service": "orders"}]
+    assert reserve["producers"] == [{"service": "orders"}]
+    assert reserve["consumers"] == [{"service": "inventory"}]
     assert reserve["reserved"] is False
     assert reserve["responseSchema"] == _RESERVE_SCHEMA  # retained from the descriptor feed
     assert reserve["requestSchema"] is None  # not declared -> absent, not fabricated
@@ -162,7 +162,7 @@ def test_dropped_topic_moves_to_removed_topics() -> None:
     c.ingest_register(
         {"service": "orders", "topics": [{"id": "order:create"}], "descriptorHash": "h1"}
     )
-    # Re-register dropping order:create for order:cancel — nobody provides order:create anymore.
+    # Re-register dropping order:create for order:cancel — nobody consumes (handles) order:create anymore.
     c.ingest_register(
         {"service": "orders", "topics": [{"id": "order:cancel"}], "descriptorHash": "h2"}
     )
@@ -183,7 +183,7 @@ def test_topics_carry_schemas_version_and_schema_mismatch() -> None:
     assert create["schemaMismatch"] is False
 
 
-def test_schema_mismatch_when_two_providers_disagree() -> None:
+def test_schema_mismatch_when_two_consumers_disagree() -> None:
     c = MeshCollector()
     c.ingest_register(
         {"service": "a", "topics": [{"id": "shared:topic", "responseSchema": _ORDER_SCHEMA}]}
@@ -194,8 +194,8 @@ def test_schema_mismatch_when_two_providers_disagree() -> None:
     topic = {t["topic"]: t for t in build_artifacts(c, generated_at=_AT)["topics"]["topics"]}[
         "shared:topic"
     ]
-    assert {p["service"] for p in topic["producers"]} == {"a", "b"}
-    assert topic["schemaMismatch"] is True  # two providers, different contracts
+    assert {p["service"] for p in topic["consumers"]} == {"a", "b"}
+    assert topic["schemaMismatch"] is True  # two consumers (handlers), different contracts
 
 
 # --- per-service ------------------------------------------------------------------------------
@@ -264,7 +264,7 @@ def test_asyncapi_export_projects_the_domain_topics() -> None:
     assert doc["components"]["messages"]["order_createMessage"]["payload"] == _ORDER_SCHEMA
     # ...and benzene:* plumbing is excluded from the domain export.
     assert not any(c.startswith("benzene") for c in doc["channels"])
-    # stock:reserve has a provider (receive) and a consumer (send) operation.
+    # stock:reserve has a consumer (receive) and a provider (send) operation.
     assert doc["operations"]["stock_reserve_receive"]["action"] == "receive"
     assert doc["operations"]["stock_reserve_send"]["action"] == "send"
 
@@ -369,15 +369,15 @@ def test_a_failed_write_leaves_no_partial_or_orphan_temp_file(tmp_path: Path) ->
 
 
 def test_topology_never_draws_a_service_calling_itself() -> None:
-    # Two services provide the same topic (alpha, beta both serve shared:work); alpha also *calls* it,
-    # load-balanced to beta. alpha is then both a provider and a consumer of the topic — the edge
-    # builder must skip the alpha->alpha self-loop and keep only alpha->beta.
+    # Two services consume (handle) the same topic (alpha, beta both serve shared:work); alpha also
+    # *calls* it (produces it), load-balanced to beta. alpha is then both a provider and a consumer of
+    # the topic — the edge builder must skip the alpha->alpha self-loop and keep only alpha->beta.
     c = MeshCollector()
     c.ingest_register(
         {
             "service": "alpha",
             "topics": [{"id": "shared:work"}],
-            "consumes": [{"id": "shared:work"}],
+            "produces": [{"id": "shared:work"}],
             "descriptorHash": "a",
         }
     )

@@ -25,10 +25,10 @@ dependency; ``.build_aws()`` raises a clear error if ``benzene-aws`` isn't insta
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from benzene.core import BenzeneStartUp, Container, build_application
+from benzene.core import BenzeneStartUp, ServiceOverride, build_application
 
 if TYPE_CHECKING:
     # Return types for editor/mypy help only — the cloud packages stay lazy runtime imports so
@@ -48,11 +48,16 @@ class TestHostBuilder:
 
     def __init__(self, startup: BenzeneStartUp | type[BenzeneStartUp]) -> None:
         self._startup = startup
-        self._overrides: list[Callable[[Container], None]] = []
+        self._overrides: list[ServiceOverride] = []
         self._config: dict[str, str] = {}
 
-    def with_services(self, override: Callable[[Container], None]) -> TestHostBuilder:
-        """Register services over the startup's own (last wins) — the seam for fakes/mocks."""
+    def with_services(self, override: ServiceOverride) -> TestHostBuilder:
+        """Register services over the startup's own (last wins) — the seam for fakes/mocks.
+
+        The override's return value is ignored, so the one-liner
+        ``.with_services(lambda c: c.add_instance(Greeter, fake))`` type-checks; Container's ``add_*``
+        methods are fluent, so that lambda returns a Container rather than None.
+        """
         self._overrides.append(override)
         return self
 

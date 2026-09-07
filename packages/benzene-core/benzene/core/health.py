@@ -128,10 +128,14 @@ def health_interception(checks: HealthChecks, *, aliases: Iterable[str] = ()) ->
             if report.is_healthy:
                 context.result = Result.ok(report.to_payload())
             else:
-                context.result = Result(
-                    Status.SERVICE_UNAVAILABLE,
-                    report.to_payload(),
-                    (f"unhealthy checks: {', '.join(report.unhealthy_checks)}",),
+                # service-unavailable so an HTTP probe sees a 503 and a load balancer drains this
+                # instance, but explicitly successful so the response still carries the report - which
+                # check failed and why is the entire value of hitting a health endpoint. Without the
+                # override the encoder would replace the report with a problem document naming only
+                # the failed checks (wire-contracts.md 1.3's carve-out; the same call .NET's
+                # HealthCheckProcessor makes).
+                context.result = Result.set(
+                    Status.SERVICE_UNAVAILABLE, report.to_payload(), successful=True
                 )
             return  # short-circuit: the reserved topic never reaches the router
         await next()

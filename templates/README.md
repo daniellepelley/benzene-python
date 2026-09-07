@@ -91,8 +91,9 @@ ran.
 ## Published vs. local dependencies
 
 Generated projects depend on the **published** package names (`benzene-aws`, `benzene-grpc`,
-`benzene-testing`, …) exactly as an adopter will consume them once they are on PyPI. **Until they
-are published**, install the `benzene-*` deps from a local checkout of this repo first (editable),
+`benzene-testing`, …) exactly as an adopter consumes them. Those are on PyPI at `0.1.0b1`, so
+`pip install -e .` in a generated project resolves them. Working against **this checkout** — a
+change not in the last release, or a local fix — install the `benzene-*` deps from it (editable),
 then install the generated project with `--no-deps`:
 
 ```bash

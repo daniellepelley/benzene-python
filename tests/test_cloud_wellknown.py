@@ -89,7 +89,18 @@ def test_health_surface_on_the_cloud_host(host) -> None:
 
 
 def test_spec_surface_on_the_cloud_host(host) -> None:
+    # R5's document: the Contract Document, on every cloud host, with no query string needed.
     response = host.send_http("GET", "/benzene/spec")
+    assert response.status_code == 200
+    doc = json.loads(response.body)
+    assert doc["openapi"] == "3.0.1"
+    assert doc["info"]["title"] == "greeter"
+    assert "say:hello" in {r["topic"] for r in doc["requests"]}
+
+
+def test_the_native_spec_shape_stays_reachable_on_the_cloud_host(host) -> None:
+    # ?type=native has to survive each host's own query-string plumbing, not just the ASGI app's.
+    response = host.send_http("GET", "/benzene/spec", query={"type": "native"})
     assert response.status_code == 200
     doc = json.loads(response.body)
     assert doc["service"] == "greeter"

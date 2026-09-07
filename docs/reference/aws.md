@@ -104,11 +104,13 @@ shape a long-running worker or a Kubernetes Deployment needs, rather than being 
 event source mapping. It mirrors `benzene.kafka`'s self-hosted consumer.
 
 ```python
-from benzene.aws import SqsConsumerApp, run_consumer_loop
+from benzene.aws import SqsConsumerApp, run_consumer_loop, sqs_consumer_worker
 
 app = SqsConsumerApp.from_definition(definition)
 await app.handle_message(message)                  # one receive_message() dict -> Result
 await run_consumer_loop(app, client, queue_url)    # long-poll -> dispatch -> delete on success
+
+WorkerHost().add("sqs", sqs_consumer_worker(app, client, queue_url))   # ...or as one leg of many
 ```
 
 - `SqsConsumerApp(application)` / `.from_definition(definition)` — `handle_message(message)` decodes a
@@ -127,6 +129,11 @@ await run_consumer_loop(app, client, queue_url)    # long-poll -> dispatch -> de
   was renamed for symmetry with `benzene.kafka.run_consumer_loop` / `benzene.rabbitmq.run_consumer_loop`;
   **`run_sqs_consumer_loop` remains as a deprecated alias** (both names are exported, and the package
   namespace — `benzene.aws.run_consumer_loop` — disambiguates the short one).
+- `sqs_consumer_worker(app, client, queue_url, **loop_options)` returns a
+  [`benzene.core.WorkerHost`](core.md#workerhost--running-n-transports-in-one-process) leg wrapping
+  the loop above, for a process that also serves HTTP. It is a two-line closure over
+  `run_consumer_loop(..., should_continue=stop.should_continue)` — reach for it only when there is
+  more than one transport; a queue-only worker awaits the loop function directly.
 - `decode_sqs_message(message)` is the pure decode step, exposed for custom loops.
 
 ## Testing

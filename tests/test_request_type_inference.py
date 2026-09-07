@@ -107,7 +107,8 @@ def test_registry_register_infers_request_type() -> None:
         return Result.created(request)
 
     registry = Registry().register("orders:place", place)
-    assert registry.find("orders:place").request_type is PlaceOrder
+    assert (found := registry.find("orders:place")) is not None
+    assert found.request_type is PlaceOrder
 
 
 def test_explicit_request_type_wins_over_inference() -> None:
@@ -119,7 +120,8 @@ def test_explicit_request_type_wins_over_inference() -> None:
         return Result.ok()
 
     registry = Registry().register("orders:place", place, request_type=Override)
-    assert registry.find("orders:place").request_type is Override
+    assert (found := registry.find("orders:place")) is not None
+    assert found.request_type is Override
 
 
 def test_inferred_type_actually_maps_the_body_end_to_end() -> None:

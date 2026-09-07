@@ -40,7 +40,7 @@ Each of the six services is **one Lambda**, tagged `benzene=true` for discovery,
   `benzene.mesh.with_trace_propagation`, so a downstream hop joins the caller's trace; after each
   invocation it drains the batch and **pushes it straight into the mesh's trace inbox in S3**
   (`benzene.mesh.MeshFeedSender` + `benzene.mesh.S3TraceInbox`, via the `MESH_ARTIFACT_BUCKET` env var
-  Terraform sets) — the collector derives **consumer edges** from those traces, exactly as
+  Terraform sets) — the collector derives **provider edges** from those traces, exactly as
   `examples/k8s_mesh`'s services do over HTTP, just pushed once per invocation rather than on a
   background loop (a Lambda only runs *during* an invocation; mirrors `deploy/mesh/fleet/service.py`).
 

@@ -1,7 +1,7 @@
-"""The mesh fleet end to end: three services, declared consumer edges, cross-service traces.
+"""The mesh fleet end to end: three services, declared provider edges, cross-service traces.
 
 Drives one order through orders → inventory → notifications and asserts the shared collector shows the
-whole fleet and the **consumer edges** each service declared at registration — the core of what a
+whole fleet and the **provider edges** each service declared at registration — the core of what a
 deployed mesh renders.
 """
 
@@ -21,26 +21,26 @@ def test_the_collector_sees_the_whole_fleet() -> None:
     assert services == {"orders", "inventory", "notifications"}
 
 
-def test_consumer_edges_are_declared_and_calls_feed_invocation_stats() -> None:
+def test_provider_edges_are_declared_and_calls_feed_invocation_stats() -> None:
     fleet = build_fleet()
     asyncio.run(fleet.place_order("ABC"))
 
-    # orders declares it consumes inventory:reserve; inventory declares it consumes notify:send — the
+    # orders declares it produces inventory:reserve; inventory declares it produces notify:send — the
     # collector's graph is built from those descriptors alone (mesh.md §4); the call each hop actually
     # made feeds invocation counts, not the edge itself.
     reserve = fleet.collector.query_topic({"topic": "inventory:reserve"})
-    assert reserve["providers"] == ["inventory"]
-    assert reserve["consumers"] == ["orders"]
+    assert reserve["providers"] == ["orders"]
+    assert reserve["consumers"] == ["inventory"]
     assert reserve["invocations"] == 1
 
     notify = fleet.collector.query_topic({"topic": "notify:send"})
-    assert notify["providers"] == ["notifications"]
-    assert notify["consumers"] == ["inventory"]
+    assert notify["providers"] == ["inventory"]
+    assert notify["consumers"] == ["notifications"]
     assert notify["invocations"] == 1
 
 
 def test_all_hops_share_one_trace() -> None:
-    # The consumer edges above can only exist if the three hops shared one trace (propagation joined
+    # The provider edges above can only exist if the three hops shared one trace (propagation joined
     # them). Assert that directly: capture the trace id from orders' span, then read it back.
     fleet = build_fleet()
     asyncio.run(

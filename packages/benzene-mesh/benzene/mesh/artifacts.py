@@ -91,13 +91,13 @@ def build_artifacts(
     fleet = collector.query_fleet({})
     snapshot = collector.snapshot()
     services = {entry["name"]: entry for entry in snapshot["services"]}
-    ever_provided = set(snapshot.get("everProvided", []))
+    ever_consumed = set(snapshot.get("everConsumed", []))
     endpoints = _endpoints(sources)
     names = [entry["service"] for entry in fleet["services"]]
     return {
         "manifest": _manifest(collector, fleet, endpoints, generated_at),
         "topology": _topology(collector, fleet, generated_at),
-        "topics": _topics(collector, fleet, services, ever_provided, generated_at),
+        "topics": _topics(collector, fleet, services, ever_consumed, generated_at),
         "services": {name: _service(collector, name, services, generated_at) for name in names},
         "usage": _usage(snapshot, generated_at),
         "asyncapi": _asyncapi(collector, fleet, services, generated_at),
@@ -133,9 +133,11 @@ def _manifest(
 
 
 def _topology(collector: MeshCollector, fleet: dict[str, Any], generated_at: str) -> dict[str, Any]:
-    # A consumer of a topic is a client of that topic's provider(s). Aggregate invocations/errors
-    # across the topics a pair shares into one client -> server edge (rate/latency need a metrics
-    # feed this collector doesn't have, so they stay null — the UI renders them as reduced).
+    # A provider of a topic is the sender/caller (`produces`); a consumer is the handler (`topics`) —
+    # the receiver. So a provider is a *client* of that topic's consumer(s) (the sender calls the
+    # handler). Aggregate invocations/errors across the topics a pair shares into one client -> server
+    # edge (rate/latency need a metrics feed this collector doesn't have, so they stay null — the UI
+    # renders them as reduced).
     pairs: dict[tuple[str, str], dict[str, int]] = {}
     for topic_entry in fleet["topics"]:
         detail = collector.query_topic({"topic": topic_entry["topic"]})
@@ -143,8 +145,8 @@ def _topology(collector: MeshCollector, fleet: dict[str, Any], generated_at: str
         consumers = detail.get("consumers", [])
         invocations = detail.get("invocations", 0)
         errors = detail.get("errors", 0)
-        for client in consumers:
-            for server in providers:
+        for client in providers:
+            for server in consumers:
                 if client == server:
                     continue
                 acc = pairs.setdefault((client, server), {"invocations": 0, "errors": 0})
@@ -167,23 +169,25 @@ def _topology(collector: MeshCollector, fleet: dict[str, Any], generated_at: str
 
 
 def _topic_changes(
-    topic: str, providers: list[str], services: dict[str, dict[str, Any]]
+    topic: str, consumers: list[str], services: dict[str, dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """Contract-evolution signals for a topic — currently ``schema-changed`` (mesh-ui.md §3.2).
 
-    A provider whose retained contract for this topic differs from the one it declared on its prior
-    register has changed the schema; the UI surfaces it inline on the functional map.
+    A consumer (handler) whose retained contract for this topic differs from the one it declared on
+    its prior register has changed the schema; the UI surfaces it inline on the functional map. Schema
+    authority stays with the handler registration (`topics`) — the consumer role under the 2026-08
+    role inversion.
     """
     changes: list[dict[str, Any]] = []
-    for provider in providers:
-        entry = services.get(provider, {})
+    for consumer in consumers:
+        entry = services.get(consumer, {})
         current = entry.get("topicSpecs", {}).get(topic)
         previous = entry.get("previousTopicSpecs", {}).get(topic)
         if previous is not None and current is not None and current != previous:
             changes.append(
                 {
                     "kind": "schema-changed",
-                    "description": f"{provider} changed the contract for {topic}",
+                    "description": f"{consumer} changed the contract for {topic}",
                 }
             )
     return changes
@@ -193,15 +197,16 @@ def _topics(
     collector: MeshCollector,
     fleet: dict[str, Any],
     services: dict[str, dict[str, Any]],
-    ever_provided: set[str],
+    ever_consumed: set[str],
     generated_at: str,
 ) -> dict[str, Any]:
-    # A topic that was once declared but is now provided by no one has been retired from the fleet's
+    # A topic that was once declared but is now handled by no one has been retired from the fleet's
     # contract — surface it as removed (the deprecation view) and drop it from the active list.
-    currently_provided = {
-        topic for entry in services.values() for topic in entry.get("provided", [])
+    # Handler registration (`topics`) is the consumer role under the 2026-08 role inversion.
+    currently_consumed = {
+        topic for entry in services.values() for topic in entry.get("consumed", [])
     }
-    removed = sorted(ever_provided - currently_provided)
+    removed = sorted(ever_consumed - currently_consumed)
     topics = []
     for topic_entry in fleet["topics"]:
         topic = topic_entry["topic"]
@@ -209,25 +214,27 @@ def _topics(
             continue
         detail = collector.query_topic({"topic": topic})
         providers = detail.get("providers", [])
-        # Each provider's retained contract for this topic (from its descriptor/spec feed).
-        provider_specs = [services.get(p, {}).get("topicSpecs", {}).get(topic) for p in providers]
-        present = [spec for spec in provider_specs if spec]
+        consumers = detail.get("consumers", [])
+        # Schema authority stays with whoever registered a handler for this topic (`topics`) — the
+        # consumer role now, not the provider (`produces`, the sender) role.
+        consumer_specs = [services.get(c, {}).get("topicSpecs", {}).get(topic) for c in consumers]
+        present = [spec for spec in consumer_specs if spec]
         representative = present[0] if present else {}
-        # Two providers of one topic declaring different contracts is a real mismatch signal.
+        # Two consumers of one topic declaring different contracts is a real mismatch signal.
         schema_mismatch = any(spec != representative for spec in present[1:])
         topics.append(
             {
                 "topic": topic,
                 "version": representative.get("version", ""),
                 "reserved": _is_reserved(topic),
-                "consumers": [{"service": c} for c in detail.get("consumers", [])],
+                "consumers": [{"service": c} for c in consumers],
                 "producers": [{"service": p} for p in providers],
                 "status": None,
                 "requestSchema": representative.get("requestSchema"),
                 "responseSchema": representative.get("responseSchema"),
                 "messageSchema": representative.get("messageSchema"),
                 "schemaMismatch": schema_mismatch,
-                "changes": _topic_changes(topic, providers, services),
+                "changes": _topic_changes(topic, consumers, services),
             }
         )
     return {"generatedAtUtc": generated_at, "topics": topics, "removedTopics": removed}
@@ -259,7 +266,7 @@ def _spec_json(name: str, entry: dict[str, Any]) -> str | None:
         return None
     specs = entry.get("topicSpecs", {})
     topics = []
-    for topic_id in sorted(entry.get("provided", [])):
+    for topic_id in sorted(entry.get("consumed", [])):
         spec = specs.get(topic_id, {})
         topics.append({"id": topic_id, **spec})
     return json.dumps({"service": name, "topics": topics}, ensure_ascii=False)
@@ -325,8 +332,9 @@ def _asyncapi(
     """Project the domain topics into an AsyncAPI 3.0 document (the UI's download / Studio deep-link).
 
     One channel per non-reserved topic (payload = its retained schema), and an operation per role:
-    a provider ``receive``s the topic, a consumer ``send``s it. A faithful export of what the catalog
-    knows — schemas populate where the descriptor declared them, else the message is left open.
+    a consumer (handler) ``receive``s the topic, a provider (sender) ``send``s it. A faithful export
+    of what the catalog knows — schemas populate where the descriptor declared them, else the message
+    is left open.
     """
     channels: dict[str, Any] = {}
     operations: dict[str, Any] = {}
@@ -336,10 +344,11 @@ def _asyncapi(
         if _is_reserved(topic):
             continue  # the UI hides benzene:* plumbing; keep it out of the domain export too
         detail = collector.query_topic({"topic": topic})
-        providers = detail.get("providers", [])
+        consumers = detail.get("consumers", [])
+        # Schema authority stays with the handler registration (`topics`, the consumer role).
         spec: dict[str, Any] = {}
-        for provider in providers:
-            spec = services.get(provider, {}).get("topicSpecs", {}).get(topic) or spec
+        for consumer in consumers:
+            spec = services.get(consumer, {}).get("topicSpecs", {}).get(topic) or spec
             if spec:
                 break
         key = _channel_key(topic)
@@ -353,12 +362,12 @@ def _asyncapi(
             "address": topic,
             "messages": {message_key: {"$ref": f"#/components/messages/{message_key}"}},
         }
-        if providers:
+        if consumers:
             operations[f"{key}_receive"] = {
                 "action": "receive",
                 "channel": {"$ref": f"#/channels/{key}"},
             }
-        if detail.get("consumers"):
+        if detail.get("providers"):
             operations[f"{key}_send"] = {
                 "action": "send",
                 "channel": {"$ref": f"#/channels/{key}"},

@@ -31,9 +31,9 @@ from benzene.core import (
     MessageHandlingError,
     Registry,
     application_from,
+    successful_from,
 )
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
-from benzene.results import is_successful
 
 from .events import (
     DEFAULT_BLOB_TOPIC,
@@ -166,8 +166,10 @@ class AzureFunctionsApp:
         asyncio.run(run())
 
     async def _run_or_raise(self, envelope: dict[str, Any]) -> None:
+        # The envelope's isSuccessful is the authoritative failure signal (wire-contracts.md 1.2),
+        # never a classification derived from the status text.
         response = await self._application.handle(envelope)
-        if not is_successful(response["statusCode"]):
+        if not successful_from(response):
             raise MessageHandlingError(envelope["topic"], response["statusCode"], response["body"])
 
 

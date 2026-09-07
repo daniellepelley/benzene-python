@@ -20,8 +20,16 @@ from benzene.core import (
     ServiceSpec,
 )
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
-from benzene.mesh import CallableServiceSource, HttpServiceSource, MeshCollector, MeshPoller
+from benzene.mesh import (
+    CallableServiceSource,
+    HttpServiceSource,
+    MeshCollector,
+    MeshPoller,
+    OutboundRegistry,
+)
 from benzene.results import Result
+
+from ._async import run
 
 
 @dataclass
@@ -29,18 +37,23 @@ class Ping:
     n: int = 0
 
 
-def _service(name: str, topic: str, *, healthy: bool = True) -> BenzeneHttpApp:
+def _service(
+    name: str, topic: str, *, healthy: bool = True, produces: tuple[str, ...] = ()
+) -> BenzeneHttpApp:
     async def handler(_request: Ping) -> Result:
         return Result.ok({"pong": True})
 
     router = HttpRouter().register("POST", f"/{name}", topic, handler, request_type=Ping)
     registry = Registry.from_definitions(router)
+    outbound = OutboundRegistry()
+    for produced in produces:
+        outbound.register(produced, request_type=Ping)
     return BenzeneHttpApp(
         router,
         application=BenzeneMessageApplication(registry),
         standard_paths=StandardPaths(
             health=HealthChecks().add("core", lambda: healthy),
-            spec=ServiceSpec.derive(registry, service=name),
+            spec=ServiceSpec.derive(registry, service=name, produces=outbound),
         ),
     )
 
@@ -50,6 +63,7 @@ def _fleet_fetch(apps: dict[str, BenzeneHttpApp]):
 
     async def fetch(url: str) -> tuple[int, str]:
         parts = urlsplit(url)
+        assert parts.hostname is not None
         app = apps[parts.hostname]
         response = await app.handle("GET", parts.path)
         return response.status_code, response.body
@@ -83,6 +97,36 @@ def test_poller_folds_a_fleet_into_the_collector() -> None:
     assert "orders:place" in {t["topic"] for t in fleet["topics"]}
 
 
+def test_a_pulled_spec_carries_declared_producers_into_the_graph() -> None:
+    # The pull path's half of the declared graph (mesh.md §2, §2.3): a handler registration makes a
+    # service that topic's CONSUMER, so without `produces` on the interrogated /benzene/spec document
+    # every topic in a pull-based mesh shows consumers and no provider at all. The producing service
+    # declares its outbound topics on its ServiceSpec; the poller carries them into the collector.
+    apps = {
+        "orders": _service("orders", "orders:place", produces=("inventory:reserve",)),
+        "inventory": _service("inventory", "inventory:reserve"),
+    }
+    fetch = _fleet_fetch(apps)
+    collector = MeshCollector()
+    poller = MeshPoller(
+        collector,
+        [
+            HttpServiceSource("orders", "http://orders", fetch=fetch),
+            HttpServiceSource("inventory", "http://inventory", fetch=fetch),
+        ],
+    )
+
+    asyncio.run(poller.poll_once())
+
+    reserve = collector.query_topic({"topic": "inventory:reserve"})
+    assert reserve["providers"] == ["orders"]  # declared by orders' outbound registry
+    assert reserve["consumers"] == ["inventory"]  # derived from inventory's handler registration
+    # orders' own inbound topic has a consumer and (correctly) no declared provider in this fleet.
+    place = collector.query_topic({"topic": "orders:place"})
+    assert place["providers"] == []
+    assert place["consumers"] == ["orders"]
+
+
 def test_poller_reports_an_unhealthy_service() -> None:
     apps = {"orders": _service("orders", "orders:place", healthy=False)}
     collector = MeshCollector()
@@ -114,7 +158,7 @@ def test_a_down_service_is_a_failed_result_not_a_broken_sweep() -> None:
 
     results = {r.service: r for r in asyncio.run(poller.poll_once())}
     assert results["orders"].ok is True
-    assert results["down"].ok is False and "refused" in results["down"].error
+    assert results["down"].ok is False and "refused" in (results["down"].error or "")
     # the healthy service still made it into the fleet despite its neighbour being down
     assert {s["service"] for s in collector.query_fleet({})["services"]} == {"orders"}
 
@@ -184,7 +228,7 @@ def test_stdlib_get_returns_status_and_body(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(poller_module.urllib.request, "urlopen", lambda *a, **k: _FakeResponse())
     get = poller_module._stdlib_get()
-    status, body = asyncio.run(get("http://orders/benzene/spec"))
+    status, body = run(get("http://orders/benzene/spec"))
     assert status == 200
     assert body == '{"service": "orders"}'
 
@@ -208,7 +252,7 @@ def test_stdlib_get_reads_the_body_off_an_http_error(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(poller_module.urllib.request, "urlopen", _raise)
     get = poller_module._stdlib_get()
-    status, body = asyncio.run(get("http://orders/benzene/health"))
+    status, body = run(get("http://orders/benzene/health"))
     assert status == 503
     assert body == '{"isHealthy": false}'
 
@@ -254,3 +298,82 @@ def test_a_sweep_persists_the_collector_off_the_event_loop(monkeypatch: pytest.M
     # dispatch it to a worker thread rather than stalling the loop once per polled source.
     assert store.saved and store.saved[-1]["services"][0]["name"] == "orders"
     assert spy.dispatched.count(store.save) == 2  # one per mutating ingest (register + heartbeat)
+
+
+# --- pulling a service this port did not build ----------------------------------------------------
+
+#: A .NET/Go/TypeScript service's /benzene/spec: the Contract Document (contract-document.md), the
+#: format R5 names. Literal rather than produced here, so the test still fails if this port's own
+#: emitter drifts away from the format.
+_FOREIGN_CONTRACT_DOCUMENT = {
+    "openapi": "3.0.1",
+    "info": {"title": "payments", "description": "", "version": "2.1.0"},
+    "messageEndpoint": "/benzene/invoke",
+    "requests": [
+        {
+            "topic": "payments:capture",
+            "request": {"$ref": "#/components/schemas/CapturePayment"},
+            "response": {},
+        },
+        {"topic": "benzene:spec", "reserved": True, "request": {}, "response": {}},
+    ],
+    "events": [{"topic": "payment:captured", "message": {"type": "object"}}],
+    "components": {
+        "schemas": {
+            "CapturePayment": {
+                "type": "object",
+                "properties": {"orderId": {"type": "string"}},
+                "required": ["orderId"],
+            }
+        }
+    },
+}
+
+
+def test_a_contract_document_service_folds_into_the_collector_like_any_other() -> None:
+    # Reading only the native {service, topics} shape meant a polled foreign service landed in the
+    # fleet as an empty catalogue: present, contributing no topics and no graph edges at all.
+    collector = _polled(_FOREIGN_CONTRACT_DOCUMENT)
+
+    fleet = collector.query_fleet({})
+    assert [s["service"] for s in fleet["services"]] == ["payments"]  # info.title names the service
+    # requests[] are what it consumes and events[] what it produces — the graph edges a pull-based
+    # mesh exists to draw.
+    capture = collector.query_topic({"topic": "payments:capture"})
+    assert capture["consumers"] == ["payments"]
+    captured = collector.query_topic({"topic": "payment:captured"})
+    assert captured["providers"] == ["payments"]
+    # The reserved framework topic stays out of the graph, as it does for a native document, so the
+    # same service does not look different depending on which shape it happened to serve.
+    assert "benzene:spec" not in {t["topic"] for t in fleet["topics"]}
+
+
+def test_a_polled_contract_documents_refs_are_resolved_into_real_schemas() -> None:
+    # A $ref into a catalogue the collector never sees would compare as "the schema changed" the
+    # moment a producer renamed a class, so the reference is resolved on the way in.
+    collector = _polled(_FOREIGN_CONTRACT_DOCUMENT)
+    specs = collector.snapshot()["services"][0]["topicSpecs"]
+    assert specs["payments:capture"]["requestSchema"] == {
+        "type": "object",
+        "properties": {"orderId": {"type": "string"}},
+        "required": ["orderId"],
+    }
+
+
+def _polled(document: dict) -> MeshCollector:
+    """One poll sweep of a single service answering ``document`` at /benzene/spec."""
+    collector = MeshCollector()
+    source = CallableServiceSource(
+        "payments",
+        spec=_returning(document),
+        health=_returning({"isHealthy": True, "healthChecks": {}}),
+    )
+    assert all(result.ok for result in run(MeshPoller(collector, [source]).poll_once()))
+    return collector
+
+
+def _returning(document: dict):
+    async def fetch() -> dict:
+        return document
+
+    return fetch

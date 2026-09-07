@@ -49,8 +49,10 @@ def test_registry_version_selection() -> None:
         return Result.ok("v2")
 
     registry = Registry().register("t", v1).register("t", v2, version="2")
-    assert registry.find("t").handler is v1  # no version -> unversioned
-    assert registry.find("t", "2").handler is v2  # exact version match
+    assert (unversioned := registry.find("t")) is not None
+    assert unversioned.handler is v1  # no version -> unversioned
+    assert (versioned := registry.find("t", "2")) is not None
+    assert versioned.handler is v2  # exact version match
     assert registry.find("t", "9") is None  # no fuzzy fallback
 
 
@@ -266,7 +268,34 @@ def test_decode_response_round_trips_failure_errors() -> None:
     envelope = encode_response(Result.bad_request("sku is required", "quantity must be positive"))
     result = decode_response(envelope)
     assert result.status == Status.BAD_REQUEST
-    assert result.errors == ("sku is required", "quantity must be positive")
+    assert result.messages == ("sku is required", "quantity must be positive")
+
+
+def test_decode_response_prefers_the_envelopes_is_successful_over_the_status_text() -> None:
+    # The section 1.2 rule that matters: an application-defined status means nothing to a receiver
+    # classifying by string alone, so isSuccessful is what decides. Without it a success sent
+    # through Result.set round-trips as a failure - and the payload is read as a problem document.
+    envelope = encode_response(Result.set("cache-warm", {"entries": 12}, successful=True))
+    assert envelope["isSuccessful"] is True
+
+    result = decode_response(envelope)
+    assert result.status == "cache-warm"
+    assert result.is_successful
+    assert result.payload == {"entries": 12}
+
+
+def test_decode_response_honours_a_stated_failure_on_a_success_status() -> None:
+    # The other direction, and why the fallback tests `is None` rather than truthiness.
+    result = decode_response(encode_response(Result.set(Status.OK, {"draining": True}, False)))
+    assert result.status == Status.OK
+    assert not result.is_successful
+
+
+def test_decode_response_falls_back_to_the_status_class_for_a_peer_without_is_successful() -> None:
+    # An older peer, or a port that has not adopted the member: deriving from the status is then
+    # the best available answer, and the pre-existing behaviour is unchanged.
+    assert decode_response({"statusCode": Status.CREATED, "body": '{"id": "o-1"}'}).is_successful
+    assert not decode_response({"statusCode": Status.CONFLICT, "body": ""}).is_successful
 
 
 def test_decode_response_treats_a_malformed_body_as_unexpected_error_not_a_crash() -> None:

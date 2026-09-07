@@ -24,6 +24,7 @@ from benzene.kafka import (
     TOPIC_HEADER,
     KafkaConsumerApp,
     KafkaMessageSender,
+    build_kafka_consumer,
     decode_kafka_message,
     run_consumer_loop,
 )
@@ -360,3 +361,57 @@ def test_sender_without_the_sdk_raises_a_teaching_import_error(
     sender = KafkaMessageSender("orders-events", bootstrap_servers="localhost:9092")
     with pytest.raises(ImportError, match=r"benzene-kafka\[kafka\]"):
         asyncio.run(sender.send_message("orders:created", {"sku": "A"}))
+
+
+# --- the consumer builder --------------------------------------------------------------------------
+
+
+def _stub_confluent(monkeypatch: Any, recorded: dict[str, Any]) -> None:
+    """Stand in for confluent_kafka so the builder's config is assertable without the SDK."""
+
+    class Consumer:
+        def __init__(self, config: dict[str, Any]) -> None:
+            recorded["config"] = config
+
+        def subscribe(self, topics: list[str]) -> None:
+            recorded["topics"] = topics
+
+    module = types.ModuleType("confluent_kafka")
+    module.Consumer = Consumer  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "confluent_kafka", module)
+
+
+def test_build_kafka_consumer_disables_auto_commit_so_at_least_once_stays_true(
+    monkeypatch: Any,
+) -> None:
+    # run_consumer_loop commits only successful offsets; auto-commit on would defeat redelivery,
+    # and getting that wrong is silent - so the builder, not the caller, owns the setting.
+    recorded: dict[str, Any] = {}
+    _stub_confluent(monkeypatch, recorded)
+
+    build_kafka_consumer(
+        bootstrap_servers="broker:9092", group_id="orders", topics=["orders-in"]
+    )
+
+    assert recorded["config"]["enable.auto.commit"] is False
+    assert recorded["config"]["bootstrap.servers"] == "broker:9092"
+    assert recorded["config"]["group.id"] == "orders"
+    assert recorded["config"]["auto.offset.reset"] == "earliest"
+    assert recorded["topics"] == ["orders-in"]
+
+
+def test_build_kafka_consumer_lets_the_caller_win_on_any_setting(monkeypatch: Any) -> None:
+    recorded: dict[str, Any] = {}
+    _stub_confluent(monkeypatch, recorded)
+
+    build_kafka_consumer(
+        bootstrap_servers="broker:9092",
+        group_id="orders",
+        topics=["orders-in"],
+        auto_offset_reset="latest",
+        **{"enable.auto.commit": True, "session.timeout.ms": 45000},
+    )
+
+    assert recorded["config"]["auto.offset.reset"] == "latest"
+    assert recorded["config"]["enable.auto.commit"] is True  # overridable, as every default must be
+    assert recorded["config"]["session.timeout.ms"] == 45000
