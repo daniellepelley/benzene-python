@@ -82,6 +82,25 @@ pipeline = MiddlewarePipeline([timing]).use(message_router(registry))
 await pipeline.handle(Context("order:create", {"sku": "ABC"}))
 ```
 
+### Exceptions never leave the pipeline
+
+`pipeline.handle(context)` contains anything the middleware raises. The message router already turns
+a *handler* exception into `service-unavailable`, but it is the last middleware — a fault in auth,
+tracing, mesh interception, rate limiting or your own middleware used to propagate out of `handle`
+and into whichever transport adapter was hosting it, each of which deals with it differently or not
+at all. An escaping exception now becomes the same `service-unavailable` result on the context, with
+the exception's message as its structured error, so a fault looks the same on the wire wherever in
+the pipeline it came from and request content cannot crash the host.
+
+Two things it deliberately does not do:
+
+- **`asyncio.CancelledError` propagates untouched.** Cancellation is the host cooperatively shutting
+  the invocation down, not a request fault. Swallowing it would settle a fabricated failure — and on
+  a queue transport, ack a message that was never processed — instead of letting the transport
+  redeliver.
+- **A result already on the context wins.** A middleware that answered the caller and then failed
+  while unwinding keeps its answer.
+
 ### `Context`
 
 Carries the resolved `topic`, `version`, the native `request`, lower-cased `headers`, the
@@ -385,6 +404,31 @@ subsystem). The mesh [`ServiceDescriptor`](mesh.md) is a richer projection of th
 (adding identity, placement, and a contract hash); `ServiceSpec` is the minimal profile document and
 needs only `benzene.core`. Both share one schema derivation, `json_schema`.
 
+### Schema derivation and its providers
+
+`json_schema(py_type)` projects a Python type into the JSON Schema 2020-12 subset every derived
+document embeds: primitives, `datetime`, `bytes`, `T | None`, `list`/`dict`, and a `@dataclass`
+(camelCased property names, `required` iff no default). Anything else derives to the open schema
+`{}`.
+
+A **provider** claims a type before those built-in rules run, which is how a type core cannot name
+gets a real schema without core taking a dependency on the library that defines it:
+
+```python
+from benzene.core import register_schema_provider
+
+register_schema_provider(lambda t: HAND_AUTHORED.get(t))   # None = "not mine", try the next one
+```
+
+Providers are consulted in registration order and the first non-`None` result wins, so a provider
+can also override a built-in rule (a hand-authored catalogue in front of everything else). They are
+handed the raw type, so core still recurses into `list[T]` / `dict[str, T]` / `T | None` itself and
+reaches the provider again with the element type.
+
+Installing and importing [`benzene.pydantic`](pydantic.md) registers a provider for pydantic
+`BaseModel`s — the reason a pydantic-modelled service publishes a real contract. Core itself never
+imports pydantic. `schema_providers()` and `clear_schema_providers()` exist for tests.
+
 ## Contract document
 
 A `ContractDocument` is the **cross-language** projection of the same registry — the shape
@@ -569,7 +613,8 @@ make a blocking SDK call safe: sharing one event loop works because the consumer
 `casting_handler`, `Cast`, `NoCastPathError`, `ServiceSpec`, `TopicSpec`, `spec_interception`,
 `ContractDocument`, `ContractRequest`, `ContractEvent`, `ContractSource`, `HttpMapping`,
 `CONTRACT_OPENAPI`, `is_reserved_topic`, `resolve_contract`,
-`SPEC_TOPIC`, `json_schema`, `Schema`, `to_jsonable`, `to_request`, `Pipelines`,
+`SPEC_TOPIC`, `json_schema`, `Schema`, `SchemaProvider`, `register_schema_provider`,
+`schema_providers`, `clear_schema_providers`, `to_jsonable`, `to_request`, `Pipelines`,
 `InProcessMessageSender`, `InProcessFanOutSender`, `DuplicatePipelineError`, `PipelineNotFoundError`,
 `use_instance`, `WorkerHost`, `StopSignal`, `Worker`, `background_worker`, `NoWorkersError`,
 `DuplicateWorkerError`.
