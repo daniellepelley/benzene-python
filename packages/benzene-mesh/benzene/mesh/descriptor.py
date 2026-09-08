@@ -108,7 +108,7 @@ class ServiceDescriptor:
                     TopicDescriptor(
                         id=d.topic,
                         version=d.version,
-                        request_schema=json_schema(d.request_type),
+                        request_schema=json_schema(d.request_schema_type),
                         response_schema=json_schema(d.response_type),
                     )
                     for d in registry.definitions()

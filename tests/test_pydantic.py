@@ -392,3 +392,67 @@ def test_inline_defs_never_leaves_a_dangling_pointer() -> None:
     assert inline_defs({"properties": {"a": {"$ref": "https://example.test/x"}}}) == {
         "properties": {"a": {}}
     }
+
+
+# --- @validated(Model) as the *only* declaration of the request shape ---------------------------
+#
+# The tests above register with an explicit ``request_type=``, which is why they passed while the
+# documented idiomatic path did not: ``@validated(Model)`` leaves the wrapper annotated
+# ``request: object``, so every published surface derived the empty schema of ``object``.
+
+
+class DecoratedOrder(BaseModel):
+    sku: str
+    quantity: int = 1
+
+
+@message("orders:decorated")
+@validated(DecoratedOrder)
+async def decorated(order: DecoratedOrder) -> Result:
+    return Result.ok({"sku": order.sku})
+
+
+def _decorated_registry() -> Registry:
+    return Registry().add(decorated)
+
+
+def test_a_validated_handler_publishes_its_models_schema_not_an_empty_one() -> None:
+    """The four surfaces one derivation feeds — a contract nobody can read is worse than none."""
+    registry = _decorated_registry()
+
+    contract = ContractDocument.derive(registry, service="orders").to_payload()
+    native = ServiceSpec.derive(registry, service="orders").to_payload()
+
+    for schema in (
+        contract["requests"][0]["request"],
+        native["topics"][0]["requestSchema"],
+    ):
+        assert schema["type"] == "object"
+        assert set(schema["properties"]) == {"sku", "quantity"}
+        assert schema["required"] == ["sku"]
+
+
+def test_describing_the_request_does_not_change_how_it_is_mapped() -> None:
+    """The hint is schema-only, deliberately.
+
+    Mapping to the model instead would make ``to_request`` construct it, so a bad body would fail
+    at mapping time rather than reaching the decorator — turning the documented ``validation-error``
+    into something else. ``request_type`` therefore stays exactly what the wrapper declares.
+    """
+    definition = _decorated_registry().definitions()[0]
+
+    assert definition.request_type is object
+    assert definition.request_schema_type is DecoratedOrder
+
+
+def test_a_bad_body_is_still_a_validation_error_after_the_schema_fix() -> None:
+    app = BenzeneMessageApplication(_decorated_registry())
+
+    response = asyncio.run(
+        app.handle(
+            {"topic": "orders:decorated", "headers": {}, "body": json.dumps({"quantity": "nope"})}
+        )
+    )
+
+    assert response["statusCode"] == "validation-error"
+    assert response["isSuccessful"] is False

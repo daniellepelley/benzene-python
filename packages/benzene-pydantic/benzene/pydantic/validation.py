@@ -30,7 +30,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
-from benzene.core import Handler
+from benzene.core import Handler, describes_request_as
 from benzene.results import BenzeneError, Result
 
 from pydantic import BaseModel, ValidationError
@@ -101,6 +101,12 @@ def validated(model: type[M]) -> Callable[[Callable[[M], Awaitable[Result]]], Ha
         wrapper.__name__ = getattr(fn, "__name__", "validated_handler")
         wrapper.__qualname__ = getattr(fn, "__qualname__", wrapper.__name__)
         wrapper.__doc__ = fn.__doc__
+        # The wrapper takes the raw payload (``request: object``) because *it* converts, not the wire
+        # mapper — so without this every published surface would describe the request with the empty
+        # schema of ``object`` rather than the model's. Descriptive only: ``request_type`` is left
+        # alone, so a bad body still returns ``validation-error`` from here instead of failing in
+        # ``to_request``.
+        describes_request_as(wrapper, model)
         return wrapper
 
     return decorate

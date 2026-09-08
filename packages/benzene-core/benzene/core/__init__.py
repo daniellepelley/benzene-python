@@ -58,7 +58,14 @@ from .envelope import (
     successful_from,
 )
 from .errors import MessageHandlingError
-from .handler import Handler, HandlerDefinition, definition_of, infer_request_type, message
+from .handler import (
+    Handler,
+    HandlerDefinition,
+    definition_of,
+    describes_request_as,
+    infer_request_type,
+    message,
+)
 from .health import (
     HEALTH_TOPIC,
     DuplicateHealthCheckError,
@@ -212,6 +219,7 @@ __all__ = [
     "VERSION_HEADER_NAMES",
     "VersionSelector",
     "definition_of",
+    "describes_request_as",
     "infer_request_type",
     "decode_response",
     "encode_body",

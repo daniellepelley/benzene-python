@@ -11,7 +11,13 @@ import re
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
-from .handler import Handler, HandlerDefinition, definition_of, infer_request_type
+from .handler import (
+    Handler,
+    HandlerDefinition,
+    definition_of,
+    infer_request_type,
+    request_schema_hint_of,
+)
 
 #: How the router resolves a ``(topic, requested version)`` to a handler (versioning.md §3). A
 #: selector is a plain callable, so an application can supply its own policy.
@@ -70,7 +76,10 @@ class Registry:
         if request_type is None:
             request_type = infer_request_type(handler)
         return self.add_definition(
-            HandlerDefinition(topic, handler, version, request_type, response_type)
+            HandlerDefinition(
+                topic, handler, version, request_type, response_type,
+                request_schema_hint_of(handler),
+            )
         )
 
     def add(self, fn: Handler) -> Registry:

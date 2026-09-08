@@ -158,7 +158,7 @@ class ContractDocument:
                 (
                     ContractRequest(
                         topic=definition.topic,
-                        request=catalogue.reference(definition.request_type),
+                        request=catalogue.reference(definition.request_schema_type),
                         response=catalogue.reference(definition.response_type),
                         version=definition.version,
                         reserved=is_reserved_topic(definition.topic),

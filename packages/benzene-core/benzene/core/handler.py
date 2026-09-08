@@ -30,6 +30,25 @@ from benzene.results import Result
 Handler = Callable[[Any], Coroutine[Any, Any, Result]]
 
 _BENZENE_MESSAGE_ATTR = "_benzene_message"
+_BENZENE_REQUEST_SCHEMA_ATTR = "_benzene_request_schema"
+
+
+def describes_request_as(fn: Handler, request_type: type) -> Handler:
+    """Mark ``fn`` as *describing* its request with ``request_type``, without mapping to it.
+
+    For a decorator that consumes the raw payload and converts it itself — ``@validated(Model)`` is
+    the one in this repo — so that the schema every published surface derives is the model's, not
+    the empty schema of the ``object`` the wrapper is annotated with. Purely descriptive: nothing
+    reads it at dispatch time, so error classification is untouched.
+    """
+    setattr(fn, _BENZENE_REQUEST_SCHEMA_ATTR, request_type)
+    return fn
+
+
+def request_schema_hint_of(fn: Handler) -> type | None:
+    """The type ``fn`` was marked as describing its request with, if any."""
+    hint = getattr(fn, _BENZENE_REQUEST_SCHEMA_ATTR, None)
+    return hint if isinstance(hint, type) else None
 
 
 def infer_request_type(handler: Handler) -> type | None:
@@ -80,6 +99,19 @@ class HandlerDefinition:
     version: str = ""
     request_type: type | None = None
     response_type: type | None = None
+    #: A type to *describe* the request with, when it differs from the type the request is *mapped*
+    #: to. A decorator that validates the body itself — ``@validated(Model)`` — leaves the handler
+    #: annotated ``request: object``, because the raw payload is what reaches it and the decorator,
+    #: not the wire mapper, does the conversion. Without this the published schema would be the
+    #: empty one derived from ``object``. Kept separate from ``request_type`` deliberately: mapping
+    #: to the model instead would make ``to_request`` construct it, turning a bad body into a
+    #: mapping-time exception rather than the ``validation-error`` the decorator returns.
+    request_schema_hint: type | None = None
+
+    @property
+    def request_schema_type(self) -> type | None:
+        """The type every published surface should describe this request with."""
+        return self.request_schema_hint or self.request_type
 
 
 def message(
@@ -110,4 +142,6 @@ def definition_of(fn: Handler) -> HandlerDefinition | None:
     if tag is None:
         return None
     topic, version, request_type, response_type = tag
-    return HandlerDefinition(topic, fn, version, request_type, response_type)
+    return HandlerDefinition(
+        topic, fn, version, request_type, response_type, request_schema_hint_of(fn)
+    )

@@ -145,7 +145,7 @@ def openapi_document(
         operation = _suffixed(operation_base, n)
         used_operation_ids.add(operation)
 
-        schemas[request_name] = json_schema(definition.request_type)
+        schemas[request_name] = json_schema(definition.request_schema_type)
         schemas[response_name] = json_schema(definition.response_type)
 
         path = f"{invoke_base}/{definition.topic}"
