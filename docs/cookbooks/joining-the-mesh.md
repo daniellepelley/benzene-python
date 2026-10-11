@@ -1,166 +1,70 @@
 # Joining the mesh (self-description + tracing + collector feeds)
 
 Take an existing Benzene service — here the order domain, unchanged — and make it show up in a
-**mesh**: it describes itself on the reserved `benzene:mesh` topic, traces every invocation, and
-reports its descriptor, heartbeats, traces, and issues into a collector. None of this touches the handlers;
-mesh is additive middleware plus an outbound feed.
+**mesh**: it describes itself once (its Contract Document, on the reserved `benzene:spec` topic),
+registers that same document with a collector, traces every invocation, and reports heartbeats,
+traces, and issues. None of this touches the handlers; mesh is a declaration on the composition root,
+additive middleware, and an outbound feed.
 
 ## Prerequisites
 
 - Python 3.10+
-- `pip install benzene-mesh` (installs `benzene-core`; add `benzene-testing` for the fakes below)
-- An existing service with a `benzene.core` `Registry` — this walkthrough reuses the order domain from
-  the [examples](https://github.com/daniellepelley/benzene-python/tree/main/examples) (`OrdersStartUp`).
+- `pip install benzene-mesh` (installs `benzene-core`; add `benzene-http` and `benzene-testing` for the
+  surfaces and fakes below)
+- An existing service with a `BenzeneStartUp` — this walkthrough reuses the order domain from the
+  [examples](https://github.com/daniellepelley/benzene-python/tree/main/examples) (`OrdersStartUp`).
 
-## 1. Derive the descriptor from the real registry
+## 1. Declare the self-description on the composition root
 
-The descriptor is **derived**, never written by hand — `derive()` reads the registry, so it is always
-the truth of what the service serves. Give it the identity and placement the registry can't know:
-
-```python
-# mesh_wiring.py
-from benzene.mesh import ServiceDescriptor, ServiceInfo
-
-def build_descriptor(registry) -> ServiceDescriptor:
-    return ServiceDescriptor.derive(
-        registry,
-        ServiceInfo(
-            service="orders",
-            service_version="1.4.2",
-            instance_id="orders-7f9c",
-            placement={"cloud": "aws", "region": "eu-west-1"},
-        ),
-    )
-```
-
-The derived descriptor carries one topic entry per registered topic — for the order domain that is
-`orders:place`, `orders:get`, and `orders:created` — each with the request/response JSON Schema taken
-from the handler's declared types, and a `descriptorHash` over the contract. If this service also
-*calls* another topic (e.g. `payments:capture`), declare that too — an `OutboundRegistry` with
-`register_send("payments:capture", CapturePayment)` (or `register_event` for a topic it publishes and
-defines) as `derive`'s third argument (`ServiceDescriptor.derive(registry, info, outbound)`), and the
-same registry as `AppDefinition(outbound=...)` so the Contract Document lists it too — so the mesh's
-provider edge exists the moment this service registers, with zero traffic
-([reference](../reference/mesh.md#outboundregistry)):
-
-```python
-from benzene.core import MessageSender, build_application
-from benzene.testing import FakeMessageSender
-from orders_domain import OrdersStartUp
-
-definition, _ = build_application(
-    OrdersStartUp,
-    overrides=[lambda s: s.add_instance(MessageSender, FakeMessageSender())],
-)
-registry = definition.registry
-descriptor = build_descriptor(registry)
-
-payload = descriptor.to_payload()
-assert {t["id"] for t in payload["topics"]} == {"orders:place", "orders:get", "orders:created"}
-assert descriptor.descriptor_hash().startswith("sha256:")
-```
-
-## 2. Answer the reserved topic and trace every invocation
-
-Two pieces of middleware. `trace_middleware` goes **outermost** so it times the whole invocation;
-`mesh_interception` goes **before the router** so it short-circuits `benzene:mesh` and lets everything
-else route normally.
-
-```python
-# app.py
-from benzene.core import (
-    BenzeneMessageApplication, MessageSender, MiddlewarePipeline, build_application,
-)
-from benzene.mesh import InMemoryTraceExporter, mesh_interception, trace_middleware
-from benzene.testing import FakeMessageSender
-
-from mesh_wiring import build_descriptor
-from orders_domain import OrdersStartUp
-
-sender = FakeMessageSender()                          # a real outbound client in production
-definition, _ = build_application(
-    OrdersStartUp,
-    overrides=[lambda s: s.add_instance(MessageSender, sender)],
-)
-registry = definition.registry
-descriptor = build_descriptor(registry)
-
-exporter = InMemoryTraceExporter()                    # your TraceExporter in production
-pipeline = (
-    MiddlewarePipeline()
-    .use(trace_middleware(exporter, service="orders", instance_id="orders-7f9c"))
-    .use(mesh_interception(descriptor))
-)
-app = BenzeneMessageApplication(registry, pipeline)
-```
-
-The reserved topic now returns the descriptor, and a real order both routes and gets traced:
-
-```python
-import asyncio, json
-
-# The reserved topic returns this service's descriptor (status ok).
-mesh = asyncio.run(app.handle({"topic": "benzene:mesh", "headers": {}, "body": ""}))
-assert mesh["statusCode"] == "ok"
-assert json.loads(mesh["body"])["service"] == "orders"
-
-# A real order: the handler runs, egress fires, and the invocation is traced once.
-placed = asyncio.run(app.handle({
-    "topic": "orders:place",
-    "headers": {"x-correlation-id": "corr-42"},
-    "body": '{"sku": "ABC", "quantity": 2}',
-}))
-assert placed["statusCode"] == "created"
-assert sender.last_topic == "orders:created"          # egress proven
-
-traces = [e for e in exporter if e.topic == "orders:place"]
-assert len(traces) == 1
-assert traces[0].status == "created"
-assert traces[0].correlation_id == "corr-42"          # trace carries the correlation id
-```
-
-## 2b. Install it in your composition root (so every host — and every test — boots it)
-
-The snippet above hand-builds the pipeline to show the pieces. In a real service you install the mesh
-middleware in your `BenzeneStartUp` instead, by returning it on the `AppDefinition`. Then *every* host
-(and the test harness) boots the same pipeline — you never wire mesh per-cloud, and you can test a
-mesh-enabled service through the front door. Registering the reserved topic on an HTTP route gives you
-a `GET /benzene/spec` URL, answered by the same interceptor:
+A service describes itself with its **Contract Document**: derived from the registry (`requests`) and
+its outbound declarations (`events`, `sends`) — never written by hand — and served on `benzene:spec`.
+Declare what the registry can't know (identity and placement) as a `ContractInfo`, and declare what
+the service publishes and sends on an `OutboundRegistry`:
 
 ```python
 # startup.py
-from benzene.core import AppDefinition
-from benzene.mesh import (InMemoryTraceExporter, MESH_TOPIC, ServiceDescriptor, ServiceInfo,
-                          TraceExporter, mesh_interception, trace_middleware)
-from benzene.results import Result
+from dataclasses import replace
 
-async def _spec(_request):                # benzene:mesh is answered by mesh_interception
-    return Result.not_found("benzene:mesh is handled by mesh_interception")
+from benzene.core import ContractInfo, HealthChecks, OutboundRegistry
+from benzene.http import StandardPaths
+from benzene.mesh import InMemoryTraceExporter, TraceExporter, trace_middleware
+from orders_domain import OrdersStartUp
+
 
 class MeshOrdersStartUp(OrdersStartUp):
     def configure_services(self, services, config):
         super().configure_services(services, config)
-        services.try_add_singleton(TraceExporter, InMemoryTraceExporter)
+        services.try_add_singleton(TraceExporter, lambda _scope: InMemoryTraceExporter())
 
     def configure(self, services, config):
         base = super().configure(services, config)          # the real registry + HTTP router
-        descriptor = ServiceDescriptor.derive(base.registry, ServiceInfo(service="orders",
-                                              service_version="1.4.2", placement={"cloud": "aws"}))
-        base.router.register("GET", "/benzene/mesh", MESH_TOPIC, _spec)   # a URL for the descriptor
-        # (/benzene/spec is the Contract Document: declare AppDefinition(contract=ContractInfo(...)))
         exporter = services.get_service(TraceExporter)
-        return AppDefinition(
-            registry=base.registry,
-            router=base.router,
-            middleware=[trace_middleware(exporter, service="orders"), mesh_interception(descriptor)],
+        return replace(
+            base,
+            contract=ContractInfo(
+                "orders",
+                service_version="1.4.2",
+                version_scheme="semver",
+                placement={"cloud": "aws"},                 # add "region" only where documented
+            ),
+            # orders:created is an event this service publishes and defines; a call to another
+            # service's topic would be register_send(...).
+            outbound=OutboundRegistry().register_event("orders:created"),
+            # /benzene/invoke, /benzene/health and /benzene/spec (the Contract Document)
+            standard_paths=StandardPaths(health=HealthChecks().add("order-store", lambda: True)),
+            # outermost, so it times the whole invocation
+            middleware=[trace_middleware(exporter, service="orders", instance_id="orders-7f9c")],
         )
 ```
 
-Now the harness boots the mesh-enabled service like any other — only `build_aws()` names the cloud:
+The document lists one `requests[]` entry per handler, with OpenAPI 3.0 request/response schemas from
+the handlers' declared types, the `events[]`/`sends[]` you declared, and two hashes
+(`contractHash`, `registrationHash`). Every host — and the test harness — boots the same composition
+root, so you can check it through the front door:
 
 ```python
+import json
 from benzene.core import MessageSender
-from benzene.mesh import TraceExporter
 from benzene.testing import FakeMessageSender, create_test_host
 
 fake = FakeMessageSender()
@@ -168,30 +72,25 @@ host = (create_test_host(MeshOrdersStartUp)
         .with_services(lambda s: s.add_instance(MessageSender, fake))
         .build_aws())                                        # or .build_gcp() / .build_azure()
 
-spec = host.send_http("GET", "/benzene/mesh")                # the descriptor, over HTTP
-assert spec.status_code == 200 and json.loads(spec.body)["service"] == "orders"
-
-host.send_sqs("orders:place", {"sku": "ABC"}, headers={"x-correlation-id": "c1"})
-assert host.scope.get_service(TraceExporter)[0].correlation_id == "c1"   # trace, via the root scope
+spec = json.loads(host.send_http("GET", "/benzene/spec").body)
+assert spec["service"] == "orders"
+assert {r["topic"] for r in spec["requests"]} == {"orders:place", "orders:get", "orders:created"}
+assert spec["registrationHash"].startswith("sha256:")
 ```
 
-`trace_middleware` joins an inbound `traceparent` trace when present (else starts a fresh one) and
-reads `x-correlation-id` for the business correlation id. Exporter failures are swallowed — tracing
-never breaks the request.
+## 2. Trace every invocation
 
-A **health endpoint** installs exactly the same way — it is another reserved-topic interceptor. Add a
-`HealthChecks`, put `health_interception(checks)` in the same `middleware` list, and register a
-`GET /benzene/health` route to the `benzene:healthcheck` topic. The health aggregate it returns is the
-same `{isHealthy, healthChecks}` shape the mesh `Heartbeat` reports, so one set of checks feeds both:
+`trace_middleware` (installed above) joins an inbound `traceparent` trace when present (else starts a
+fresh one), reads `x-correlation-id` for the business correlation id, and emits exactly one
+`TraceEvent` per routed invocation. Exporter failures are swallowed — tracing never breaks the request.
 
 ```python
-from benzene.core import HEALTH_TOPIC, HealthChecks, health_interception
+from benzene.mesh import TraceExporter
 
-health = HealthChecks().add("order-store", check_store)          # a bool or HealthCheckResult
-base.router.register("GET", "/benzene/health", HEALTH_TOPIC, _spec)   # answered by the interceptor
-middleware = [trace_middleware(exporter, service="orders"),
-              health_interception(health), mesh_interception(descriptor)]
-# host.send_http("GET", "/benzene/health") -> 200 {"isHealthy": true, "healthChecks": {...}}
+host.send_sqs("orders:place", {"sku": "ABC"}, headers={"x-correlation-id": "c1"})
+assert fake.last_topic == "orders:created"                                 # egress proven
+placed = [e for e in host.scope.get_service(TraceExporter) if e.topic == "orders:place"]
+assert len(placed) == 1 and placed[0].correlation_id == "c1"              # one trace per invocation
 ```
 
 ## 3. Report into a collector
@@ -201,55 +100,67 @@ independent and fire-and-report: it returns the outbound `Result` so you can log
 never raises and never blocks traffic. Use the same `benzene.core` `MessageSender` you already publish
 events with (Pub/Sub, SNS/SQS, Service Bus, or an HTTP POST of the wire envelope).
 
+The registration **is** the Contract Document — `registration_document(definition)` returns exactly
+what `benzene:spec` serves, so the mesh and the service can never disagree about the contract:
+
 ```python
 from datetime import datetime, timezone
-from benzene.mesh import Heartbeat, MeshFeedSender
+from benzene.core import build_application
+from benzene.mesh import Heartbeat, IssueAggregator, MeshFeedSender, registration_document
 
+definition, scope = build_application(
+    MeshOrdersStartUp, overrides=[lambda s: s.add_instance(MessageSender, FakeMessageSender())]
+)
+document = registration_document(definition)
 feeds = MeshFeedSender(collector_sender)              # any benzene.core MessageSender
 
-# At startup: register the descriptor (benzene:mesh:register).
-await feeds.register(descriptor)
+# At startup: register the document (benzene:mesh:register).
+await feeds.register(document)
 
-# Periodically: a heartbeat with the descriptor hash so the collector spots contract drift.
-await feeds.publish_heartbeat(Heartbeat(
-    service="orders",
+# Periodically: a heartbeat carrying the registered document's registrationHash and serviceVersion,
+# so the collector spots an instance running a contract it hasn't learned.
+await feeds.publish_heartbeat(Heartbeat.for_document(
+    document,
     sent_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     instance_id="orders-7f9c",
-    descriptor_hash=descriptor.descriptor_hash(),
 ))
 
 # Periodically: flush the batched trace events (benzene:mesh:traces -> {"events": [...]}).
+exporter = scope.get_service(TraceExporter)
 await feeds.publish_traces(list(exporter))
 exporter.clear()
 
 # Periodically: flush deduplicated failure signatures (benzene:mesh:issues). `count` is a delta.
-from benzene.mesh import IssueAggregator
-
 issues = IssueAggregator(service="orders")
 issues.record(topic="orders:place", status="service-unavailable", exception_type="HttpError")
 await feeds.publish_issues(issues.flush())           # flush() resets the window
 ```
 
+To advertise the [Cloud Service Profile](../cloud-service-profile.md) verdict on the document (served
+and registered alike), wrap the definition: `declare_cloud_service_profile(definition,
+mesh_feeds=True, trace_propagation=True)`.
+
 ## Adopt only what you need
 
-Every feed is optional on both sides. Install `mesh_interception` and nothing else to be discoverable
-without tracing; add `trace_middleware` for a trace feed; add `MeshFeedSender` to push into a collector.
-Leave any of them out and the rest of the service is unchanged — an unprovisioned endpoint, an
-unreachable collector, or a failing exporter must never affect service traffic.
+Every feed is optional on both sides. Declare `contract=ContractInfo(...)` and nothing else to be
+discoverable (a collector's poller reads `/benzene/spec` — the same document — without any push);
+add `trace_middleware` for a trace feed; add `MeshFeedSender` to push into a collector. Leave any of
+them out and the rest of the service is unchanged — an unprovisioned endpoint, an unreachable
+collector, or a failing exporter must never affect service traffic.
 
 ## Troubleshooting
 
-- **The descriptor has no topics.** `derive()` reads the `Registry` you pass — build it after wiring
-  your handlers/routes (the `definition.registry` from `build_application(OrdersStartUp, ...)`), not
-  from an empty one.
-- **`benzene:mesh` routes to a handler / 404s instead of returning the descriptor.** Register
-  `mesh_interception` in the pipeline *before* the router runs (pass it to the `MiddlewarePipeline`, as
-  above) — the router is the terminal middleware.
+- **`benzene:spec` answers `not-found`.** The composition root declares no `contract=ContractInfo(...)`;
+  `registration_document` raises `ValueError` for the same reason.
+- **The document has no topics.** It reads the registry the startup returns — make sure `configure`
+  returns the `AppDefinition` with the real `registry`/`router`, not an empty one.
+- **No provider edge in the collector's graph.** Edges come from the registration's `events` and
+  `sends`, never from traces: declare them on `AppDefinition(outbound=...)`.
 - **Traces missing or double-counted.** Install `trace_middleware` once, outermost. It emits exactly
   one `TraceEvent` per routed invocation.
-- **The hash changed but the code didn't.** `descriptor_hash()` excludes `instanceId`, `degraded`, and
-  `profile`, but includes `serviceVersion`, `placement`, the topic set, and the schemas — bumping the
-  version or changing a request/response type is meant to change it.
+- **The hash changed but the code didn't.** `registrationHash` covers `requests`, `events` and
+  `sends` (their topics, versions, HTTP mappings and dereferenced schemas). Identity, `placement`,
+  `runtime`, `profile` and `degraded` are outside it; changing a request/response type changes it.
 
 ## See also
 

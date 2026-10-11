@@ -12,7 +12,7 @@ pip install benzene-openapi
 
 Benzene is message-topic-based, not REST, so there is nothing to hand a Swagger UI or a client
 generator out of the box. `openapi_document` closes that gap: it projects the *same* registry the
-Contract Document and the mesh `ServiceDescriptor` read into a standard OpenAPI document,
+Contract Document reads into a standard OpenAPI document,
 reusing `benzene.core.json_schema` for every payload schema — never re-deriving one.
 
 Like the Contract Document it is a **pure, deterministic** registry projection with no third-party runtime
@@ -93,7 +93,7 @@ from `StandardPaths` (`benzene.http`).
 
 Every operation's `requestBody` and success response `$ref` a component in `components.schemas` whose
 value is exactly `benzene.core.json_schema` of the topic's request/response type — the same 2020-12
-subset the spec and descriptor embed, with wire-naming (`orderId`) property names and `required`
+subset, with wire-naming (`orderId`) property names and `required`
 tracking the caller's obligation. Failure responses map the Benzene failure statuses to HTTP codes
 through `benzene.http.to_http` and share one `BenzeneProblem` component — the RFC 9457 problem
 document this port actually emits (`benzene.core.error_payload` plus the two additions §4.1 requires
@@ -205,4 +205,4 @@ byte-stable regardless of separator collisions.
   is a sibling of.
 - [`benzene.http`](http.md) — `StandardPaths` (the invoke base) and `to_http` (the failure-status → HTTP
   code mapping) this reuses.
-- [`benzene.mesh`](mesh.md) — the mesh `ServiceDescriptor`, the third projection of the same registry.
+- [`benzene.mesh`](mesh.md) — registers the Contract Document with a mesh collector.

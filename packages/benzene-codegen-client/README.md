@@ -1,8 +1,8 @@
 # benzene-codegen-client
 
 Generates a typed, topic-scoped Python client SDK from a Benzene **Contract Document**
-(`{Service}.spec.json`, produced by a Benzene service's own descriptor build — .NET, Go, TypeScript,
-or Python) — so a Python consumer of any Benzene service gets a typed client with no .NET SDK
+(`{Service}.spec.json`, served by a Benzene service on `benzene:spec` / `/benzene/spec` — .NET, Go,
+TypeScript, or Python) — so a Python consumer of any Benzene service gets a typed client with no .NET SDK
 required.
 
 This package is a **build-time / CLI tool**, not a runtime dependency of a Benzene service. It

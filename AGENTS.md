@@ -28,7 +28,7 @@ layers they use. The dependency direction is strict and one-way:
   `benzene-azure`, `benzene-kafka`, `benzene-rabbitmq`.
 - **Cross-cutting middleware** — `benzene-resilience`, `benzene-auth`, `benzene-cache`,
   `benzene-otel`, `benzene-openapi`.
-- **Mesh** — `benzene-mesh` (descriptor, tracing, collector), `benzene-mesh-fleet`.
+- **Mesh** — `benzene-mesh` (registration, tracing, collector), `benzene-mesh-fleet`.
 - **Adapters and tools** — `benzene-pydantic`, `benzene-testing`, `benzene-codegen-client`.
 
 Everything else: `conformance/` (the vendored fixture snapshot), `tests/` (cross-package tests + the

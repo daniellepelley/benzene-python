@@ -124,7 +124,8 @@ After each poll sweep the host projects its catalog into the read-model artifact
 `manifest.json`, `topology.json`, `topics.json`, `usage.json`, and `services/{name}.json` — via
 [`benzene.mesh.write_artifacts`](../../docs/reference/mesh.md#the-mesh-ui-artifacts--build_artifacts--write_artifacts),
 writing them to `MESH_ARTIFACTS_DIR` (the volume) and serving them alongside the page. The UI fetches
-them by relative path, so no UI configuration is needed. From the descriptor/spec feed it derives the
+them by relative path, so no UI configuration is needed. From the registration feed (each service's
+Contract Document, pushed or polled) it derives the
 estate (health, contract-drift + spec-hash history), the functional map (topics + consumers/producers,
 **payload schemas, version, schema-mismatch**), and per-service **spec + per-check health**; from the
 traces, the topology and **usage** counts. Only what genuinely needs feeds this collector doesn't have
@@ -138,8 +139,8 @@ Set `MESH_ARTIFACTS_DIR` (Terraform sets it automatically) to enable it; unset d
   `pollIntervalSeconds`. Any pollable Benzene service works — a Lambda behind API Gateway, another
   Fargate service, anything exposing `/benzene/spec` + `/benzene/health`.
 - **Push (the declared graph, then real stats):** a service's `POST <MESH>/mesh/register` carries its
-  full `ServiceDescriptor` — `topics` *and* `produces` — so its provider edges exist the moment it
-  registers, with zero traffic (mesh.md §2.3/§4). `POST <MESH>/mesh/traces` then feeds invocation/error
+  Contract Document — `requests` *and* `events`/`sends`, the same document its `/benzene/spec` serves
+  — so its provider edges exist the moment it registers, with zero traffic (mesh.md §2, §4). `POST <MESH>/mesh/traces` then feeds invocation/error
   stats for those declared edges; it never adds or removes an edge itself. Point each service's
   `MeshFeedSender` (or an HTTP `MessageSender`) at these routes — `deploy/mesh/fleet/service.py` does
   both at startup and per-invocation respectively.

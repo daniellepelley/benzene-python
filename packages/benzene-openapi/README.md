@@ -10,8 +10,8 @@ pip install benzene-openapi
 ```
 
 Benzene is message-topic-based, not REST, so there is nothing to hand a Swagger UI or a client
-generator out of the box. `openapi_document` closes that gap: it projects the *same* registry the spec
-and mesh descriptor read into a standard OpenAPI document, reusing `benzene.core.json_schema` for every
+generator out of the box. `openapi_document` closes that gap: it projects the *same* registry the
+Contract Document reads into a standard OpenAPI document, reusing `benzene.core.json_schema` for every
 payload schema — never re-deriving one.
 
 ```python

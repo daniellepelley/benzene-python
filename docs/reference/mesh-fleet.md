@@ -36,7 +36,7 @@ list[ServiceEndpoint]`. It **must never raise for an empty mesh** — an unpopul
 registry with no matching services is an empty list, not an error.
 
 `ServiceEndpoint` is a frozen, hashable dataclass — the lowest common denominator every cloud registry
-can produce: `name` (the mesh service identity, the same value a `benzene.mesh.ServiceDescriptor`
+can produce: `name` (the mesh service identity, the same value a service's Contract Document
 carries in `service`), `address` (a URL or host the poller/router reaches), and free-form `metadata`
 (availability zone, instance id, ARN, labels — whatever the registry knew and the port did not model).
 
@@ -113,6 +113,6 @@ The backends differ mostly in **time units**, which is where fidelity matters mo
 
 ## See also
 
-- [`benzene.mesh`](mesh.md) — the `TraceEvent` / `ServiceDescriptor` / `MeshPoller` model this extends.
+- [`benzene.mesh`](mesh.md) — the `TraceEvent` / registration / `MeshPoller` model this extends.
 - [`benzene.otel`](otel.md) — exports the same `TraceEvent` model live to an OpenTelemetry tracer
   (where the mappers project a whole trace into a backend document).

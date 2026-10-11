@@ -20,7 +20,7 @@ same mesh.
 > `benzene-mesh-fleet`), and the adapters (`benzene-pydantic`, `benzene-testing`) — that pass **every
 > language-neutral conformance fixture**. Core, the inbound + outbound HTTP and gRPC bindings, the three
 > cloud hosts (each multi-transport with egress, AWS now spanning eight Lambda event sources plus a
-> self-hosted SQS consumer), the Kafka and RabbitMQ transports, the mesh module (descriptor, tracing,
+> self-hosted SQS consumer), the Kafka and RabbitMQ transports, the mesh module (registration, tracing,
 > collector) and its fleet discovery/trace-mappers, resilience policies (circuit breaker, bulkhead, rate
 > limiting, idempotency, sagas), authentication (Basic / JWT / OAuth2 bearer), cache-aside caching,
 > OpenTelemetry trace export, OpenAPI 3.1 generation, payload versioning (headers, route segment,
@@ -56,7 +56,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | `benzene-cache` | `benzene.cache` | cache-aside abstraction + in-memory and Redis backends (`[redis]`) | `benzene-core` (+ `redis`) | `Benzene.Cache.Core` / `Benzene.Cache.Redis` |
 | `benzene-openapi` | `benzene.openapi` | OpenAPI 3.1 document generated from the registry | `benzene-core`, `benzene-http` | `Benzene.Schema.OpenApi` |
 | `benzene-otel` | `benzene.otel` | export the port's spans to a real OpenTelemetry SDK + response-as-event (`[otel]`) | `benzene-core`, `benzene-mesh` (+ `opentelemetry-sdk`) | `Benzene.ResponseEvents` |
-| `benzene-mesh` | `benzene.mesh` | ServiceDescriptor + `benzene:mesh` endpoint + tracing + collector feeds + a `MeshCollector` | `benzene-core` | `Benzene.Mesh.Wire` + `Benzene.Mesh.Collector` |
+| `benzene-mesh` | `benzene.mesh` | registers the Contract Document with a collector + tracing + collector feeds + a `MeshCollector` | `benzene-core` | `Benzene.Mesh.Wire` + `Benzene.Mesh.Collector` |
 | `benzene-mesh-fleet` | `benzene.mesh_fleet` | service-discovery adapters (AWS/Azure/K8s) + Jaeger/Tempo/X-Ray trace mappers | `benzene-core`, `benzene-mesh` | `Benzene.Mesh.Discovery.*` + `Benzene.Mesh.Fleet.*` |
 | `benzene-pydantic` | `benzene.pydantic` | validate handler requests with pydantic models | `benzene-core`, `pydantic` | `Benzene.FluentValidation` |
 | `benzene-testing` | `benzene.testing` | in-memory test host + fakes (dev/test) | `benzene-core` | `Benzene.Testing` |
@@ -178,7 +178,7 @@ packages/
   benzene-gcp/             benzene/gcp/             (Cloud Functions host: HTTP + Pub/Sub)
   benzene-aws/             benzene/aws/             (Lambda host: API Gateway + SQS + SNS)
   benzene-azure/           benzene/azure/           (Functions host: HTTP + Service Bus + Event Hub)
-  benzene-mesh/            benzene/mesh/            (ServiceDescriptor, benzene:mesh, tracing, feeds)
+  benzene-mesh/            benzene/mesh/            (registration, tracing, feeds, collector)
   benzene-pydantic/        benzene/pydantic/        (pydantic request validation)
   benzene-testing/         benzene/testing/         (in-memory test host + fakes)
   benzene-codegen-client/  benzene/codegen_client/  (Contract Document -> typed client, benzene-codegen CLI)
@@ -266,12 +266,12 @@ The language-neutral fixtures from the spec live in [`conformance/`](conformance
 fixture that applies to this port is green**: status vocabulary, HTTP + gRPC status mappings, the
 envelope (version selection included), problem details (with the envelope endpoint, the health
 routes and validation pointers), transport metadata (with every shipped binding's settlement shape),
-the contract document and its hash, and four of the six mesh fixtures (descriptor, trace, collector,
-issues). The `"requires": "validation"` case runs through the Pydantic adapter, so the runner reports
+the contract document and its hash (whose producer groups are also the mesh register body's), and
+three of the five mesh fixtures (trace, collector, issues). The `"requires": "validation"` case runs through the Pydantic adapter, so the runner reports
 it skipped when pydantic is not installed. The other two —
 `mesh-service-version-cases.json` and `mesh-version-order-cases.json` — are conditional fixtures the
 canonical `conformance/README.md` requires only of a collector claiming service-version identity
-(mesh §2.4) or a port that orders service versions (§2.5); this port implements neither, and says so
+(service-versions.md §1) or a port that orders service versions (§2); this port implements neither, and says so
 in `UNRUN_FIXTURES` in `tests/conformance_runner.py`, where a check fails if any *other* vendored
 fixture goes unrun. Passing these plus the live cross-language
 interop checks (send/receive the envelope against a
@@ -282,8 +282,8 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 
 > **Every conformance fixture that applies to this port is green** — status vocabulary, HTTP + gRPC
 > status mappings, the envelope, problem details, transport metadata, the contract document and its
-> hash, and four of the six mesh fixtures (descriptor, trace, collector, issues); the remaining two
-> are conditional on mesh §2.4/§2.5 capabilities this port does not implement, recorded in
+> hash, and three of the five mesh fixtures (trace, collector, issues); the remaining two
+> are conditional on Service Versions capabilities (service-versions.md §1/§2) this port does not implement, recorded in
 > `UNRUN_FIXTURES`. A transport binding has shipped for HTTP, all three clouds, gRPC, Kafka and
 > RabbitMQ, inbound and outbound. Conformance-green is the whole story for items 1–18 below; it is
 > **not** the same claim as transport-surface parity with the other three ports. `benzene-dotnet`
@@ -300,10 +300,11 @@ running .NET Benzene service) is what "conformant" means — see the spec's
    dogfood-tested example per the [Port Quality Standards](https://github.com/daniellepelley/Benzene/blob/main/docs/guides/port-quality-standards.md):
    **GCP** (`benzene-gcp`, HTTP + Pub/Sub), **AWS** (`benzene-aws`, API Gateway + SQS + SNS), and
    **Azure** (`benzene-azure`, HTTP + Service Bus + Event Hub) — all done, each with egress.
-5. **(done)** The mesh module (`benzene-mesh`) — the `ServiceDescriptor` (derived from the registry,
-   with per-topic schemas + a contract hash), the reserved `benzene:mesh` endpoint, per-invocation
-   tracing, and the collector feeds — so Python services describe themselves and appear in the mesh.
-   Conformance-green against `mesh-descriptor-cases` and `mesh-trace-cases`.
+5. **(done)** The mesh module (`benzene-mesh`) — registration (since spec 3b the register body is the
+   service's Contract Document, the document `benzene:spec` serves; the `ServiceDescriptor` and the
+   `benzene:mesh` topic are retired), per-invocation tracing, and the collector feeds — so Python
+   services appear in the mesh. Conformance-green against `mesh-trace-cases` and the
+   contract-document producer groups.
 6. **(done)** Payload/handler versioning — the one `benzene-version` header (renamable in one place),
    the HTTP `/v{version}/` route segment, exact-match selection with a declared default handler for
    unversioned messages, an opt-in `highest_version` selector, the casting-handler pattern (serve
@@ -316,9 +317,9 @@ running .NET Benzene service) is what "conformant" means — see the spec's
    tracing, health, mesh) installs from one composition root and is testable through the harness.
 8. **(done)** The mesh **collector** — `MeshCollector`, an ordinary Benzene service that ingests the
    register/heartbeat/traces/issues feeds and answers `benzene:mesh:query:*` (fleet/service/topic/trace),
-   building the producer/consumer graph from each service's registered `ServiceDescriptor` alone
-   (`topics` gives consumer edges, `produces` gives provider edges, mesh.md §4 — never from trace
-   parentage), with traces instead feeding a
+   building the producer/consumer graph from each service's registration alone (`requests` gives
+   consumer edges, `events` ∪ `sends` gives provider edges, mesh.md §4 — never from trace
+   parentage; only `service` is required, and an absent or `degraded` member is unknown), with traces instead feeding a
    declared edge's invocation/error stats, plus per-instance health + hash-drift and `missingFeeds`,
    plus the optional issue feed (delta-merge by fingerprint). Conformance-green against
    `mesh-collector-cases` **and** `mesh-issue-cases`.
@@ -361,10 +362,10 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     artifact field set is pinned against the contract by `tests/test_mesh_artifact_contract.py`.
 16. **(done)** The Cloud Service Profile **self-check** — `benzene.mesh.evaluate_cloud_service_profile`
     grades a composition root's `AppDefinition` against the profile's R1–R8 at wiring time and returns a
-    `CloudServiceProfileReport` whose `to_profile()` rides on the descriptor's optional `profile` field
-    (`{name, missing}`, `missing` omitted when conformant, excluded from the `descriptorHash`), so any
-    tool that can reach `benzene:mesh` can ask a running service which requirements its own wiring
-    knows it is missing. R1–R5/R7 are read off the definition (registry + `StandardPaths`); R6 (mesh
+    `CloudServiceProfileReport` whose `to_profile()` rides on the Contract Document's optional
+    `profile` field (`{name, missing}`, `missing` omitted when conformant, outside both hashes; set by
+    `declare_cloud_service_profile`), so `benzene:spec` and the mesh registration both say which
+    requirements the service's own wiring knows it is missing. R1–R5/R7 are read off the definition (registry + `StandardPaths`); R6 (mesh
     feeds) and R8 (outbound `traceparent`) — the pair the spec calls structurally unobservable — are
     declared explicitly. Dogfooded by [`examples/mesh_dashboard/profile.py`](examples/mesh_dashboard/profile.py).
 17. **(done)** The Cloud Service Profile **live-probe checker** — `benzene.mesh.probe_cloud_service`

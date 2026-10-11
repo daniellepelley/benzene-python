@@ -432,8 +432,35 @@ that. `GET /benzene/spec` reaches it through the pipeline too ([http](http.md)).
 
 The reserved reachability probe **`benzene:ping`** (`PING_TOPIC`) needs no wiring: the message router
 answers it `ok` with no payload on every transport, so a queue or function health check that sends it
-is never a `not-found` the transport redelivers. The mesh [`ServiceDescriptor`](mesh.md) is a separate,
-older projection of the same registry, kept until it is retired; it uses `json_schema`.
+is never a `not-found` the transport redelivers.
+
+The same document is the body a mesh-enabled service registers with a collector
+([`benzene.mesh.registration_document`](mesh.md), mesh.md §2). `ContractInfo` also carries the
+deployment-side fields contract-document §1 defines — `runtime` (default `"python"`), `placement`
+(`{"cloud": ...}`, plus `region` only where the platform documents it), `profile` (a
+conformance-profile self-check) and `degraded` (the members, of `requests`/`events`/`sends`, the
+service could not determine; omitted when empty). All four sit outside both hashes, so the served and
+the registered document are one and the same.
+
+### `json_schema` — a JSON Schema 2020-12 projection
+
+`json_schema(py_type)` derives a small, fixed **JSON Schema 2020-12 subset** for a Python type
+(`Schema` is an alias for `dict[str, Any]`). It is not the Contract Document's dialect (that is
+OpenAPI 3.0, with named components); it is what [`benzene.openapi`](openapi.md) embeds in its
+OpenAPI 3.1 document. Property names follow the wire naming policy (camelCase), a dataclass field is
+`required` iff it has no default, and a genuine multi-type union or a recursive dataclass falls back
+to the open schema `{}`.
+
+| Python type | JSON Schema |
+|---|---|
+| `str` / `bool` / `int` / `float` | `{"type": "string" \| "boolean" \| "integer" \| "number"}` |
+| `datetime` | `{"type": "string", "format": "date-time"}` |
+| `bytes` | `{"type": "string"}` (base64 on the wire) |
+| `T \| None` | `T`'s schema with `"null"` added to its `type` |
+| `list[T]` / `tuple[T, ...]` / `set` | `{"type": "array", "items": <T>}` |
+| `dict[str, T]` | `{"type": "object", "additionalProperties": <T>}` |
+| a `@dataclass` | `{"type": "object", "properties": {...}, "required": [...]}` |
+| anything else / `None` / `Any` | `{}` |
 
 ## Transport metadata
 
@@ -608,7 +635,7 @@ make a blocking SDK call safe: sharing one event loop works because the consumer
 `SCHEMA_DIALECT`, `VERSION_SCHEMES`, `NoPayload`, `derive_contract`, `is_reserved_topic`,
 `SupportsHttpMappings`, `SupportsMessageEndpoint`, `contract_hash`, `registration_hash`,
 `schema_name`, `declared_schema_name`, `ComponentNameCollisionError`, `OutboundRegistry`,
-`EventDeclaration`, `SendDeclaration`, `OutboundDefinition`, `DuplicateOutboundRegistrationError`,
+`EventDeclaration`, `SendDeclaration`, `DuplicateOutboundRegistrationError`,
 `SPEC_TOPIC`, `json_schema`, `Schema`, `to_jsonable`, `to_request`, `Pipelines`,
 `InProcessMessageSender`, `InProcessFanOutSender`, `DuplicatePipelineError`, `PipelineNotFoundError`,
 `use_instance`, `WorkerHost`, `StopSignal`, `Worker`, `background_worker`, `NoWorkersError`,

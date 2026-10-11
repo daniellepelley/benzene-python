@@ -24,7 +24,7 @@ Python equivalent.
 | [`benzene-cache`](https://pypi.org/project/benzene-cache/) | `benzene.cache` | cache-aside over a narrow async `Cache` port, with in-memory and Redis backends | `benzene-core` |
 | [`benzene-openapi`](https://pypi.org/project/benzene-openapi/) | `benzene.openapi` | derive an OpenAPI 3.1 document from the handler registry | `benzene-core`, `benzene-http` |
 | [`benzene-otel`](https://pypi.org/project/benzene-otel/) | `benzene.otel` | export the port's existing mesh traces through the OpenTelemetry SDK, plus a response-as-event pattern (SDK optional) | `benzene-core`, `benzene-mesh` |
-| [`benzene-mesh`](https://pypi.org/project/benzene-mesh/) | `benzene.mesh` | mesh self-description (`ServiceDescriptor`), the reserved `benzene:mesh` endpoint, tracing, and collector feeds | `benzene-core` |
+| [`benzene-mesh`](https://pypi.org/project/benzene-mesh/) | `benzene.mesh` | mesh registration (the Contract Document), tracing, collector feeds, and the `MeshCollector` | `benzene-core` |
 | [`benzene-mesh-fleet`](https://pypi.org/project/benzene-mesh-fleet/) | `benzene.mesh_fleet` | cloud service-discovery adapters (AWS/Azure/Kubernetes) and trace-mappers (Jaeger/Tempo/X-Ray) for a fleet | `benzene-core`, `benzene-mesh` |
 | [`benzene-pydantic`](https://pypi.org/project/benzene-pydantic/) | `benzene.pydantic` | validate handler requests with pydantic models (an optional adapter) | `benzene-core`, `pydantic` |
 | [`benzene-testing`](https://pypi.org/project/benzene-testing/) | `benzene.testing` | in-memory test host + test doubles (a dev/test dependency) | `benzene-core` |

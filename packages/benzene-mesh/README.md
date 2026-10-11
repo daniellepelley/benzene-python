@@ -1,9 +1,9 @@
 # benzene-mesh
 
 The **mesh** module for the [Benzene Python port](https://github.com/daniellepelley/benzene-python).
-Make a Python Benzene service a first-class citizen of a Benzene mesh: it describes itself, answers
-the reserved `benzene:mesh` topic, traces every invocation, and reports into a collector — all
-optional and additive.
+Make a Python Benzene service a first-class citizen of a Benzene mesh: it registers its
+self-description with a collector, traces every invocation, and reports heartbeats, traces and
+issues — all optional and additive. The receiving side, `MeshCollector`, ships here too.
 
 Depends only on [`benzene-core`](https://pypi.org/project/benzene-core/).
 
@@ -11,31 +11,26 @@ Depends only on [`benzene-core`](https://pypi.org/project/benzene-core/).
 pip install benzene-mesh
 ```
 
-## Describe the service + answer `benzene:mesh`
+## Describe the service once — and register that
 
-The `ServiceDescriptor` is *derived* from your handler registry — it is always the truth of what the
-service serves, with a request/response schema per topic and a content hash over the contract:
+A service describes itself with its **Contract Document**, derived at the composition root from the
+handler registry and the outbound declarations, and served on the reserved `benzene:spec` topic (and
+`GET /benzene/spec`). The mesh has no self-description of its own: the `benzene:mesh:register` body
+*is* that document, so what the mesh knows can never drift from what the service serves.
 
 ```python
-from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
-from benzene.mesh import ServiceDescriptor, ServiceInfo, mesh_interception
+from benzene.core import AppDefinition, ContractInfo, OutboundRegistry, Registry, application_from
+from benzene.mesh import registration_document
 
-registry = Registry()  # ... your handlers, e.g. registry.add(place_order)
-
-descriptor = ServiceDescriptor.derive(
-    registry,
-    ServiceInfo(service="orders", service_version="1.4.2", placement={"cloud": "aws"}),
+definition = AppDefinition(
+    registry=Registry(),  # ... your handlers, e.g. .add(place_order)
+    outbound=OutboundRegistry().register_send("payments:capture", CapturePayment),
+    contract=ContractInfo("orders", service_version="1.4.2", version_scheme="semver",
+                          placement={"cloud": "aws"}),
 )
-
-pipeline = MiddlewarePipeline().use(mesh_interception(descriptor))   # install before the router
-app = BenzeneMessageApplication(registry, pipeline)
-
-# A message on the reserved topic returns status `ok` with the descriptor as payload:
-await app.handle({"topic": "benzene:mesh", "headers": {}, "body": ""})
+app = application_from(definition)               # benzene:spec answers with the document
+document = registration_document(definition)     # ...and this is the very same document
 ```
-
-Interception is by topic id alone (version ignored), exactly like health-check interception. Don't
-install it and the endpoint simply doesn't exist — every other feed keeps working.
 
 ## Trace every invocation
 
@@ -44,28 +39,26 @@ install it and the endpoint simply doesn't exist — every other feed keeps work
 duration. Export is asynchronous, non-blocking, and lossy: tracing never breaks the request.
 
 ```python
-from benzene.mesh import InMemoryTraceExporter, trace_middleware
+from benzene.mesh import QueueTraceExporter, trace_middleware
 
-exporter = InMemoryTraceExporter()
-pipeline = (
-    MiddlewarePipeline()
-    .use(trace_middleware(exporter, service="orders"))   # outermost: times the whole invocation
-    .use(mesh_interception(descriptor))
-)
+exporter = QueueTraceExporter()
+definition.middleware.insert(0, trace_middleware(exporter, service="orders"))  # outermost, before application_from
 ```
 
 ## Report into a collector
 
-`MeshFeedSender` pushes a service's four mesh feeds to a collector over any outbound `MessageSender`
-(Pub/Sub, SNS, Service Bus, or an HTTP POST) — `register` announces the descriptor once, and
+`MeshFeedSender` pushes a service's mesh feeds to a collector over any outbound `MessageSender`
+(Pub/Sub, SNS, Service Bus, or an HTTP POST) — `register` announces the Contract Document once, and
 `publish_heartbeat` / `publish_traces` / `publish_issues` stream the ongoing telemetry:
 
 ```python
-from benzene.mesh import IssueAggregator, MeshFeedSender
+from benzene.mesh import Heartbeat, IssueAggregator, MeshFeedSender
 
 feeds = MeshFeedSender(outbound_client)
-await feeds.register(descriptor)
-await feeds.publish_traces(exporter)   # any iterable of TraceEvent
+await feeds.register(document)                                   # benzene:mesh:register
+await feeds.publish_heartbeat(Heartbeat.for_document(            # registrationHash + serviceVersion
+    document, sent_at="2026-07-31T12:00:00Z", instance_id="orders-7f9c"))
+await feeds.publish_traces(exporter.drain())                     # any iterable of TraceEvent
 
 issues = IssueAggregator(service="orders")
 issues.record(topic="order:create", status="service-unavailable", exception_type="HttpError")
@@ -73,5 +66,5 @@ await feeds.publish_issues(issues.flush())   # deduplicated failure signatures; 
 ```
 
 Mirrors .NET's `Benzene.Mesh`, and contributes the `benzene.mesh` subpackage to the shared `benzene`
-namespace. The wire shapes (descriptor, TraceEvent, collector topics) are the cross-language mesh
-contract — a Python service and a .NET/Go/TypeScript one show up in the same mesh.
+namespace. The wire shapes (the registration, heartbeat, TraceEvent and collector topics) are the
+cross-language mesh contract — a Python service and a .NET/Go/TypeScript one show up in the same mesh.
