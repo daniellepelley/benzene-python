@@ -242,6 +242,22 @@ API. None touch the wire envelope, status vocabulary, or HTTP mapping (the inter
   (`MessageBuilder`, and the AWS/GCP/Azure native-event builders) encodes a dataclass body through the
   same `encode_body` policy the live transports use (camelCase fields — `orderId`, not `order_id`), so
   a passing in-memory test reflects real cross-language traffic instead of masking an interop gap.
+- **A default handler is a keyword, not a separate registration.** The spec's "handler the
+  application declared as the default" (core-concepts §2) is `default=True` on the registration you
+  already write — `@message("orders:place", version="v1", default=True)`, `Registry.register(...,
+  default=True)` — and the start-up report for a topic without one is a `NoDefaultHandlerWarning`, a
+  `UserWarning` you can filter or turn into an error in tests, rather than a log line.
+- **Settlement is one keyword on every one-way host.** Where .NET spreads settlement over per-binding
+  options (`RaiseOnFailureStatus`, `BatchFailureMode`, `AckMode`, `CommitOnlyOnSuccess`), every
+  one-way host here takes the same frozen dataclass, `settlement=Settlement(at_most_once=...,
+  ignore_unmatched_topics=...)`; the stream-only choice is a keyword on the loop that makes it
+  (`run_consumer_loop(stop_on_failure=True)` for Kafka's at-least-once mode). The asynchronous Lambda
+  envelope is `AwsLambdaApp(invocation_type="Event")`, the same spelling `LambdaMessageSender` uses.
+  The settlement behaviour itself is the spec's (transport-bindings §1, obligation 8).
+- **Restricting the envelope endpoint takes a container, not a predicate.**
+  `StandardPaths(invoke_topics=...)` accepts anything supporting `in` — a set of topic ids, or an
+  object whose `__contains__` applies a rule — where .NET takes a `Func<string, bool>`; a restricted
+  topic is answered `not-found` exactly as the spec requires.
 
 ## Conformance
 
