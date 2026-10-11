@@ -26,9 +26,11 @@ if TYPE_CHECKING:
 
 @dataclass
 class FakeRabbitMqMethod:
-    """A stand-in for a pika delivery ``method`` frame — carries the ``delivery_tag`` the loop acks."""
+    """A stand-in for a pika delivery ``method`` frame — the ``delivery_tag`` the loop acks, and the
+    ``routing_key`` the decode falls back to when the delivery carries no ``topic`` header."""
 
     delivery_tag: int = 1
+    routing_key: str = ""
 
 
 @dataclass
@@ -48,13 +50,22 @@ class FakeRabbitMqMessage:
 
 
 class RabbitMqMessageBuilder:
-    """Builds a :class:`FakeRabbitMqMessage` for a Benzene ``topic`` + body, headers as AMQP headers."""
+    """Builds a :class:`FakeRabbitMqMessage` for a Benzene ``topic`` + body, headers as AMQP headers.
+
+    An empty ``topic`` writes no ``topic`` header — a non-Benzene producer's delivery, which routes on
+    its ``routing_key`` (:meth:`with_routing_key`).
+    """
 
     def __init__(self, topic: str, delivery_tag: int = 1) -> None:
         self._topic = topic
         self._delivery_tag = delivery_tag
+        self._routing_key = ""
         self._headers: dict[str, str] = {}
         self._body: str = ""
+
+    def with_routing_key(self, routing_key: str) -> RabbitMqMessageBuilder:
+        self._routing_key = routing_key
+        return self
 
     def with_header(self, key: str, value: str) -> RabbitMqMessageBuilder:
         self._headers[key] = value
@@ -66,9 +77,10 @@ class RabbitMqMessageBuilder:
 
     def build(self) -> FakeRabbitMqMessage:
         headers: dict[str, Any] = {str(k): str(v) for k, v in self._headers.items()}
-        headers[TOPIC_HEADER] = self._topic
+        if self._topic:
+            headers[TOPIC_HEADER] = self._topic
         return FakeRabbitMqMessage(
-            method=FakeRabbitMqMethod(delivery_tag=self._delivery_tag),
+            method=FakeRabbitMqMethod(delivery_tag=self._delivery_tag, routing_key=self._routing_key),
             properties=FakeRabbitMqProperties(headers=headers),
             body=self._body.encode("utf-8"),
         )

@@ -14,8 +14,9 @@ RabbitMQ is a queue transport, so the binding follows the same shape as the Kafk
 bindings (transport-bindings §"RabbitMQ"):
 
 - **Topic** — resolved from the `topic` header carried inside the delivery's AMQP
-  `properties.headers` (the reserved metadata key; the cross-port convention of wire-contracts §2),
-  not the physical exchange or routing key.
+  `properties.headers` (the reserved metadata key; the cross-port convention of wire-contracts §2).
+  A delivery with no `topic` header falls back to its AMQP **routing key**, so a non-Benzene producer
+  still routes (`topicSources` in `transport-metadata-cases.json`); the header wins whenever present.
 - **Headers** — the delivery's other AMQP application headers, UTF-8 decoded, become the Benzene
   headers.
 - **Body** — the delivery body, decoded as the UTF-8 JSON body.

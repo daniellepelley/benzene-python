@@ -2,7 +2,8 @@
 
 A RabbitMQ delivery carries the Benzene **topic** in a ``topic`` header inside its AMQP
 ``properties.headers`` (the cross-port convention shared with SQS/SNS/Pub/Sub/Service Bus/Kafka,
-wire-contracts §2); the remaining application headers are the Benzene headers (UTF-8 decoded), and the
+wire-contracts §2) — or, when no such header is present, in its AMQP routing key, so a non-Benzene
+producer still routes; the remaining application headers are the Benzene headers (UTF-8 decoded), and the
 message body is the JSON body. There is **no response channel** — one delivery is one pipeline
 invocation and one DI scope, and the outcome **settles** the delivery (transport-bindings §1,
 obligation 8): acked when its invocation ended ``isSuccessful`` (``ignored`` included), otherwise
@@ -53,13 +54,16 @@ def decode_rabbitmq_message(method: Any, properties: Any, body: Any) -> dict[str
     """Decode a RabbitMQ delivery into a Benzene envelope ``{topic, headers, body}``.
 
     The Benzene topic is resolved out of the ``topic`` header carried in AMQP ``properties.headers``
-    (the reserved metadata key); every other header becomes a Benzene header. The message body (bytes)
-    is decoded as the UTF-8 JSON body. ``method`` (the delivery frame) is unused by the decode — the
-    loop reads its ``delivery_tag`` to ack — but is accepted so the signature matches pika's
-    ``(method, properties, body)`` delivery triple.
+    (the reserved metadata key); every other header becomes a Benzene header. A delivery with no topic
+    header falls back to the delivery's AMQP **routing key** (``method.routing_key``), so a message from
+    a non-Benzene producer still routes (``topicSources`` in ``transport-metadata-cases.json``); the
+    header wins whenever it is present. The message body (bytes) is decoded as the UTF-8 JSON body.
+    ``method`` is the delivery frame — the loop also reads its ``delivery_tag`` to ack.
     """
     raw_headers = getattr(properties, "headers", None)
     topic, headers = read_message_metadata(_decode_headers(raw_headers))
+    if not topic:
+        topic = _routing_key(method)
     if body is None:
         decoded = ""
     elif isinstance(body, (bytes, bytearray)):
@@ -67,6 +71,14 @@ def decode_rabbitmq_message(method: Any, properties: Any, body: Any) -> dict[str
     else:
         decoded = str(body)
     return {"topic": topic, "headers": headers, "body": decoded}
+
+
+def _routing_key(method: Any) -> str:
+    """The delivery's AMQP routing key (pika's ``Basic.Deliver`` / ``Basic.GetOk``), or ``""``."""
+    key = getattr(method, "routing_key", None)
+    if isinstance(key, (bytes, bytearray)):
+        return bytes(key).decode("utf-8", "replace")
+    return "" if key is None else str(key)
 
 
 class RabbitMqConsumerApp:

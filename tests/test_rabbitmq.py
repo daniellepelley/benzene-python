@@ -66,6 +66,32 @@ def test_decode_tolerates_absent_headers_and_body() -> None:
     assert envelope == {"topic": "", "headers": {}, "body": ""}
 
 
+def test_decode_falls_back_to_the_routing_key_when_no_topic_header_is_present() -> None:
+    # topicSources: a non-Benzene producer writes no topic header; the AMQP routing key routes it.
+    message = (
+        RabbitMqMessageBuilder("").with_routing_key("orders:place").with_header("tenant", "acme").build()
+    )
+    envelope = decode_rabbitmq_message(message.method, message.properties, message.body)
+    assert envelope["topic"] == "orders:place"
+    assert envelope["headers"] == {"tenant": "acme"}
+
+
+def test_the_topic_header_wins_over_the_routing_key() -> None:
+    message = RabbitMqMessageBuilder("orders:place").with_routing_key("orders.queue").build()
+    envelope = decode_rabbitmq_message(message.method, message.properties, message.body)
+    assert envelope["topic"] == "orders:place"
+
+
+def test_a_non_benzene_delivery_runs_its_routing_key_handler() -> None:
+    message = (
+        RabbitMqMessageBuilder("").with_routing_key("orders:place").with_body({"sku": "Z"}).build()
+    )
+    result = asyncio.run(
+        RabbitMqConsumerApp(_app()).handle_message(message.method, message.properties, message.body)
+    )
+    assert result.status == Status.CREATED and result.payload == {"sku": "Z"}
+
+
 # --- consumer dispatch + loop ------------------------------------------------------------------
 
 
