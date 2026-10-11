@@ -12,7 +12,7 @@ ids that are retired and not reused.
 |---|---|---|---|
 | **R1** | Hosted middleware pipeline behind a transport | `MiddlewarePipeline` + `message_router`, hosted by `BenzeneHttpApp`, the gRPC binding, and the three cloud hosts | every transport test suite |
 | **R2** | Topics served through the handler registry | `Registry` is the single source of truth; every host builds its app from it | `tests/test_core.py` |
-| **R3** | Health checks + HTTP `/benzene/health` | `HealthChecks` + `health_interception` (reserved `benzene:healthcheck`, answering `ok` with the verdict in `isHealthy`); the HTTP surface returns the `{isHealthy, healthChecks}` report, `200`/`503` by `isHealthy` | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
+| **R3** | Health checks: `benzene:healthcheck` intercepted, plus HTTP `/benzene/health` where there is an HTTP surface | `HealthChecks` + `health_interception` (reserved `benzene:healthcheck`, answering `ok` with the verdict in `isHealthy`) — installed by the startup, or by `application_from` from `StandardPaths(health=...)`, so one declaration answers both; the HTTP surface returns the `{isHealthy, healthChecks}` report, `200`/`503` by `isHealthy`. A message-only service meets R3 with the topic alone | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py`, `tests/test_cloud_service_profile.py` |
 | **R4** | Wire-envelope invocability + HTTP `/benzene/invoke` | `BenzeneMessageApplication.handle` is the envelope entry point; `StandardPaths` exposes `POST /benzene/invoke` (200 for every processed envelope, 400 only for a malformed one; `invoke_topics` restricts it) | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
 | **R5** | Registry-derived spec: the `benzene:spec` topic wherever the transport carries a reply, and `/benzene/spec` over HTTP | The cross-language **Contract Document** (contract-document.md), derived once at the composition root from `AppDefinition(contract=ContractInfo(...), outbound=...)`; the reserved `benzene:spec` topic is intercepted in the pipeline and answered with it wherever the transport carries a reply (`spec_interception`, installed by `application_from`) and `GET /benzene/spec` runs that topic through the pipeline (`not-implemented`/501 for a type or format it does not render) | `tests/test_contract_document.py`, `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py`, `contract-document-cases.json` |
 | **R7** | Default `/benzene/` standard paths, configurable | `StandardPaths(prefix="/benzene", ...)` — one config object, relocatable prefix; threaded into every HTTP-capable host | `tests/test_wellknown.py::test_prefix_is_configurable_and_relocates_every_surface` |
@@ -44,11 +44,16 @@ health = HealthChecks().add("db", check_db)
 app = BenzeneHttpApp.from_definition(
     AppDefinition(
         router=router,
-        standard_paths=StandardPaths(health=health),   # R3 + R4 + R5's route + R7
+        standard_paths=StandardPaths(health=health),   # R3 (topic + route) + R4 + R5's route + R7
         contract=ContractInfo("orders"),               # R5's document
     )
 )
 ```
+
+A message-only service (a queue consumer, no HTTP surface) meets R3 by intercepting
+`benzene:healthcheck` — `AppDefinition(middleware=[health_interception(health)], ...)` — and needs no
+`/benzene/health`; `StandardPaths(health=...)` on the definition installs the same interception, so
+an HTTP service declares its health once for both faces.
 
 The same `standard_paths=` argument works on `GcpFunctionsApp`, `AwsLambdaApp`, and `AzureFunctionsApp`,
 so a service claims the HTTP surfaces identically whether it runs under ASGI or a cloud function. Add

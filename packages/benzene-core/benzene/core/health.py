@@ -27,6 +27,10 @@ from .pipeline import Middleware, Next
 #: The reserved topic id a service intercepts to report its health.
 HEALTH_TOPIC = "benzene:healthcheck"
 
+#: The attribute :func:`health_interception` marks its middleware with, so a composition root's
+#: pipeline can be read for it (the profile's R3) without running it.
+_HEALTH_INTERCEPTION_MARK = "__benzene_health_interception__"
+
 
 class HealthStatus:
     """A check's status (wire-contracts §5) — its own vocabulary, distinct from the result statuses.
@@ -174,4 +178,10 @@ def health_interception(checks: HealthChecks, *, aliases: Iterable[str] = ()) ->
             return  # short-circuit: the reserved topic never reaches the router
         await next()
 
+    setattr(middleware, _HEALTH_INTERCEPTION_MARK, True)
     return middleware
+
+
+def intercepts_health(middleware: Middleware) -> bool:
+    """Whether ``middleware`` is a :func:`health_interception` — answers ``benzene:healthcheck``."""
+    return getattr(middleware, _HEALTH_INTERCEPTION_MARK, False) is True

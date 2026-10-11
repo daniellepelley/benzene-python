@@ -79,6 +79,7 @@ from .health import (
     HealthReport,
     HealthStatus,
     health_interception,
+    intercepts_health,
 )
 from .inprocess import (
     DuplicatePipelineError,
@@ -249,6 +250,7 @@ __all__ = [
     "error_payload",
     "exact_version",
     "health_interception",
+    "intercepts_health",
     "highest_version",
     "message",
     "message_router",

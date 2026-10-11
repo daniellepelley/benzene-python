@@ -130,7 +130,9 @@ app = BenzeneHttpApp.from_definition(
   set of topic ids, or any object whose `__contains__` applies a rule — and a topic outside it is
   answered `not-found`, exactly as if no handler matched.
 - **`GET /benzene/health`** (R3) — the `{isHealthy, healthChecks}` report (wire-contracts §5), `200`
-  when healthy and `503` when not, the report as the body either way. Enabled by passing `health`.
+  when healthy and `503` when not, the report as the body either way. Enabled by passing `health`;
+  declared on an `AppDefinition`, the same checks also answer the `benzene:healthcheck` topic in the
+  pipeline (`application_from` installs `health_interception` for them).
   The two health faces carry the same report: the transport-neutral `benzene:healthcheck` topic
   answers `ok` whenever the checks ran, with the report as its payload and the verdict in
   `isHealthy` (wire-contracts §5); this route maps that verdict onto the status line — the one place

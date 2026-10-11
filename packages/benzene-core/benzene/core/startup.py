@@ -23,6 +23,7 @@ from .contract import ContractDocument, ContractInfo, derive_contract, spec_inte
 from .declarations import OutboundRegistry
 from .dependencies import Container, Scope, ServiceOverride
 from .envelope import BenzeneMessageApplication
+from .health import health_interception, intercepts_health
 from .metadata import MetadataKeys
 from .pipeline import Middleware, MiddlewarePipeline
 from .registry import Registry
@@ -137,6 +138,11 @@ def application_from(definition: AppDefinition) -> BenzeneMessageApplication:
     tracing, auth — is exercised identically in deployment and in tests. When only a ``router`` is
     present, its handler definitions become the registry.
 
+    When the definition's ``standard_paths`` declare health checks, ``benzene:healthcheck`` is answered
+    from them in the pipeline (:func:`~benzene.core.health_interception`, after the startup's own
+    middleware, unless that already intercepts it), so the health a ``/benzene/health`` route reports
+    is also what a queue, a direct invoke or ``/benzene/invoke`` gets.
+
     When the definition declares a ``contract``, the Contract Document is derived **here, once** —
     so a component-name collision fails the build of the app, before the first message — and
     ``benzene:spec`` is answered by :func:`~benzene.core.spec_interception`, installed after the
@@ -145,6 +151,13 @@ def application_from(definition: AppDefinition) -> BenzeneMessageApplication:
     """
     registry = definition.handler_registry()
     middleware = list(definition.middleware)
+    # Health checks declared on the standard paths answer benzene:healthcheck in the pipeline too
+    # (profile R3: the topic is intercepted wherever the service runs, /benzene/health only where
+    # there is an HTTP surface) - one declaration, both surfaces, as for benzene:spec below. A
+    # startup that installed its own health_interception keeps it.
+    checks = getattr(definition.standard_paths, "health", None)
+    if checks is not None and not any(intercepts_health(m) for m in middleware):
+        middleware.append(health_interception(checks))
     document = definition.contract_document()
     if document is not None:
         middleware.append(spec_interception(document))

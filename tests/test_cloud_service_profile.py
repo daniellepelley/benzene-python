@@ -14,7 +14,14 @@ import asyncio
 import json
 from dataclasses import dataclass
 
-from benzene.core import AppDefinition, ContractInfo, HealthChecks, Registry, application_from
+from benzene.core import (
+    AppDefinition,
+    ContractInfo,
+    HealthChecks,
+    Registry,
+    application_from,
+    health_interception,
+)
 from benzene.http import StandardPaths
 from benzene.mesh import (
     MESH_REQUIREMENT_IDS,
@@ -97,11 +104,62 @@ def test_mesh_ids_never_reach_profile_missing() -> None:
 def test_message_only_service_misses_the_http_surfaces() -> None:
     registry = Registry().register("orders:place", _place, request_type=Order)
     report = evaluate_cloud_service_profile(AppDefinition(registry=registry))
-    # No standard_paths → health (R3) and the default paths (R7) are absent, and with no ContractInfo
-    # benzene:spec has nothing to answer with (R5). R1 (hostable) + R2 (a topic) + R4
+    # Nothing intercepts benzene:healthcheck (R3), there are no standard paths (R7), and with no
+    # ContractInfo benzene:spec has nothing to answer with (R5). R1 (hostable) + R2 (a topic) + R4
     # (envelope-invocable) still hold.
     assert report.missing == ["R3", "R5", "R7"]
     assert set(report.missing).isdisjoint({"R1", "R2", "R4"})
+    assert "benzene:healthcheck" in report.reason("R3")
+
+
+def test_r3_is_the_health_topic_for_a_message_only_service() -> None:
+    # No HTTP surface: R3 is intercepting benzene:healthcheck; there is no /benzene/health to require.
+    registry = Registry().register("orders:place", _place, request_type=Order)
+    checks = HealthChecks().add("core", lambda: True)
+    definition = AppDefinition(registry=registry, middleware=[health_interception(checks)])
+    report = evaluate_cloud_service_profile(definition)
+    assert "R3" not in report.missing
+    assert "benzene:healthcheck" in report.reason("R3")
+    assert "/benzene/health" not in report.reason("R3")
+    # ... and the topic really is answered, over the envelope, with the health report.
+    response = asyncio.run(
+        application_from(definition).handle({"topic": "benzene:healthcheck", "headers": {}, "body": ""})
+    )
+    assert response["statusCode"] == "ok"
+    assert json.loads(response["body"])["isHealthy"] is True
+
+
+def test_r3_needs_the_http_route_where_there_is_an_http_surface() -> None:
+    # The topic alone is not enough once the service serves HTTP: /benzene/health is required too.
+    checks = HealthChecks().add("core", lambda: True)
+    definition = _full_definition()
+    definition.standard_paths.health = None
+    definition.middleware.append(health_interception(checks))
+    report = evaluate_cloud_service_profile(definition)
+    assert report.missing == ["R3"]
+    assert "/benzene/health" in report.reason("R3")
+
+
+def test_standard_paths_health_answers_the_health_topic_in_the_pipeline() -> None:
+    # One declaration, both surfaces: StandardPaths(health=...) also intercepts benzene:healthcheck,
+    # so a queue or a direct invoke asking for health is answered, not routed to not-found.
+    definition = _full_definition()
+    assert "R3" not in evaluate_cloud_service_profile(definition).missing
+    response = asyncio.run(
+        application_from(definition).handle({"topic": "benzene:healthcheck", "headers": {}, "body": ""})
+    )
+    assert response["statusCode"] == "ok"
+    assert set(json.loads(response["body"])["healthChecks"]) == {"core"}
+
+
+def test_a_startups_own_health_interception_is_kept() -> None:
+    own = HealthChecks().add("own", lambda: True)
+    definition = _full_definition()
+    definition.middleware.append(health_interception(own))
+    response = asyncio.run(
+        application_from(definition).handle({"topic": "benzene:healthcheck", "headers": {}, "body": ""})
+    )
+    assert set(json.loads(response["body"])["healthChecks"]) == {"own"}
 
 
 def test_r5_is_the_spec_topic_for_a_message_only_service() -> None:

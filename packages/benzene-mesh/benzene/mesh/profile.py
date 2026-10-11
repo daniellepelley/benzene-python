@@ -36,7 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
-from benzene.core import AppDefinition
+from benzene.core import AppDefinition, intercepts_health
 
 #: The profile's identifier, as carried in the document's ``profile.name`` (cloud-service-profile.md).
 PROFILE_NAME = "cloud-service"
@@ -196,15 +196,28 @@ def evaluate_cloud_service_profile(
         )
     )
 
-    # R3 — health checks. The observable signal is the /benzene/health aggregate being provisioned.
-    r3 = has_http and getattr(paths, "health", None) is not None
+    # R3 — health checks. The service intercepts benzene:healthcheck in the pipeline (a
+    # health_interception the startup installed, or the HealthChecks on standard_paths, which
+    # application_from installs as one), and — only where there is an HTTP surface — exposes the
+    # aggregate at /benzene/health too. A message-only service needs only the topic.
+    http_health = getattr(paths, "health", None) is not None
+    intercepted = http_health or any(intercepts_health(m) for m in definition.middleware)
+    health_route = not has_http_surface or http_health
+    r3 = intercepted and health_route
     checks.append(
         RequirementCheck(
             "R3",
             r3,
-            "health aggregate provisioned"
+            "health checks provisioned: the pipeline answers benzene:healthcheck"
+            + (", and /benzene/health serves the aggregate" if has_http_surface else "")
             if r3
-            else "no HealthChecks on standard_paths (benzene:healthcheck / /benzene/health)",
+            else (
+                "nothing intercepts benzene:healthcheck (install health_interception(checks), or "
+                "declare StandardPaths(health=checks) where there is an HTTP surface)"
+                if not intercepted
+                else "the service has an HTTP surface but /benzene/health is not provisioned "
+                "(standard_paths=StandardPaths(health=checks))"
+            ),
         )
     )
 
