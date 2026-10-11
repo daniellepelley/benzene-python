@@ -14,7 +14,8 @@ must answer with it — probed as a ``benzene:spec`` envelope over ``/benzene/in
 
 The separate **meshed-service** claim (mesh.md §7.1) is reported apart, on
 :attr:`CloudServiceProbeReport.mesh`, and is never part of :attr:`~CloudServiceProbeReport.not_satisfied`
-or :attr:`~CloudServiceProbeReport.is_clean`. A black-box probe genuinely cannot observe it, so both its
+or :attr:`~CloudServiceProbeReport.is_clean` (a meshed service is a Cloud Service plus M1 and M2, so
+the profile verdict above is its prerequisite). A black-box probe genuinely cannot observe it, so both its
 requirements stay ``inconclusive`` by design and are never silently upgraded:
 
 - **M1**'s three feeds — registration, heartbeats, traces — are sent to a collector, which a probe

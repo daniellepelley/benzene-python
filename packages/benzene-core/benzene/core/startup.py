@@ -45,7 +45,8 @@ class AppDefinition:
     ``contract`` turns the service's self-description on (contract-document.md): the one
     :class:`~benzene.core.ContractDocument` is derived from the registry, ``outbound``'s event and
     send declarations, the router's HTTP routes and the standard paths' envelope endpoint, and the
-    ``benzene:spec`` topic answers with it — over every transport, ``GET /benzene/spec`` included.
+    ``benzene:spec`` topic answers with it — in the pipeline, so wherever the transport carries a reply,
+    ``GET /benzene/spec`` included.
     """
 
     registry: Registry | None = None

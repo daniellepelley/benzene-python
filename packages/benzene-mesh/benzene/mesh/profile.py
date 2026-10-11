@@ -223,8 +223,9 @@ def evaluate_cloud_service_profile(
     )
 
     # R5 — the Contract Document is derived and exposed: a declared ContractInfo makes application_from
-    # answer the reserved benzene:spec topic with it on every transport, and — where the service has an
-    # HTTP surface — /benzene/spec must route to it too.
+    # intercept the reserved benzene:spec topic in the pipeline, answering it wherever the transport
+    # carries a reply (a one-way binding cannot answer, and that never costs R5), and — where the
+    # service has an HTTP surface — /benzene/spec must route to it too.
     has_document = definition.contract is not None
     spec_route = not has_http_surface or bool(getattr(paths, "spec", False))
     r5 = has_document and spec_route
@@ -232,8 +233,9 @@ def evaluate_cloud_service_profile(
         RequirementCheck(
             "R5",
             r5,
-            "derived spec provisioned: benzene:spec answers with the Contract Document on every "
-            "transport" + (", and /benzene/spec routes to it" if has_http_surface else "")
+            "derived spec provisioned: the pipeline answers benzene:spec with the Contract Document "
+            "wherever the transport carries a reply"
+            + (", and /benzene/spec routes to it" if has_http_surface else "")
             if r5
             else (
                 "no ContractInfo on the AppDefinition: benzene:spec has no derived document to answer "

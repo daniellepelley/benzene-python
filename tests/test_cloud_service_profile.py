@@ -74,6 +74,17 @@ def test_an_unmeshed_service_still_claims_the_profile_in_full() -> None:
     assert "trace propagation not declared" in report.reason("M2")
 
 
+def test_the_meshed_claim_requires_the_profile() -> None:
+    # A meshed service is a Cloud Service plus M1 and M2 (mesh.md §7.1): M1/M2 met but a profile gap
+    # (no health checks → R3) is not meshed.
+    definition = _full_definition()
+    definition.standard_paths.health = None
+    report = evaluate_cloud_service_profile(definition, mesh_feeds=True, trace_propagation=True)
+    assert report.missing == ["R3"]
+    assert report.mesh_missing == []
+    assert not report.is_meshed
+
+
 def test_mesh_ids_never_reach_profile_missing() -> None:
     # The worst case for the mesh claim on the worst-wired service: missing stays within R1–R5/R7.
     report = evaluate_cloud_service_profile(AppDefinition())
@@ -93,15 +104,16 @@ def test_message_only_service_misses_the_http_surfaces() -> None:
     assert set(report.missing).isdisjoint({"R1", "R2", "R4"})
 
 
-def test_r5_is_the_spec_topic_on_every_transport_for_a_message_only_service() -> None:
-    # No HTTP surface: R5 is benzene:spec answering with the derived document, which a ContractInfo
-    # provisions on every transport — there is no /benzene/spec half to require.
+def test_r5_is_the_spec_topic_for_a_message_only_service() -> None:
+    # No HTTP surface: R5 is the pipeline answering benzene:spec with the derived document wherever the
+    # transport carries a reply, which a ContractInfo provisions — there is no /benzene/spec half to
+    # require, and a one-way binding that cannot answer never costs R5.
     registry = Registry().register("orders:place", _place, request_type=Order)
     report = evaluate_cloud_service_profile(
         AppDefinition(registry=registry, contract=ContractInfo("orders"))
     )
     assert "R5" not in report.missing
-    assert "every transport" in report.reason("R5")
+    assert "wherever the transport carries a reply" in report.reason("R5")
 
 
 def test_r5_needs_the_http_route_where_there_is_an_http_surface() -> None:
