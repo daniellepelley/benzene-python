@@ -53,9 +53,12 @@ outbound = with_correlation_id(              # inject x-correlation-id ONCE (sta
 - **`with_retry`** returns at once on success or a *real* failure (a `not-found` won't get better by
   retrying); pass a `backoff` hook to sleep between attempts.
 - **`with_trace_propagation`** forwards the trace of the *current* invocation (set by
-  `trace_middleware`), so the callee joins the same trace and the mesh collector can attribute
-  invocation/error stats to the provider edge this service already declares — the `sends`/`events` of
-  the Contract Document it registers (mesh.md §2, §4) — the trace never creates the edge itself.
+  `trace_middleware`) — `traceparent`, and the inbound `tracestate` unchanged — so the callee joins the
+  same trace. Wrap the sender you publish events through too: a meshed service forwards trace context
+  on every outbound message, sends and published events alike (mesh.md §7.1, M2). The joined trace lets
+  the mesh collector attribute invocation/error stats to the provider edge this service already
+  declares — the `sends`/`events` of the Contract Document it registers (mesh.md §2, §4) — the trace
+  never creates the edge itself.
 
 ## 3. Inject it through the composition root
 

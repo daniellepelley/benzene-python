@@ -136,9 +136,11 @@ issues.record(topic="orders:place", status="service-unavailable", exception_type
 await feeds.publish_issues(issues.flush())           # flush() resets the window
 ```
 
-To advertise the [Cloud Service Profile](../cloud-service-profile.md) verdict on the document (served
-and registered alike), wrap the definition: `declare_cloud_service_profile(definition,
-mesh_feeds=True, trace_propagation=True)`.
+To advertise the [Cloud Service Profile](../cloud-service-profile.md) verdict (R1–R5, R7) on the
+document (served and registered alike), wrap the definition: `declare_cloud_service_profile(definition)`.
+Whether the service is also **meshed** (mesh.md §7.1: M1 — the feeds above — and M2 — trace context
+joined and forwarded) is a separate claim that never enters `profile.missing`; grade it with
+`evaluate_cloud_service_profile(definition, mesh_feeds=True, trace_propagation=True).mesh_missing`.
 
 ## Adopt only what you need
 

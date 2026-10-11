@@ -361,20 +361,22 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     `/benzene/mesh-ui/`. Verified live end to end (estate, functional map, topology, usage) then torn down; the
     artifact field set is pinned against the contract by `tests/test_mesh_artifact_contract.py`.
 16. **(done)** The Cloud Service Profile **self-check** — `benzene.mesh.evaluate_cloud_service_profile`
-    grades a composition root's `AppDefinition` against the profile's R1–R8 at wiring time and returns a
+    grades a composition root's `AppDefinition` against the profile's R1–R5 and R7 at wiring time and returns a
     `CloudServiceProfileReport` whose `to_profile()` rides on the Contract Document's optional
     `profile` field (`{name, missing}`, `missing` omitted when conformant, outside both hashes; set by
     `declare_cloud_service_profile`), so `benzene:spec` and the mesh registration both say which
-    requirements the service's own wiring knows it is missing. R1–R5/R7 are read off the definition (registry + `StandardPaths`); R6 (mesh
-    feeds) and R8 (outbound `traceparent`) — the pair the spec calls structurally unobservable — are
-    declared explicitly. Dogfooded by [`examples/mesh_dashboard/profile.py`](examples/mesh_dashboard/profile.py).
+    requirements the service's own wiring knows it is missing. R1–R5/R7 are read off the definition
+    (registry, `StandardPaths`, `ContractInfo`). The separate meshed-service claim (mesh.md §7.1) — M1
+    (mesh feeds) and M2 (trace context propagation), the profile's former R6/R8 — is declared
+    explicitly and reported on `report.mesh`, never in `profile.missing`. Dogfooded by [`examples/mesh_dashboard/profile.py`](examples/mesh_dashboard/profile.py).
 17. **(done)** The Cloud Service Profile **live-probe checker** — `benzene.mesh.probe_cloud_service`
-    (and the `python -m benzene.mesh.probe <url>` CLI) audits a *deployed* service against R1–R8 over
+    (and the `python -m benzene.mesh.probe <url>` CLI) audits a *deployed* service against R1–R5 and R7 over
     plain HTTP, speaking only the language-neutral `/benzene/*` surfaces so it grades any port's service
     the same way. Each requirement gets a tri-state verdict (satisfied / not-satisfied / inconclusive)
-    with a reason; the three the spec calls structurally unobservable from outside (R6's collector-
-    delivery half, R8, and R7 under a non-default prefix) stay inconclusive by design rather than being
-    guessed. The outside-in counterpart to item 16's self-check.
+    with a reason; R5 is audited on both halves (`/benzene/spec` and a `benzene:spec` envelope over
+    `/benzene/invoke`), R7 under a non-default prefix stays inconclusive, and the meshed-service M1/M2
+    — not observable from outside — are reported separately as inconclusive by design rather than
+    being guessed. The outside-in counterpart to item 16's self-check.
 18. **(done)** Kafka transport (`benzene-kafka`) — a **self-hosted consumer** (Benzene topic from the
     record's `topic` header, headers UTF-8, one record per pipeline invocation/scope, no response
     channel → settlement; `run_consumer_loop` commits acknowledged offsets and is skip-and-continue by

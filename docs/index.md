@@ -72,7 +72,7 @@ idiomatically in Python and interoperates on the wire with the .NET, Go, and Typ
 ## Concepts & the spec
 
 - **[Cloud Service Profile conformance](cloud-service-profile.md)** — how this port satisfies the
-  profile's R1–R8, mapped to the API and the test that proves each.
+  profile's R1–R5 and R7 (and the meshed-service M1/M2), mapped to the API and the test that proves each.
 
 Benzene Python is faithful to the language-neutral specification. The authoritative documents live
 in the main Benzene repository:

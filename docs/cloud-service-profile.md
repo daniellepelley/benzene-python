@@ -1,9 +1,12 @@
 # Cloud Service Profile conformance
 
 The [Cloud Service Profile](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/cloud-service-profile.md)
-is Benzene's named conformance target: the operational requirements (**R1–R8**) a deployable service
-layers onto the core model. This port implements all eight. The table maps each requirement to the
-Python API that satisfies it and the test that proves it.
+is Benzene's named conformance target: the operational requirements (**R1–R5, R7**) a deployable
+service layers onto the core model — the surfaces any tool can pull from the service itself, with no
+collector. This port implements all six. The table maps each requirement to the Python API that
+satisfies it and the test that proves it. Joining a mesh is the separate **meshed-service** claim
+(mesh.md §7.1, [below](#the-meshed-service-claim-m1-m2)); its M1 and M2 were the profile's R6 and R8,
+ids that are retired and not reused.
 
 | # | Requirement | Implementation | Proof |
 |---|---|---|---|
@@ -11,15 +14,26 @@ Python API that satisfies it and the test that proves it.
 | **R2** | Topics served through the handler registry | `Registry` is the single source of truth; every host builds its app from it | `tests/test_core.py` |
 | **R3** | Health checks + HTTP `/benzene/health` | `HealthChecks` + `health_interception` (reserved `benzene:healthcheck`, answering `ok` with the verdict in `isHealthy`); the HTTP surface returns the `{isHealthy, healthChecks}` report, `200`/`503` by `isHealthy` | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
 | **R4** | Wire-envelope invocability + HTTP `/benzene/invoke` | `BenzeneMessageApplication.handle` is the envelope entry point; `StandardPaths` exposes `POST /benzene/invoke` (200 for every processed envelope, 400 only for a malformed one; `invoke_topics` restricts it) | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
-| **R5** | Registry-derived spec at `/benzene/spec` | The cross-language **Contract Document** (contract-document.md), derived once at the composition root from `AppDefinition(contract=ContractInfo(...), outbound=...)`; the reserved `benzene:spec` topic answers with it (`spec_interception`, installed by `application_from`) and `GET /benzene/spec` runs that topic through the pipeline (`not-implemented`/501 for a type or format it does not render) | `tests/test_contract_document.py`, `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py`, `contract-document-cases.json` |
-| **R6** | Mesh service-side feeds | `benzene:spec` answering with R5's document (the self-description), then the three feeds: registration (`MeshFeedSender.register(registration_document(definition))` — that same document, mesh.md §2), heartbeats (`Heartbeat.for_document`, carrying `registrationHash` + `serviceVersion`), and traces (`trace_middleware`, one `TraceEvent` per invocation) | `tests/test_mesh.py`, `tests/test_cloud_service_profile.py`, `contract-document-cases.json`'s producer groups, `mesh-trace-cases.json` |
+| **R5** | Registry-derived spec: the `benzene:spec` topic wherever the transport carries a reply, and `/benzene/spec` over HTTP | The cross-language **Contract Document** (contract-document.md), derived once at the composition root from `AppDefinition(contract=ContractInfo(...), outbound=...)`; the reserved `benzene:spec` topic is intercepted in the pipeline and answered with it wherever the transport carries a reply (`spec_interception`, installed by `application_from`) and `GET /benzene/spec` runs that topic through the pipeline (`not-implemented`/501 for a type or format it does not render) | `tests/test_contract_document.py`, `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py`, `contract-document-cases.json` |
 | **R7** | Default `/benzene/` standard paths, configurable | `StandardPaths(prefix="/benzene", ...)` — one config object, relocatable prefix; threaded into every HTTP-capable host | `tests/test_wellknown.py::test_prefix_is_configurable_and_relocates_every_surface` |
-| **R8** | Join + propagate W3C trace context | `trace_middleware` joins an inbound `traceparent`; `with_trace_propagation` forwards the current span to outbound calls | `tests/test_mesh.py` (outbound trace propagation), `mesh-trace-cases` |
+
+## The meshed-service claim (M1, M2)
+
+A **meshed** service (mesh.md §7.1) is a Cloud Service plus:
+
+| # | Requirement | Implementation | Proof |
+|---|---|---|---|
+| **M1** | Mesh service-side feeds (formerly R6) | registration (`MeshFeedSender.register(registration_document(definition))` — R5's document, mesh.md §2), heartbeats (`Heartbeat.for_document`, carrying `registrationHash` + `serviceVersion`), and traces (`trace_middleware`, one `TraceEvent` per invocation) | `tests/test_mesh.py`, `tests/test_cloud_service_profile.py`, `contract-document-cases.json`'s producer groups, `mesh-trace-cases.json` |
+| **M2** | Join + propagate W3C trace context on every outbound message (formerly R8) | `trace_middleware` joins an inbound `traceparent` (keeping its `tracestate`); `with_trace_propagation` forwards `traceparent` + `tracestate` on whatever `MessageSender` it wraps — sends and published events share that one port, so wrapping the event publisher covers events | `tests/test_mesh.py` (outbound trace propagation, `tracestate`, a published event fanned out to two subscribers), `mesh-trace-cases` |
+
+The self-check reports M1/M2 on `report.mesh` (`mesh_missing`, `is_meshed`), never in `missing` or the
+document's `profile.missing`: a service that does not join a mesh still claims the profile in full. The
+meshed claim requires the profile — `is_meshed` is true only when `is_conformant` is too.
 
 ## Claiming the profile
 
 A service claims the profile by hosting its handlers behind a transport (R1/R2 — automatic) and wiring
-the operational surfaces. Over HTTP that is one `StandardPaths` plus the mesh feeds:
+the operational surfaces. Over HTTP that is one `StandardPaths` and a `ContractInfo`:
 
 ```python
 from benzene.core import AppDefinition, ContractInfo, HealthChecks
@@ -38,8 +52,8 @@ app = BenzeneHttpApp.from_definition(
 
 The same `standard_paths=` argument works on `GcpFunctionsApp`, `AwsLambdaApp`, and `AzureFunctionsApp`,
 so a service claims the HTTP surfaces identically whether it runs under ASGI or a cloud function. Add
-`trace_middleware` and the `MeshFeedSender` (registering the same document) for R6/R8 — see
-[joining the mesh](cookbooks/joining-the-mesh.md).
+`trace_middleware` and the `MeshFeedSender` (registering the same document) to be meshed too (M1/M2)
+— see [joining the mesh](cookbooks/joining-the-mesh.md).
 
 A service booted from a `BenzeneStartUp` declares the surfaces once, in the composition root, by
 returning them on its `AppDefinition` (alongside `router` and `middleware`) — then every host and the
@@ -59,8 +73,8 @@ class OrdersStartUp(BenzeneStartUp):
 
 ## One document: served and registered
 
-R5's Contract Document is **derived from the registrations** once, at the composition root, and R6
-reuses it rather than describing the service a second time:
+R5's Contract Document is **derived from the registrations** once, at the composition root, and the
+mesh registration (M1) reuses it rather than describing the service a second time:
 
 - **Served** — `/benzene/spec` and the reserved `benzene:spec` topic answer with it
   (contract-document.md): `{schemaDialect, service, serviceVersion?, versionScheme?, description?,
@@ -74,5 +88,6 @@ reuses it rather than describing the service a second time:
   hashes, so the two can never disagree; heartbeats carry its `registrationHash`.
 
 The self-check's verdict rides on the document's `profile`
-(`benzene.mesh.declare_cloud_service_profile`); the probe evidences R6's observable half by invoking
-`benzene:spec`.
+(`benzene.mesh.declare_cloud_service_profile`): `{"name": "cloud-service", "missing": [...]}`, where
+`missing` lists only R1–R5/R7 ids and is omitted when none. The probe audits R5's topic half by
+invoking `benzene:spec` over `/benzene/invoke`, and its HTTP half at `/benzene/spec`.

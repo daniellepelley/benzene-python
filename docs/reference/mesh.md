@@ -97,8 +97,10 @@ contract.
 
 ## The Cloud Service Profile self-check
 
-The [Cloud Service Profile](../cloud-service-profile.md) names eight requirements (R1–R8) a service
-must satisfy to be a first-class fleet citizen. `evaluate_cloud_service_profile` grades a composition
+The [Cloud Service Profile](../cloud-service-profile.md) names six requirements (R1–R5, R7) a service
+must satisfy so any tool can pull its operational surfaces from it with no collector; being **meshed**
+(mesh.md §7.1) adds M1 (registration, heartbeats, traces) and M2 (trace context propagation) — the
+profile's former R6 and R8, ids that are retired. `evaluate_cloud_service_profile` grades a composition
 root's [`AppDefinition`](core.md) against them at **wiring time** — a self-assessment of what the setup
 provisioned, not a runtime probe — and `declare_cloud_service_profile` puts its verdict on the
 Contract Document's optional `profile` field, so `benzene:spec` serves it and the registration carries
@@ -109,32 +111,36 @@ is missing.
 from benzene.mesh import declare_cloud_service_profile, evaluate_cloud_service_profile
 
 report = evaluate_cloud_service_profile(definition, mesh_feeds=True, trace_propagation=True)
-report.is_conformant          # True when every requirement is satisfied
-report.missing                # e.g. ["R6", "R8"] — the ids the wiring does not satisfy, in order
-report.reason("R6")           # the explanation recorded for one requirement
+report.is_conformant          # True when every profile requirement (R1–R5, R7) is satisfied
+report.missing                # e.g. ["R3", "R7"] — the profile ids the wiring does not satisfy, in order
+report.reason("R7")           # the explanation recorded for one requirement (R or M)
 report.to_profile()           # {"name": "cloud-service"} (or {..., "missing": [...]})
+report.mesh_missing           # e.g. ["M2"] — the meshed-service claim, reported separately
+report.is_meshed              # the profile in full, plus M1 and M2
 
-definition = declare_cloud_service_profile(definition, mesh_feeds=True, trace_propagation=True)
+definition = declare_cloud_service_profile(definition)
 # definition.contract.profile == report.to_profile(); served on benzene:spec and registered alike
 ```
 
-- Most requirements are read straight off the definition: **R1** (a registry/router to host), **R2**
-  (≥1 non-reserved application topic), and — from the [`StandardPaths`](http.md) declaration — **R3**
-  (health aggregate), **R4** (`/benzene/invoke` enabled), **R5** (derived spec), and **R7** (the
-  surfaces under the default `/benzene/` prefix).
-- Two requirements are structurally invisible to definition inspection and are passed explicitly —
-  exactly the pair the profile spec singles out as unobservable from a single service:
-  **`mesh_feeds`** (R6's three feeds — registration, heartbeats, traces — whose *sending* is wired
-  into the host loop) and **`trace_propagation`** (R8 — outbound clients forwarding `traceparent`).
-  The default for each is the honest "not provisioned". R6 also needs the self-description R5's
-  `contract` provisions (`benzene:spec` answering with the document a registration carries), so it is
-  unmet without one.
+- The profile is read straight off the definition: **R1** (a registry/router to host), **R2** (≥1
+  non-reserved application topic), **R5** (a `contract`, so the pipeline answers `benzene:spec` with
+  the derived document wherever the transport carries a reply — a one-way binding never costs R5 — plus — where there is an HTTP surface — `/benzene/spec`), and — from the
+  [`StandardPaths`](http.md) declaration — **R3** (health aggregate), **R4** (`/benzene/invoke`
+  enabled) and **R7** (the surfaces under the default `/benzene/` prefix).
+- The meshed-service claim's two requirements are invisible to definition inspection and are passed
+  explicitly: **`mesh_feeds`** (M1's three feeds — registration, heartbeats, traces — whose *sending* is
+  wired into the host loop) and **`trace_propagation`** (M2 — inbound trace context joined and outbound
+  clients forwarding `traceparent`). The default for each is the honest "not provisioned". M1 also
+  needs a document to register (the `contract`), so it is unmet without one. They land on
+  `report.mesh` (`RequirementCheck`s for M1, M2) and **never** in `missing` / `profile.missing`, which
+  is why `declare_cloud_service_profile` takes neither.
 - Like `degraded`, the `profile` field is **outside both document hashes**, and never changes because
   of runtime degradation — an unreachable collector does not make a conformant service stop claiming
   the profile.
 
-`CloudServiceProfileReport` carries one `RequirementCheck(id, satisfied, reason)` per requirement
-(`REQUIREMENT_IDS` lists them, R1–R8); `PROFILE_NAME` is `"cloud-service"`. See the runnable
+`CloudServiceProfileReport` carries one `RequirementCheck(id, satisfied, reason)` per requirement on
+`checks` (`REQUIREMENT_IDS` lists them: R1–R5, R7) and on `mesh` (`MESH_REQUIREMENT_IDS`: M1, M2);
+`PROFILE_NAME` is `"cloud-service"`. See the runnable
 [`mesh_dashboard` profile example](https://github.com/daniellepelley/benzene-python/tree/main/examples/mesh_dashboard/profile.py).
 
 ### The live-probe checker — `probe_cloud_service`
@@ -149,19 +155,21 @@ Contract Document every port's `/benzene/spec` answers with. Each requirement ge
 from benzene.mesh import probe_cloud_service
 
 report = await probe_cloud_service("https://orders.example.com")   # inject http= in tests
-report.not_satisfied      # ids positively found unmet — the actionable failures
-report.inconclusive       # ids a black-box probe can't verify (never a failure by itself)
-report.is_clean           # True when nothing was positively found unmet
-report.to_payload()       # {"baseUrl", "requirements": [{"id", "verdict", "reason"}, ...]}
+report.not_satisfied      # profile ids positively found unmet — the actionable failures
+report.inconclusive       # profile ids a black-box probe can't verify (never a failure by itself)
+report.is_clean           # True when no profile requirement was positively found unmet
+report.mesh               # the meshed-service claim (M1, M2), reported separately
+report.to_payload()       # {"baseUrl", "requirements": [{"id", "verdict", "reason"}, ...], "mesh": [...]}
 ```
 
-A black-box probe cannot verify everything a self-check can, so three verdicts are `inconclusive`
-**by design**, never silently upgraded (cloud-service-profile.md §5): **R8** (propagation needs a second
-service or a collector to observe forwarded `traceparent`), **R6** (the probe invokes `benzene:spec`
-over `/benzene/invoke` and checks it answers with the Contract Document a registration carries — the
-observable half; delivery of the three feeds to a collector is not observable), and **R7** whenever
-the caller probes a non-default prefix (the service's own defaults become unknowable). R6 is
-`not-satisfied` when `benzene:spec` does not answer with a Contract Document. The CLI form is
+The probe audits **R1–R5 and R7**. **R5** has two halves and both must hold: `GET /benzene/spec`
+returns a Contract Document, and a `benzene:spec` envelope over `/benzene/invoke` answers with one
+(either half positively unmet → `not-satisfied`). **R7** is `inconclusive` whenever the caller probes a
+non-default prefix (the service's own defaults become unknowable). The meshed-service claim is
+reported apart on `report.mesh` and is **not observable from outside**, so both are `inconclusive` by
+design, never silently upgraded and never counted toward `is_clean`: **M1** (registration, heartbeat
+and trace delivery to a collector — the register body is the document R5 already audits) and **M2**
+(propagation needs a second service or a collector to observe forwarded `traceparent`). The CLI form is
 `python -m benzene.mesh.probe <url> [--prefix /benzene] [--json]`, exiting non-zero when a requirement
 is positively unmet.
 
@@ -234,9 +242,14 @@ Wire keys: `traceId`, `spanId`, `service`, `topic`, `status` (always present) pl
 *during* the invocation can forward it (mesh.md §3):
 
 - `current_traceparent()` — the W3C `traceparent` (`00-<traceId>-<spanId>-01`) for the invocation
-  currently running, or `None` outside a trace.
+  currently running, or `None` outside a trace. `current_tracestate()` — the inbound `tracestate` of
+  the trace it joined, carried forward unchanged (`None` when there was none, or when the inbound
+  `traceparent` was invalid and a fresh trace started).
 - `with_trace_propagation(sender)` (class `TracePropagatingMessageSender`) — wraps a `MessageSender` so
-  each published message carries the current `traceparent`; the downstream service then joins the same
+  each outbound message carries the current `traceparent` and `tracestate` (M2, mesh.md §7.1). Sends
+  (one-way or with a reply) and published events go through the same `MessageSender` port in this
+  port, so wrap the event publisher as well as the send client and both are covered; the downstream
+  service then joins the same
   trace, so the resulting `TraceEvent`s feed the collector's invocation/error stats for the edge the
   registration already declared (mesh.md §4) — trace parentage is never what admits the edge itself. A
   `traceparent` the caller already set is left untouched. Compose it with the core client decorators:
@@ -500,7 +513,7 @@ collector.query_fleet({})
 `MeshPoller`, `HttpServiceSource`, `CallableServiceSource`, `ServiceSource`, `PollResult`, `PollError`,
 `trace_middleware`, `TraceEvent`, `TraceExporter`,
 `InMemoryTraceExporter`, `QueueTraceExporter`, `parse_traceparent`, `new_trace_id`, `new_span_id`,
-`current_traceparent`, `with_trace_propagation`, `TracePropagatingMessageSender`,
+`current_traceparent`, `current_tracestate`, `with_trace_propagation`, `TracePropagatingMessageSender`,
 `MeshFeedSender`, `Heartbeat`, `Issue`, `IssueBatch`, `IssueAggregator`, `classify`,
 `issue_fingerprint`, `CLASSIFICATIONS`, `is_contract_document`, `spec_service`,
 `spec_service_version`, `spec_registration_hash`, `spec_entries`, `spec_topic_ids`, `known_members`,
