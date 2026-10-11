@@ -7,8 +7,11 @@ of running the handler again — so "charge the card" or "ship the order" happen
 message arrived twice.
 
 Only outcomes matching ``remember_when`` are stored (successes, by default): a transient failure is
-*not* remembered, so a redelivery is free to retry it — dedupe must never pin a failure in place. A
-message with no idempotency key passes straight through (nothing to dedupe on).
+*not* remembered, so a redelivery is free to retry it — dedupe must never pin a failure in place. Nor
+is a **missing** result (a middleware below ended the pipeline without setting one): that invocation
+is a failure the binding redelivers (transport-bindings §1, obligation 8), and remembering it as
+anything would make the redelivery replay a success that never happened. A message with no
+idempotency key passes straight through (nothing to dedupe on).
 
 The store is a pluggable port (:class:`IdempotencyStore`); an in-memory implementation ships here for
 tests and single-process services, and a shared backend (e.g. Redis, once ``benzene-cache`` lands)
@@ -102,7 +105,9 @@ def idempotency(
             context.result = remembered  # replay: the handler does not run a second time
             return
         await next()
-        result = context.result if context.result is not None else Result.ok()
+        result = context.result
+        if result is None:
+            return  # no result is a failure: nothing to remember, and the binding redelivers it
         if should_remember(result):
             await store.put(key, result)
 

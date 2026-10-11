@@ -12,8 +12,12 @@ pip install benzene-gcp            # add [pubsub] for the real outbound client
 One host, two triggers, the same handlers behind both (transport-bindings §1):
 
 - **HTTP** — delegates to the `benzene.http` binding (route → topic, status mapping).
-- **Pub/Sub** — topic from the `topic` message attribute; one scope per message; a failure result
-  is raised so Pub/Sub redelivers (the queue-transport failure rule).
+- **Pub/Sub** — topic from the `topic` message attribute; one scope per message. Settlement
+  (transport-bindings §1, obligation 8): the message is acknowledged only when its invocation ended
+  `isSuccessful`; a failure, a missing result, an unmatched topic or an uncaught error is raised so
+  Pub/Sub redelivers it (enable *retry on failure*; the subscription's dead-letter topic decides when
+  to give up). The unit of settlement is the message. `GcpFunctionsApp(..., settlement=Settlement(...))`
+  takes the same `at_most_once` / `ignore_unmatched_topics` knobs as every one-way host.
 
 ## `GcpFunctionsApp`
 

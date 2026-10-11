@@ -454,6 +454,34 @@ applies to inbound bindings and outbound clients alike. Keys are matched case-in
 returned lower-cased; a non-reserved key never routes; `benzene-version` stays among the headers for
 `resolve_version` to read. The three cloud hosts share this one resolver.
 
+## Settlement on one-way bindings
+
+A one-way binding — a queue, a topic, a stream, an event trigger — has no caller to answer, so the
+result **settles** the message (transport-bindings §1, obligation 8): acknowledged (deleted, acked,
+committed, the trigger returns) when the invocation ended `isSuccessful` — `ignored` and an
+application-defined success included — and otherwise declined, so the transport redelivers it. A
+failure, a **missing** result (a middleware that ended the pipeline without setting one), a topic no
+handler serves (a `not-found`) and an uncaught error are all declined. Delivery is therefore
+at-least-once, so make handlers on one-way bindings idempotent; dead-lettering is the transport's own
+redrive configuration.
+
+Every one-way host takes the same two knobs, both off by default:
+
+```python
+from benzene.core import Settlement
+
+Settlement(at_most_once=True)            # acknowledge whatever the outcome (failures are logged)
+Settlement(ignore_unmatched_topics=True) # a topic no handler serves is acknowledged as ignored
+```
+
+passed as `settlement=` to `AwsLambdaApp`, `AzureFunctionsApp`, `GcpFunctionsApp`, `SqsConsumerApp`,
+`KafkaConsumerApp` and `RabbitMqConsumerApp` (and their `from_definition`). Each host records its
+shape and defaults as `SETTLEMENT_DEFAULTS` — `SettlementDefaults(binding, shape, on_failure,
+unmatched_topic)`, with `QUEUE` / `ONE_SHOT` / `STREAM` / `REQUEST_RESPONSE` and `REDELIVER` /
+`SKIP_AND_CONTINUE` / `NOT_APPLICABLE` — which the conformance runner checks against the fixture. A
+custom one-way loop gets the same rule from `dispatch_one_way(application, settlement, decode, *args)`,
+which decodes, runs, and returns a `OneWayOutcome(topic, result, response, acknowledge)`.
+
 ## Outbound clients
 
 An outbound client is a `MessageSender` — `async send_message(topic, message, headers) -> Result` — the
@@ -572,7 +600,9 @@ make a blocking SDK call safe: sharing one event loop works because the consumer
 `RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `SchemaCasters`,
 `casting_handler`, `Cast`, `NoCastPathError`, `ServiceSpec`, `TopicSpec`, `spec_interception`,
 `select_spec_document`, `resolve_spec`, `SPEC_TYPE_BENZENE`, `SPEC_TYPE_NATIVE`, `SPEC_FORMAT_JSON`,
-`PING_TOPIC`,
+`PING_TOPIC`, `Settlement`, `SettlementDefaults`, `OneWayOutcome`, `dispatch_one_way`, `redelivers`,
+`AT_LEAST_ONCE`, `QUEUE`, `ONE_SHOT`, `STREAM`, `REQUEST_RESPONSE`, `REDELIVER`, `SKIP_AND_CONTINUE`,
+`NOT_APPLICABLE`, `DEFAULT_HEADERS_KEY`,
 `ContractDocument`, `ContractRequest`, `ContractEvent`, `ContractSource`, `HttpMapping`,
 `CONTRACT_OPENAPI`, `is_reserved_topic`, `resolve_contract`,
 `SPEC_TOPIC`, `json_schema`, `Schema`, `to_jsonable`, `to_request`, `Pipelines`,

@@ -11,9 +11,13 @@ mirroring :mod:`benzene.kafka`'s self-hosted consumer.
 
 The message body is the JSON payload; the Benzene **topic** is carried in a ``topic`` message
 attribute (the cross-port convention shared with SNS/Pub/Sub/Service Bus, wire-contracts §2). There is
-**no response channel** — one message is one pipeline invocation and one DI scope, and the handler's
-result governs whether the loop deletes the message (success, at-least-once) or leaves it on the queue
-for redelivery/DLQ redrive, never a reply.
+**no response channel** — one message is one pipeline invocation and one DI scope, and the outcome
+**settles** the message (transport-bindings §1, obligation 8): deleted when its invocation ended
+``isSuccessful`` (``ignored`` included), otherwise left on the queue — a failure, a missing result, an
+unmatched topic — to reappear after its visibility timeout and go to the queue's redrive/DLQ. The unit
+of settlement is the one message. ``SqsConsumerApp(..., settlement=Settlement(at_most_once=True))``
+deletes whatever the outcome; ``Settlement(ignore_unmatched_topics=True)`` deletes a topic no handler
+serves as ``ignored``.
 
 ``client`` is duck-typed against ``boto3``'s SQS client (``receive_message``/``delete_message``), so
 the binding — decode, per-message dispatch, and the poll loop — is exercised in memory with fakes and
@@ -25,15 +29,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import Any
+from typing import Any, ClassVar
 
 from benzene.core import (
+    QUEUE,
     AppDefinition,
     BenzeneMessageApplication,
+    Settlement,
+    SettlementDefaults,
     StopSignal,
     Worker,
     application_from,
+    dispatch_one_way,
     read_message_metadata,
+    redelivers,
 )
 from benzene.results import Result
 
@@ -61,25 +70,39 @@ def decode_sqs_message(message: dict[str, Any]) -> dict[str, Any]:
 class SqsConsumerApp:
     """Runs one SQS message through the Benzene pipeline (one message → one invocation → one scope).
 
-    :meth:`handle_message` never raises — the entry point always returns a response envelope (a
-    malformed body is a ``bad-request``, a handler fault a ``service-unavailable``), so a poison
-    message can never crash the poll loop. Since SQS has no response channel here, the mapped
-    :class:`~benzene.results.Result` is returned for the loop to *act on* (delete / leave for
-    redelivery), not sent back to a caller.
+    :meth:`handle_message` returns the invocation's :class:`~benzene.results.Result` — decoded from
+    the response envelope with its ``isSuccessful`` authoritative, never re-derived from the status
+    text — for the loop to *settle* (delete / leave for redelivery), not to send back to a caller. A
+    malformed body is a ``bad-request`` and a handler fault a ``service-unavailable``, so content never
+    crashes the poll loop; an exception escaping a middleware does (the message stays undeleted),
+    unless ``settlement.at_most_once``.
     """
 
-    def __init__(self, application: BenzeneMessageApplication) -> None:
+    SETTLEMENT_DEFAULTS: ClassVar[tuple[SettlementDefaults, ...]] = (redelivers("sqs", QUEUE),)
+
+    def __init__(
+        self, application: BenzeneMessageApplication, *, settlement: Settlement = Settlement()
+    ) -> None:
         self._application = application
+        self._settlement = settlement
 
     @classmethod
-    def from_definition(cls, definition: AppDefinition) -> SqsConsumerApp:
+    def from_definition(
+        cls, definition: AppDefinition, *, settlement: Settlement = Settlement()
+    ) -> SqsConsumerApp:
         """Build the consumer app from a composition root's :class:`AppDefinition` (one-line wiring)."""
-        return cls(application_from(definition))
+        return cls(application_from(definition), settlement=settlement)
+
+    @property
+    def settlement(self) -> Settlement:
+        """How the loop settles each message: deleted iff ``settlement.acknowledges(result)``."""
+        return self._settlement
 
     async def handle_message(self, message: dict[str, Any]) -> Result:
-        envelope = decode_sqs_message(message)
-        response = await self._application.handle(envelope)
-        return Result(response["statusCode"])
+        outcome = await dispatch_one_way(
+            self._application, self._settlement, decode_sqs_message, message
+        )
+        return outcome.result
 
 
 async def run_sqs_consumer_loop(
@@ -98,10 +121,11 @@ async def run_sqs_consumer_loop(
 
     ``client`` is duck-typed (``receive_message(QueueUrl=, MaxNumberOfMessages=, WaitTimeSeconds=,
     MessageAttributeNames=)`` → ``{"Messages": [...]}``; ``delete_message(QueueUrl=, ReceiptHandle=)``).
-    With ``delete=True`` (the default, at-least-once) a message is deleted only after a **successful**
-    result, so a failed message is left on the queue individually for redelivery/DLQ redrive rather
-    than lost with the rest of the batch; a caller wanting different semantics passes ``delete=False``
-    and deletes from ``on_result``. ``wait_time_seconds`` defaults to 20 (SQS's maximum long-poll), so
+    With ``delete=True`` (the default) a message is deleted only when ``app.settlement`` acknowledges
+    its result — by default a **successful** one, so a failed message is left on the queue
+    individually for redelivery/DLQ redrive rather than lost with the rest of the batch (set
+    at-most-once on the app's ``Settlement`` to delete everything); a caller deleting by hand passes
+    ``delete=False`` and deletes from ``on_result``. ``wait_time_seconds`` defaults to 20 (SQS's maximum long-poll), so
     an empty queue costs one mostly-idle request rather than a tight poll loop. ``should_continue``
     bounds the loop (a real worker loops forever; a test stops after N polls).
 
@@ -125,8 +149,9 @@ async def run_sqs_consumer_loop(
             result = await app.handle_message(message)
             if on_result is not None:
                 on_result(message, result)
-            # At-least-once: delete only a successful outcome, so a failed message is redelivered.
-            if delete and result.is_successful:
+            # Settlement: delete only what the app's Settlement acknowledges - by default a successful
+            # outcome, so a failed message reappears and the queue's redrive policy decides its fate.
+            if delete and app.settlement.acknowledges(result):
                 await asyncio.to_thread(
                     client.delete_message, QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
                 )

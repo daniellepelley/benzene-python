@@ -180,7 +180,9 @@ idempotency(
   the handler**.
 - Only remembered outcomes replay. Because the default only remembers successes, a transient failure is
   *not* pinned in place — a redelivery is free to retry it. Override `remember_when` to change that
-  policy.
+  policy. A **missing** result (a middleware below ended the pipeline without setting one) is never
+  remembered: it is a failure the binding redelivers (transport-bindings §1, obligation 8), and the
+  redelivery runs for real.
 - Install it ahead of the message router.
 
 ### `IdempotencyStore` and `InMemoryIdempotencyStore`

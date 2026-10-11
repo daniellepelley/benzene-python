@@ -3,10 +3,13 @@
 A RabbitMQ delivery carries the Benzene **topic** in a ``topic`` header inside its AMQP
 ``properties.headers`` (the cross-port convention shared with SQS/SNS/Pub/Sub/Service Bus/Kafka,
 wire-contracts §2); the remaining application headers are the Benzene headers (UTF-8 decoded), and the
-message body is the JSON body. There is **no response channel** — per the spec, result mapping is
-*acknowledge/log only*: one delivery is one pipeline invocation and one DI scope, and the handler's
-result governs whether the loop acks the delivery (success) or nacks/leaves it for redelivery, never a
-reply.
+message body is the JSON body. There is **no response channel** — one delivery is one pipeline
+invocation and one DI scope, and the outcome **settles** the delivery (transport-bindings §1,
+obligation 8): acked when its invocation ended ``isSuccessful`` (``ignored`` included), otherwise
+nacked — a failure, a missing result, an unmatched topic — with ``requeue`` (redelivered) or without
+(to the queue's dead-letter exchange). The unit of settlement is the one delivery.
+``RabbitMqConsumerApp(..., settlement=Settlement(at_most_once=True))`` acks whatever the outcome;
+``Settlement(ignore_unmatched_topics=True)`` acks a topic no handler serves as ``ignored``.
 
 Everything here is duck-typed against the ``pika`` shapes (a delivery's ``method`` /
 ``properties.headers`` / ``body`` triple; ``channel.basic_get()`` / ``channel.basic_ack()`` /
@@ -19,13 +22,18 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, ClassVar
 
 from benzene.core import (
+    QUEUE,
     AppDefinition,
     BenzeneMessageApplication,
+    Settlement,
+    SettlementDefaults,
     application_from,
+    dispatch_one_way,
     read_message_metadata,
+    redelivers,
 )
 from benzene.results import Result
 
@@ -64,25 +72,37 @@ def decode_rabbitmq_message(method: Any, properties: Any, body: Any) -> dict[str
 class RabbitMqConsumerApp:
     """Runs one RabbitMQ delivery through the Benzene pipeline (one delivery → one invocation → scope).
 
-    :meth:`handle_message` never raises — the entry point always returns a response envelope (a
-    malformed body is a ``bad-request``, a handler fault a ``service-unavailable``), so a poison
-    delivery can never crash the consumer loop (the binding's failure rule). Since RabbitMQ has no
-    response channel, the mapped :class:`~benzene.results.Result` is returned for the loop to *act on*
-    (ack / nack / log), not sent back to a caller.
+    :meth:`handle_message` returns the invocation's :class:`~benzene.results.Result` — decoded from
+    the response envelope with its ``isSuccessful`` authoritative, never re-derived from the status
+    text — for the loop to *settle* (ack / nack), not to send back to a caller. A malformed body is a
+    ``bad-request`` and a handler fault a ``service-unavailable``, so content never crashes the loop.
     """
 
-    def __init__(self, application: BenzeneMessageApplication) -> None:
+    SETTLEMENT_DEFAULTS: ClassVar[tuple[SettlementDefaults, ...]] = (redelivers("rabbitmq", QUEUE),)
+
+    def __init__(
+        self, application: BenzeneMessageApplication, *, settlement: Settlement = Settlement()
+    ) -> None:
         self._application = application
+        self._settlement = settlement
 
     @classmethod
-    def from_definition(cls, definition: AppDefinition) -> RabbitMqConsumerApp:
+    def from_definition(
+        cls, definition: AppDefinition, *, settlement: Settlement = Settlement()
+    ) -> RabbitMqConsumerApp:
         """Build the consumer app from a composition root's :class:`AppDefinition` (one-line wiring)."""
-        return cls(application_from(definition))
+        return cls(application_from(definition), settlement=settlement)
+
+    @property
+    def settlement(self) -> Settlement:
+        """How the loop settles each delivery: acked iff ``settlement.acknowledges(result)``."""
+        return self._settlement
 
     async def handle_message(self, method: Any, properties: Any, body: Any) -> Result:
-        envelope = decode_rabbitmq_message(method, properties, body)
-        response = await self._application.handle(envelope)
-        return Result(response["statusCode"])
+        outcome = await dispatch_one_way(
+            self._application, self._settlement, decode_rabbitmq_message, method, properties, body
+        )
+        return outcome.result
 
 
 async def run_consumer_loop(
@@ -100,10 +120,10 @@ async def run_consumer_loop(
     ``channel`` is duck-typed (``basic_get(queue)`` → a ``(method, properties, body)`` triple, or
     ``(None, None, None)`` when the queue is empty; ``basic_ack(delivery_tag=...)`` /
     ``basic_nack(delivery_tag=..., requeue=...)``) — pika's callback model is flattened to a poll so
-    the loop mirrors the Kafka binding. With ``ack=True`` (the default, at-least-once) a **successful**
-    result acks the delivery and a failed one is nacked with ``requeue`` (redelivered rather than
-    silently dropped); a caller wanting manual acknowledgement passes ``ack=False`` and acts from
-    ``on_result``. ``should_continue`` bounds the loop (a real worker loops forever; a test stops after
+    the loop mirrors the Kafka binding. With ``ack=True`` (the default) a delivery ``app.settlement``
+    acknowledges — by default a **successful** one — is acked and any other is nacked with ``requeue``
+    (redelivered rather than silently dropped; ``requeue=False`` sends it to the dead-letter exchange);
+    a caller wanting manual acknowledgement passes ``ack=False`` and acts from ``on_result``. ``should_continue`` bounds the loop (a real worker loops forever; a test stops after
     N pulls).
 
     ``basic_get``/``basic_ack``/``basic_nack`` are plain synchronous ``pika`` calls (each a blocking
@@ -122,8 +142,9 @@ async def run_consumer_loop(
             on_result(method, result)
         if not ack:
             continue
-        # At-least-once: ack only a successful outcome; a failed delivery is nacked for redelivery.
-        if result.is_successful:
+        # Settlement: ack what the app's Settlement acknowledges (by default a successful outcome);
+        # nack the rest for redelivery, or for the dead-letter exchange with requeue=False.
+        if app.settlement.acknowledges(result):
             await asyncio.to_thread(channel.basic_ack, delivery_tag=method.delivery_tag)
         else:
             await asyncio.to_thread(

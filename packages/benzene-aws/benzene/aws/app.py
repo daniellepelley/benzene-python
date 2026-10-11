@@ -22,6 +22,27 @@
   the invoke's own response Payload, for the caller to decode back into a
   :class:`~benzene.results.Result` (:func:`~benzene.core.decode_response`).
 
+**Settlement** (transport-bindings §1, obligation 8). Every source but API Gateway and a synchronous
+direct invoke is one-way, and by default a message is acknowledged only when its invocation ended
+``isSuccessful`` — a failure, a missing result, an unmatched topic or an uncaught error is handed back
+for redelivery, and Lambda's own retry / on-failure destination / DLQ configuration decides when to
+give up. The unit of settlement per source:
+
+- **SQS** — per message: failures are reported by ``messageId`` (needs *ReportBatchItemFailures* on the
+  event source mapping); every record runs.
+- **DynamoDB Streams / Kinesis** — per record, reported by sequence number; every record runs, and
+  Lambda resumes the shard from the lowest reported failure, so the records after it are redelivered
+  too.
+- **SNS / S3 / Kafka (MSK)** — the whole invocation: the first failing record raises, the records
+  after it do not run, and Lambda retries the whole event (for MSK, every topic-partition in it).
+- **EventBridge / an asynchronous direct invoke** — the one event the invocation carried.
+
+``settlement=Settlement(at_most_once=True)`` acknowledges whatever the outcome (nothing is reported,
+nothing raises); ``Settlement(ignore_unmatched_topics=True)`` acknowledges a topic no handler serves as
+``ignored``. A direct invoke is synchronous — the caller gets the envelope — unless the function is
+invoked with ``InvocationType="Event"``, which the function cannot detect: deploy it with
+``invocation_type="Event"`` and a failure raises so Lambda's asynchronous retry takes over.
+
 Topic for the attribute-carrying transports (SQS, SNS, Kafka) comes from the reserved ``topic``
 metadata key; the channel-less sources (S3, EventBridge, DynamoDB, Kinesis) take their topic from an
 injectable convention configured on the host; a direct invoke's topic is exactly what the caller sent.
@@ -33,16 +54,23 @@ Gateway/SQS/SNS/etc. is, with zero extra wiring, also directly invokable by anot
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Any, ClassVar, Literal
 
 from benzene.core import (
+    ONE_SHOT,
+    QUEUE,
+    REQUEST_RESPONSE,
+    STREAM,
     AppDefinition,
     BenzeneMessageApplication,
     MessageHandlingError,
     Registry,
+    Settlement,
+    SettlementDefaults,
     application_from,
-    successful_from,
+    dispatch_one_way,
+    redelivers,
 )
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
 
@@ -63,8 +91,26 @@ from .events import (
     sqs_record_envelope,
 )
 
+#: How a direct invoke reached the function (AWS's own ``InvocationType`` values).
+InvocationType = Literal["RequestResponse", "Event"]
+
 
 class AwsLambdaApp:
+    #: Each source's settlement shape and defaults, keyed by its ``settlementDefaults`` binding id
+    #: (transport-bindings §1, obligation 8) — the constants the conformance runner checks.
+    SETTLEMENT_DEFAULTS: ClassVar[tuple[SettlementDefaults, ...]] = (
+        redelivers("sqs", QUEUE),
+        redelivers("sns", ONE_SHOT),
+        redelivers("s3", ONE_SHOT),
+        redelivers("eventbridge", ONE_SHOT),
+        redelivers("kafka", STREAM),
+        redelivers("dynamodb-streams", STREAM),
+        redelivers("kinesis", STREAM),
+        redelivers("envelope-async", ONE_SHOT),
+        redelivers("envelope", REQUEST_RESPONSE),
+        redelivers("http", REQUEST_RESPONSE),
+    )
+
     def __init__(
         self,
         http_router: HttpRouter | None = None,
@@ -76,12 +122,22 @@ class AwsLambdaApp:
         eventbridge_topic: str = DEFAULT_EVENTBRIDGE_TOPIC,
         kinesis_topic: str = DEFAULT_KINESIS_TOPIC,
         dynamodb_topic: str | None = None,
+        settlement: Settlement = Settlement(),
+        invocation_type: InvocationType = "RequestResponse",
     ) -> None:
         if application is None:
             if registry is None:
                 registry = Registry.from_definitions(http_router) if http_router else Registry()
             application = BenzeneMessageApplication(registry)
+        if invocation_type not in ("RequestResponse", "Event"):
+            raise ValueError(
+                f"invocation_type={invocation_type!r}: a direct invoke is 'RequestResponse' (the "
+                "caller waits for the envelope) or 'Event' (asynchronous - a failure raises so Lambda "
+                "retries it)"
+            )
         self._application = application
+        self._settlement = settlement
+        self._invocation_type = invocation_type
         # Topic conventions for the sources with no native metadata channel. ``dynamodb_topic`` stays
         # ``None`` to mean "derive per record from its eventName" (e.g. ``dynamodb:insert``).
         self._s3_topic = s3_topic
@@ -95,13 +151,26 @@ class AwsLambdaApp:
         )
 
     @classmethod
-    def from_definition(cls, definition: AppDefinition) -> AwsLambdaApp:
+    def from_definition(
+        cls,
+        definition: AppDefinition,
+        *,
+        settlement: Settlement = Settlement(),
+        invocation_type: InvocationType = "RequestResponse",
+    ) -> AwsLambdaApp:
         """Build the Lambda host from a composition root's :class:`AppDefinition` (one-line wiring)."""
         return cls(
             http_router=definition.router,
             application=application_from(definition),
             standard_paths=definition.standard_paths,
+            settlement=settlement,
+            invocation_type=invocation_type,
         )
+
+    @property
+    def settlement(self) -> Settlement:
+        """How the one-way sources settle each message (see the module docstring)."""
+        return self._settlement
 
     def handle(self, event: dict[str, Any], context: Any = None) -> dict[str, Any] | None:
         source = event_source(event)
@@ -153,12 +222,10 @@ class AwsLambdaApp:
         async def run() -> list[dict[str, str]]:
             failures: list[dict[str, str]] = []
             for record in event.get("Records", []):
-                envelope = sqs_record_envelope(record)
-                response = await self._application.handle(envelope)
-                # The envelope's isSuccessful decides what gets nacked, not the status text
-                # (wire-contracts.md 1.2) - otherwise a handler answering an application-defined
-                # status on a result it marked successful has its message redelivered forever.
-                if not successful_from(response):
+                outcome = await dispatch_one_way(
+                    self._application, self._settlement, sqs_record_envelope, record
+                )
+                if not outcome.acknowledge:
                     failures.append({"itemIdentifier": record.get("messageId", "")})
             return failures
 
@@ -168,8 +235,7 @@ class AwsLambdaApp:
     def _handle_sns(self, event: dict[str, Any]) -> None:
         async def run() -> None:
             for record in event.get("Records", []):
-                envelope = sns_record_envelope(record)
-                await self._dispatch_or_raise(envelope)
+                await self._settle_or_raise(sns_record_envelope, record)
 
         asyncio.run(run())
 
@@ -177,15 +243,14 @@ class AwsLambdaApp:
     def _handle_s3(self, event: dict[str, Any]) -> None:
         async def run() -> None:
             for record in event.get("Records", []):
-                envelope = s3_record_envelope(record, self._s3_topic)
-                await self._dispatch_or_raise(envelope)
+                await self._settle_or_raise(s3_record_envelope, record, self._s3_topic)
 
         asyncio.run(run())
 
     # --- EventBridge (a single event) ------------------------------------------------------
     def _handle_eventbridge(self, event: dict[str, Any]) -> None:
         async def run() -> None:
-            await self._dispatch_or_raise(eventbridge_envelope(event, self._eventbridge_topic))
+            await self._settle_or_raise(eventbridge_envelope, event, self._eventbridge_topic)
 
         asyncio.run(run())
 
@@ -193,8 +258,7 @@ class AwsLambdaApp:
     def _handle_kafka(self, event: dict[str, Any]) -> None:
         async def run() -> None:
             for record in kafka_records(event):
-                envelope = kafka_record_envelope(record)
-                await self._dispatch_or_raise(envelope)
+                await self._settle_or_raise(kafka_record_envelope, record)
 
         asyncio.run(run())
 
@@ -203,9 +267,14 @@ class AwsLambdaApp:
         async def run() -> list[dict[str, str]]:
             failures: list[dict[str, str]] = []
             for record in event.get("Records", []):
-                envelope = dynamodb_record_envelope(record, self._dynamodb_topic)
-                response = await self._application.handle(envelope)
-                if not successful_from(response):
+                outcome = await dispatch_one_way(
+                    self._application,
+                    self._settlement,
+                    dynamodb_record_envelope,
+                    record,
+                    self._dynamodb_topic,
+                )
+                if not outcome.acknowledge:
                     sequence = (record.get("dynamodb") or {}).get("SequenceNumber", "")
                     failures.append({"itemIdentifier": sequence})
             return failures
@@ -217,16 +286,21 @@ class AwsLambdaApp:
         async def run() -> list[dict[str, str]]:
             failures: list[dict[str, str]] = []
             for record in event.get("Records", []):
-                envelope = kinesis_record_envelope(record, self._kinesis_topic)
-                response = await self._application.handle(envelope)
-                if not successful_from(response):
+                outcome = await dispatch_one_way(
+                    self._application,
+                    self._settlement,
+                    kinesis_record_envelope,
+                    record,
+                    self._kinesis_topic,
+                )
+                if not outcome.acknowledge:
                     sequence = (record.get("kinesis") or {}).get("sequenceNumber", "")
                     failures.append({"itemIdentifier": sequence})
             return failures
 
         return {"batchItemFailures": asyncio.run(run())}
 
-    # --- Direct invoke (synchronous, like API Gateway) --------------------------------------
+    # --- Direct invoke (synchronous like API Gateway, or asynchronous by configuration) -----
     def _handle_invoke(self, event: dict[str, Any]) -> dict[str, Any]:
         """Answer a direct ``lambda.invoke()`` Payload with the response envelope, verbatim.
 
@@ -235,20 +309,31 @@ class AwsLambdaApp:
         ``{statusCode, headers, body}`` :class:`~benzene.core.BenzeneMessageApplication` produces
         *is* the invoke's response Payload, ready for :class:`~benzene.aws.LambdaMessageSender` (or
         any caller) to decode back into a :class:`~benzene.results.Result`.
+
+        Configured ``invocation_type="Event"``, there is no caller to read that envelope, so the
+        invoke settles like any one-way source: a failure raises :class:`MessageHandlingError` and
+        Lambda's asynchronous retry takes over (transport-bindings §1, the asynchronous envelope).
         """
+        if self._invocation_type == "Event":
+            outcome = asyncio.run(self._settle_or_raise(invoke_envelope, event))
+            return dict(outcome) if outcome is not None else {}
         return asyncio.run(self._application.handle(invoke_envelope(event)))
 
-    async def _dispatch_or_raise(self, envelope: dict[str, Any]) -> None:
-        """Run one envelope; on a failure result raise ``MessageHandlingError`` (retry/redeliver).
+    async def _settle_or_raise(
+        self, decode: Callable[..., Mapping[str, Any]], *args: Any
+    ) -> Mapping[str, Any] | None:
+        """Run one message for a source with no partial-batch channel; fault the invocation unless
+        it is acknowledged.
 
-        The shared path for the sources with no partial-batch channel (SNS, S3, EventBridge, Kafka):
-        the only way to signal failure back to the platform is to fault the invocation. Whether it
-        *is* a failure is the envelope's ``isSuccessful`` to say (wire-contracts.md 1.2), never a
-        classification derived from the status string.
+        The only way to decline the acknowledgement on SNS, S3, EventBridge, MSK and an asynchronous
+        invoke is to fail the invocation: raise ``MessageHandlingError`` naming the topic, the status
+        and the problem document. Whether it failed is the envelope's ``isSuccessful`` to say
+        (wire-contracts §1.2), never the status text.
         """
-        response = await self._application.handle(envelope)
-        if not successful_from(response):
-            raise MessageHandlingError(envelope["topic"], response["statusCode"], response["body"])
+        outcome = await dispatch_one_way(self._application, self._settlement, decode, *args)
+        if not outcome.acknowledge:
+            raise MessageHandlingError(outcome.topic, outcome.result.status, outcome.detail)
+        return outcome.response
 
 
 def to_lambda_handler(app: AwsLambdaApp) -> Callable[..., Any]:

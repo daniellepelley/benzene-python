@@ -52,6 +52,11 @@ def message_router(
 
         definition = selector(registry, context.topic, context.version)
         if definition is None:
+            if context.ignore_unmatched_topic and not registry.versions_of(context.topic):
+                # A shared-bus subscriber's option (transport-bindings §1, obligation 8): another
+                # service's topic is acknowledged as ignored rather than redelivered as a failure.
+                context.result = Result.ignored()
+                return
             context.result = Result.not_found(_no_handler(registry, context.topic, context.version))
             return
 

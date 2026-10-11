@@ -320,6 +320,36 @@ def test_idempotency_does_not_remember_failures() -> None:
     assert second.result is not None and second.result.is_successful
 
 
+def test_idempotency_does_not_remember_a_missing_result() -> None:
+    # A middleware below ended the pipeline without setting a result. That invocation is a failure
+    # the binding redelivers (transport-bindings §1, obligation 8); remembering it - as ok, which is
+    # what used to happen - would make the redelivery replay a success that never happened.
+    store = InMemoryIdempotencyStore()
+    drops = {"left": 1}
+
+    async def drop_once(context: Context, next) -> None:
+        if drops["left"]:
+            drops["left"] -= 1
+            return  # ends the pipeline with no result
+        await next()
+
+    async def handler(_request) -> Result:
+        return Result.created({"done": True})
+
+    registry = Registry().register("t", handler)
+    pipeline = MiddlewarePipeline([idempotency(store), drop_once]).use(message_router(registry))
+    headers = {"idempotency-key": "abc"}
+
+    first = Context("t", {}, headers=headers)
+    run(pipeline.handle(first))
+    assert first.result is None
+    assert run(store.get("abc")) is None  # nothing remembered
+
+    second = Context("t", {}, headers=headers)
+    run(pipeline.handle(second))  # the redelivery really runs
+    assert second.result is not None and second.result.status == Status.CREATED
+
+
 def test_idempotency_passes_keyless_messages_through() -> None:
     store = InMemoryIdempotencyStore()
     runs = {"n": 0}

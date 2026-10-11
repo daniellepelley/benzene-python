@@ -31,3 +31,6 @@ class Context:
         self.scope = scope
         #: Set by the message-router middleware once the handler runs.
         self.result: Result[Any] | None = None
+        #: Whether the router answers a topic no handler serves ``ignored`` instead of ``not-found`` —
+        #: set per invocation by a one-way binding's :class:`~benzene.core.Settlement`.
+        self.ignore_unmatched_topic: bool = False

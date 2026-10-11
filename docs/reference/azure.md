@@ -29,6 +29,24 @@ One host, one binding per trigger (transport-bindings §1):
 - **Event Grid** — a single event or a batch; one scope per event; **native schema or CloudEvents 1.0**
   (told apart by the CloudEvents `specversion` attribute).
 
+**Settlement** (transport-bindings §1, obligation 8). Every trigger but HTTP is one-way: the trigger
+function returns normally — acknowledging the message — only when its invocation ended `isSuccessful`
+(`ignored` included); a failure, a missing result, a topic no handler serves or an uncaught error
+raises `MessageHandlingError`, and the Functions host's retry, poison-queue and dead-letter
+configuration decides what happens next.
+
+| Trigger | Shape | Unit of settlement |
+|---|---|---|
+| Service Bus, Queue Storage | queue | the message |
+| Event Hub, Cosmos DB change feed | stream | the delivered batch — the first failing item raises, the items after it don't run, and the batch is redelivered from its checkpoint |
+| Event Grid | one-shot | the invocation's event (or batch, stopping at the first failure) |
+| Blob Storage | one-shot | the notification |
+| Timer | one-shot | the tick — nothing to redeliver; the run is recorded as failed for the retry policy |
+
+`AzureFunctionsApp(..., settlement=Settlement(at_most_once=True))` returns normally whatever the
+outcome (a failure is logged on `benzene.settlement`); `Settlement(ignore_unmatched_topics=True)`
+acknowledges a topic no handler serves (at any version) as `ignored`.
+
 Topic for the metadata-carrying transports (Service Bus, Event Hub) comes from the `topic` application
 property. The envelope-less / event-shaped triggers (Queue Storage, Blob, Cosmos, Timer, Event Grid)
 have no native string→string header channel, so their topic comes from an injectable default — or, for

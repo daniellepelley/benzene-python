@@ -39,7 +39,10 @@ assert fake.last_topic == "orders:created"           # ...and on the client's eg
 ```
 
 - `create_test_host(StartUp)` → a `TestHostBuilder`; `.with_services(fn)` overrides registrations
-  (last wins — the seam for fakes), `.with_config(dict)` layers configuration.
+  (last wins — the seam for fakes), `.with_config(dict)` layers configuration, and
+  `.with_settlement(Settlement(...))` builds a one-way host (AWS, Azure, GCP, the self-hosted SQS,
+  Kafka and RabbitMQ consumers) with an at-most-once or unmatched-as-ignored override, exactly as the
+  deployed host takes it.
 - `.build_gcp()` / `.build_aws()` / `.build_azure()` specialize to that cloud's test host (a lazy
   import of the cloud package); `.build_grpc()` specializes to the gRPC binding (requires
   `benzene-grpc[transport]`), driving the real handler in memory via `host.send_grpc(topic, body=...)`

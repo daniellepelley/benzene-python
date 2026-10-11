@@ -68,7 +68,16 @@ class BenzeneMessageApplication:
         included) writes through."""
         return self._version_header
 
-    async def handle(self, request_envelope: dict[str, Any]) -> dict[str, Any]:
+    async def handle(
+        self, request_envelope: dict[str, Any], *, ignore_unmatched_topic: bool = False
+    ) -> dict[str, Any]:
+        """Run one request envelope and return the response envelope — never raises for content.
+
+        ``ignore_unmatched_topic`` answers a topic no handler serves (at any version) ``ignored``
+        rather than ``not-found``: a one-way binding's shared-bus option (:class:`~benzene.core.
+        Settlement`). Request/response callers leave it off — a caller asking for a topic nobody
+        serves should hear ``not-found``.
+        """
         topic = request_envelope.get("topic") or ""
         headers = {k.lower(): v for k, v in (request_envelope.get("headers") or {}).items()}
         body = request_envelope.get("body") or ""
@@ -83,6 +92,7 @@ class BenzeneMessageApplication:
             return encode_response(Result.bad_request("Request body is not valid JSON"))
         scope = self._container.create_scope()
         context = Context(topic, parsed, headers, scope, version)
+        context.ignore_unmatched_topic = ignore_unmatched_topic
 
         await self._pipeline.handle(context)
         response = encode_response(context.result)

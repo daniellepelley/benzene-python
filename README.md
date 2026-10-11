@@ -358,7 +358,8 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     guessed. The outside-in counterpart to item 16's self-check.
 18. **(done)** Kafka transport (`benzene-kafka`) — a **self-hosted consumer** (Benzene topic from the
     record's `topic` header, headers UTF-8, one record per pipeline invocation/scope, no response
-    channel → acknowledge/log; `run_consumer_loop` commits offsets on success, at-least-once) **and** a
+    channel → settlement; `run_consumer_loop` commits acknowledged offsets and is skip-and-continue by
+    default, at-least-once with `stop_on_failure=True`) **and** a
     Kafka-produce outbound client (`KafkaMessageSender`, headers forwarded onto Kafka headers). The
     binding is duck-typed against `confluent-kafka` (an optional `[kafka]` extra), so decode, dispatch,
     and send run in memory with no broker; tested through the shared harness (`build_kafka()` +
@@ -368,8 +369,7 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     distinct from the Lambda SQS trigger `benzene-aws` already had: this one polls a queue itself
     (`receive_message`/`delete_message`, an optional `[boto3]` extra), the shape a long-running worker
     or a Kubernetes Deployment needs. Benzene topic from the `topic` message attribute, one message per
-    invocation/scope, deletes only on success (at-least-once, the same default as the Kafka consumer
-    above). Tested through the shared harness (`build_sqs_consumer()` + `send_sqs_consumer`) and
+    invocation/scope, deletes only on success (at-least-once). Tested through the shared harness (`build_sqs_consumer()` + `send_sqs_consumer`) and
     dogfooded by [`examples/sqs_orders/`](examples/sqs_orders) and, alongside the HTTP and Kafka hosts,
     [`examples/k8s_orders/`](examples/k8s_orders) (see
     [Getting Started: Kubernetes](docs/getting-started-kubernetes.md)). Mirrors `Benzene.Aws.Sqs`.

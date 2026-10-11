@@ -20,9 +20,13 @@ bindings (transport-bindings §"RabbitMQ"):
   headers.
 - **Body** — the delivery body, decoded as the UTF-8 JSON body.
 - **Scope** — one delivery is one pipeline invocation and one DI scope (never per batch).
-- **Result** — there is **no response channel**: result mapping is acknowledge/log only. The consumer
-  loop acks the delivery on a successful result (at-least-once) and nacks a failed one for
-  redelivery.
+- **Settlement** — there is **no response channel**: the result settles the delivery
+  (transport-bindings §1, obligation 8). The loop acks a delivery whose invocation ended `isSuccessful`
+  and nacks any other — a failure, a missing result, an unmatched topic — with `requeue=True` (the
+  default, redelivered) or `requeue=False` (to the queue's dead-letter exchange). The unit of
+  settlement is the delivery. `RabbitMqConsumerApp(..., settlement=Settlement(at_most_once=True))`
+  acks everything; `Settlement(ignore_unmatched_topics=True)` acks a topic no handler serves as
+  `ignored`.
 - **Failure** — a malformed body or a handler fault becomes a failure *result*, never an exception out
   of the loop, so a poison delivery cannot crash the host.
 
@@ -44,15 +48,16 @@ await app.handle_message(method, properties, body)     # one delivery -> one inv
 await run_consumer_loop(app, channel, queue="orders")  # the self-hosted worker: pull -> dispatch -> ack
 ```
 
-- `RabbitMqConsumerApp(application)` wraps a `BenzeneMessageApplication`; `handle_message(method,
-  properties, body)` decodes the pika delivery triple, runs the pipeline, and returns the mapped
-  `Result` (for the loop to act on). `RabbitMqConsumerApp.from_definition(definition)` is the one-line
-  wiring from a composition root's `AppDefinition`.
+- `RabbitMqConsumerApp(application, *, settlement=Settlement())` wraps a `BenzeneMessageApplication`;
+  `handle_message(method, properties, body)` decodes the pika delivery triple, runs the pipeline, and
+  returns the `Result` (decoded with the envelope's `isSuccessful` authoritative) for the loop to
+  settle. `RabbitMqConsumerApp.from_definition(definition, settlement=...)` is the one-line wiring from
+  a composition root's `AppDefinition`.
 - `run_consumer_loop(app, channel, *, queue="", should_continue=..., ack=True, requeue=True,
   on_result=None)` drives a duck-typed channel: `basic_get(queue)` returns a `(method, properties,
   body)` triple or `(None, None, None)` when the queue is empty (pika's callback model flattened to a
-  poll so the loop mirrors the Kafka binding). With `ack=True` (the default, at-least-once) a
-  **successful** result acks the delivery (`basic_ack(delivery_tag=...)`) and a failed one is nacked
+  poll so the loop mirrors the Kafka binding). With `ack=True` (the default) a delivery
+  `app.settlement` acknowledges — by default a **successful** one — is acked (`basic_ack(delivery_tag=...)`) and a failed one is nacked
   with `requeue` (`basic_nack(delivery_tag=..., requeue=requeue)`) so it is redelivered rather than
   silently dropped. Pass `ack=False` for manual acknowledgement and act from `on_result(method,
   result)`. `should_continue` bounds the loop (a real worker loops forever; a test stops after N

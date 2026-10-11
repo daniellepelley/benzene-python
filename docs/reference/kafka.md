@@ -18,9 +18,17 @@ bindings (transport-bindings §"Kafka"):
 - **Headers** — the record's other Kafka headers, UTF-8 decoded, become the Benzene headers.
 - **Body** — the record value, decoded as the UTF-8 JSON body.
 - **Scope** — one record is one pipeline invocation and one DI scope (never per batch).
-- **Result** — there is **no response channel**: result mapping is acknowledge/log only. The consumer
-  loop commits the offset on a successful result (at-least-once) and leaves a failed record for
-  redelivery.
+- **Settlement** — there is **no response channel**: the result settles the record
+  (transport-bindings §1, obligation 8). **By default the loop is skip-and-continue**, the default a
+  partition-ordered stream may choose: a record's offset is committed only when its invocation ended
+  `isSuccessful`, and an unacknowledged record (a failure, a missing result, an unmatched topic) is
+  passed over — not committed itself, but the next commit on its partition passes it, so it is
+  redelivered only if the consumer restarts or rebalances first. The unit of settlement is the record
+  offset, committed cumulatively per partition. `run_consumer_loop(..., stop_on_failure=True)` is the
+  **at-least-once** mode: the loop raises `MessageHandlingError` at the first unacknowledged record
+  without committing it, so the worker stops and a restart resumes there.
+  `KafkaConsumerApp(..., settlement=Settlement(at_most_once=True))` commits everything;
+  `Settlement(ignore_unmatched_topics=True)` commits a topic no handler serves as `ignored`.
 - **Failure** — a malformed body or a handler fault becomes a failure *result*, never an exception out
   of the loop, so a poison record cannot crash the host.
 
@@ -40,15 +48,19 @@ await app.handle_message(record)          # one record -> one invocation; return
 await run_consumer_loop(app, consumer)    # the self-hosted worker: poll -> dispatch -> commit
 ```
 
-- `KafkaConsumerApp(application)` wraps a `BenzeneMessageApplication`; `handle_message(record)` decodes
-  the record, runs the pipeline, and returns the mapped `Result` (for the loop to act on).
-- `run_consumer_loop(app, consumer, *, poll_timeout=1.0, should_continue=..., commit=True, on_result=None)`
-  drives a duck-typed consumer (`poll(timeout)` → a record or `None`; `commit(message=...)`). A record
-  carrying a broker error (`record.error()`) is skipped; with `commit=True` the offset is committed
-  only after a successful result. `should_continue` bounds the loop (a real worker loops forever).
+- `KafkaConsumerApp(application, *, settlement=Settlement())` wraps a `BenzeneMessageApplication`;
+  `handle_message(record)` decodes the record, runs the pipeline, and returns the `Result` (decoded with
+  the envelope's `isSuccessful` authoritative) for the loop to settle.
+- `run_consumer_loop(app, consumer, *, poll_timeout=1.0, should_continue=..., commit=True,
+  stop_on_failure=False, on_result=None)` drives a duck-typed consumer (`poll(timeout)` → a record or
+  `None`; `commit(message=...)`). A record carrying a broker error (`record.error()`) is skipped; with
+  `commit=True` an acknowledged record's offset is committed; `stop_on_failure` turns the default
+  skip-and-continue into at-least-once (above). `should_continue` bounds the loop (a real worker loops
+  forever).
 - `build_kafka_consumer(*, bootstrap_servers, group_id, topics, auto_offset_reset="earliest", **config)`
   constructs and subscribes a real `confluent_kafka.Consumer` configured to match the loop above —
-  most importantly `enable.auto.commit=False`, which is what makes the loop's at-least-once rule true.
+  most importantly `enable.auto.commit=False`, which is what lets the loop decide what is committed —
+  with auto-commit on, a record is committed before its outcome is known.
   Any `**config` (dotted `confluent-kafka` keys) wins over the defaults. Needs the `[kafka]` extra.
 - `kafka_consumer_worker(app, consumer, *, close=True, **loop_options)` returns a
   [`benzene.core.WorkerHost`](core.md#workerhost--running-n-transports-in-one-process) leg wrapping the

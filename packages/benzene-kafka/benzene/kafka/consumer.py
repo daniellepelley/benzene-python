@@ -3,9 +3,21 @@
 A Kafka record carries the Benzene **topic** in its ``topic`` header (the cross-port convention shared
 with SQS/SNS/Pub/Sub/Service Bus, wire-contracts §2); the remaining Kafka headers are the Benzene
 headers (UTF-8 decoded), and the record's value is the JSON body. There is **no response channel** —
-per the spec, result mapping is *acknowledge/log only*: one record is one pipeline invocation and one
-DI scope, and the handler's result governs whether the loop commits the offset (success) or leaves it
-for redelivery, never a reply.
+one record is one pipeline invocation and one DI scope, and the outcome **settles** it
+(transport-bindings §1, obligation 8).
+
+**Settlement: skip-and-continue by default.** Kafka is a partition-ordered stream, so a record the loop
+declines to acknowledge blocks every record behind it. By default the loop commits a record's offset
+only when its invocation ended ``isSuccessful`` (``ignored`` included) and otherwise **moves on**: the
+failed record — a failure, a missing result, an unmatched topic — is not committed itself, but the
+next commit on its partition passes it, so it is redelivered only if the consumer restarts or
+rebalances before another record on that partition succeeds. That is skip-and-continue, the default
+a stream binding may choose (and what .NET's Kafka worker defaults to); the unit of settlement is the
+record offset, committed cumulatively per partition. ``run_consumer_loop(..., stop_on_failure=True)``
+is the **at-least-once** mode: the loop raises :class:`~benzene.core.MessageHandlingError` at the first
+unacknowledged record without committing it, so the worker stops and a restart resumes at that record.
+``KafkaConsumerApp(..., settlement=Settlement(at_most_once=True))`` commits whatever the outcome;
+``Settlement(ignore_unmatched_topics=True)`` commits a topic no handler serves as ``ignored``.
 
 Everything here is duck-typed against the ``confluent-kafka`` shapes (``message.headers()`` /
 ``message.value()`` / ``message.error()``; ``consumer.poll()`` / ``consumer.commit()``), so the
@@ -17,14 +29,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
 from benzene.core import (
+    SKIP_AND_CONTINUE,
+    STREAM,
     AppDefinition,
     BenzeneMessageApplication,
+    MessageHandlingError,
+    Settlement,
+    SettlementDefaults,
     StopSignal,
     Worker,
     application_from,
+    dispatch_one_way,
     read_message_metadata,
 )
 from benzene.results import Result
@@ -68,25 +86,41 @@ def decode_kafka_message(message: KafkaMessage) -> dict[str, Any]:
 class KafkaConsumerApp:
     """Runs one Kafka record through the Benzene pipeline (one record → one invocation → one scope).
 
-    :meth:`handle_message` never raises — the entry point always returns a response envelope (a
-    malformed body is a ``bad-request``, a handler fault a ``service-unavailable``), so a poison record
-    can never crash the consumer loop (the binding's failure rule). Since Kafka has no response
-    channel, the mapped :class:`~benzene.results.Result` is returned for the loop to *act on* (commit /
-    log), not sent back to a caller.
+    :meth:`handle_message` returns the invocation's :class:`~benzene.results.Result` — decoded from
+    the response envelope with its ``isSuccessful`` authoritative, never re-derived from the status
+    text — for the loop to *settle* (commit / pass over / stop), not to send back to a caller. A
+    malformed body is a ``bad-request`` and a handler fault a ``service-unavailable``, so content never
+    crashes the loop.
     """
 
-    def __init__(self, application: BenzeneMessageApplication) -> None:
+    #: Skip-and-continue by default, a stream's documented choice (see the module docstring).
+    SETTLEMENT_DEFAULTS: ClassVar[tuple[SettlementDefaults, ...]] = (
+        SettlementDefaults("kafka", STREAM, SKIP_AND_CONTINUE, SKIP_AND_CONTINUE),
+    )
+
+    def __init__(
+        self, application: BenzeneMessageApplication, *, settlement: Settlement = Settlement()
+    ) -> None:
         self._application = application
+        self._settlement = settlement
 
     @classmethod
-    def from_definition(cls, definition: AppDefinition) -> KafkaConsumerApp:
+    def from_definition(
+        cls, definition: AppDefinition, *, settlement: Settlement = Settlement()
+    ) -> KafkaConsumerApp:
         """Build the consumer app from a composition root's :class:`AppDefinition` (one-line wiring)."""
-        return cls(application_from(definition))
+        return cls(application_from(definition), settlement=settlement)
+
+    @property
+    def settlement(self) -> Settlement:
+        """How the loop settles each record: committed iff ``settlement.acknowledges(result)``."""
+        return self._settlement
 
     async def handle_message(self, message: KafkaMessage) -> Result:
-        envelope = decode_kafka_message(message)
-        response = await self._application.handle(envelope)
-        return Result(response["statusCode"])
+        outcome = await dispatch_one_way(
+            self._application, self._settlement, decode_kafka_message, message
+        )
+        return outcome.result
 
 
 def _message_error(message: Any) -> Any:
@@ -102,14 +136,18 @@ async def run_consumer_loop(
     poll_timeout: float = 1.0,
     should_continue: Callable[[], bool] = lambda: True,
     commit: bool = True,
+    stop_on_failure: bool = False,
     on_result: Callable[[Any, Result], None] | None = None,
 ) -> None:
-    """Drive a self-hosted consumer: poll, dispatch one record at a time, commit the offset on success.
+    """Drive a self-hosted consumer: poll, dispatch one record at a time, settle each.
 
     ``consumer`` is duck-typed (``poll(timeout)`` → a record or ``None``; ``commit(message=...)``).
     A record carrying a broker error (``message.error()``) is skipped. With ``commit=True`` (the
-    default, at-least-once) the offset is committed only after a **successful** result, so a failed
-    record is redelivered rather than silently dropped; a caller wanting different semantics passes
+    default) a record's offset is committed only when ``app.settlement`` acknowledges its result — by
+    default a **successful** one; an unacknowledged record is **passed over** (skip-and-continue: the
+    next commit on its partition passes it). ``stop_on_failure=True`` is the at-least-once mode:
+    the first unacknowledged record raises :class:`~benzene.core.MessageHandlingError` without being
+    committed, so the worker stops and a restart resumes at it. A caller committing by hand passes
     ``commit=False`` and commits from ``on_result``. ``should_continue`` bounds the loop (a real
     worker loops forever; a test stops after N polls).
 
@@ -130,9 +168,14 @@ async def run_consumer_loop(
         result = await app.handle_message(message)
         if on_result is not None:
             on_result(message, result)
-        # At-least-once: commit only a successful outcome, so a failed record is redelivered, not lost.
-        if commit and result.is_successful:
-            await asyncio.to_thread(consumer.commit, message=message)
+        if app.settlement.acknowledges(result):
+            if commit:
+                await asyncio.to_thread(consumer.commit, message=message)
+        elif stop_on_failure:
+            # At-least-once: stop before anything commits past this record, so a restart resumes here.
+            topic = decode_kafka_message(message)["topic"]
+            raise MessageHandlingError(topic, result.status, ", ".join(result.messages))
+        # Otherwise skip-and-continue: not committed, and the loop moves on.
 
 
 def build_kafka_consumer(
@@ -146,10 +189,10 @@ def build_kafka_consumer(
     """Build and subscribe a ``confluent_kafka.Consumer`` configured to match this binding's loop.
 
     The one setting worth calling out is ``enable.auto.commit=False``. It is not a preference: it is
-    what makes :func:`run_consumer_loop`'s at-least-once rule true, because the loop commits the
-    offset itself and only after a **successful** result. Auto-commit on, and a record that failed
-    would have its offset committed anyway and never be redelivered. Getting that wrong is silent,
-    so this builder gets it right by default.
+    what makes :func:`run_consumer_loop`'s settlement true, because the loop commits the offset
+    itself and only for an acknowledged result. Auto-commit on, and a record that failed would have
+    its offset committed before the loop even saw the outcome — no ``stop_on_failure`` could hold it
+    back. Getting that wrong is silent, so this builder gets it right by default.
 
     **The explicit form this composes** — still the thing to write when you want different broker
     settings, and equally supported — is the ``confluent-kafka`` constructor directly::
@@ -174,7 +217,7 @@ def build_kafka_consumer(
     settings: dict[str, Any] = {
         "bootstrap.servers": bootstrap_servers,
         "group.id": group_id,
-        # The loop commits on success (at-least-once); auto-commit would defeat redelivery.
+        # The loop commits what it acknowledges; auto-commit would commit before the outcome is known.
         "enable.auto.commit": False,
         "auto.offset.reset": auto_offset_reset,
     }

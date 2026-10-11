@@ -30,6 +30,39 @@ One host, inner bindings selected by event shape (transport-bindings §1):
   invoke's response Payload, for the caller to decode back into a `Result`
   (`benzene.core.decode_response`).
 
+**Settlement** (transport-bindings §1, obligation 8). Every source but API Gateway and a synchronous
+direct invoke is one-way: a message is acknowledged only when its invocation ended `isSuccessful`
+(`ignored` included), and a failure, a missing result, a topic no handler serves or an uncaught error
+is handed back — reported in `batchItemFailures`, or raised — so Lambda redelivers it and its own
+retry / on-failure destination / DLQ configuration decides when to give up. The unit of settlement:
+
+| Source | Shape | Unit of settlement |
+|---|---|---|
+| SQS | queue | the message (reported by `messageId`; needs *ReportBatchItemFailures*) |
+| SNS, S3 | one-shot | the whole invocation — the first failing record raises, later records don't run |
+| EventBridge | one-shot | the one event |
+| Kafka / MSK | stream | the whole invocation, across every topic-partition in it |
+| DynamoDB Streams, Kinesis | stream | the record (reported by sequence number); Lambda resumes the shard from the lowest failure, so the records after it are redelivered too |
+| direct invoke, `invocation_type="Event"` | one-shot | the one envelope |
+
+Two knobs, the same `settlement=Settlement(...)` keyword every one-way host takes (and
+`AwsLambdaApp.from_definition(definition, settlement=...)`):
+
+```python
+from benzene.core import Settlement
+
+AwsLambdaApp(router, settlement=Settlement(at_most_once=True))            # acknowledge everything
+AwsLambdaApp(router, settlement=Settlement(ignore_unmatched_topics=True)) # a shared bus's other topics
+```
+
+`at_most_once` reports nothing and raises nothing — a failure is logged on `benzene.settlement` and
+dropped. `ignore_unmatched_topics` acknowledges a topic no handler serves (at any version) as
+`ignored`; a known topic at an unknown version is still a failure. A direct invoke is synchronous —
+the caller reads the envelope — but Lambda does not tell a function how it was invoked, so a function
+invoked with `InvocationType="Event"` (`LambdaMessageSender(invocation_type="Event")`) is deployed with
+`AwsLambdaApp(..., invocation_type="Event")`: a failure then raises so Lambda's asynchronous retry
+takes over, instead of returning an envelope nobody reads.
+
 Topic for the attribute-carrying transports (SQS, SNS, Kafka) comes from the `topic` message attribute
 / header. The channel-less sources (S3, EventBridge, DynamoDB, Kinesis) have no metadata channel on the
 wire, so their topic comes from an injectable convention configured on the host — or, for DynamoDB,
@@ -110,15 +143,18 @@ await run_sqs_consumer_loop(app, client, queue_url)    # long-poll -> dispatch -
 WorkerHost().add("sqs", sqs_consumer_worker(app, client, queue_url))   # ...or as one leg of many
 ```
 
-- `SqsConsumerApp(application)` / `.from_definition(definition)` — `handle_message(message)` decodes a
-  `boto3` `receive_message()` message dict (topic from the `topic` message attribute, `MessageAttributes`
-  using `StringValue`/`DataType` — **not** the Lambda-event `messageAttributes` shape) and returns the
-  mapped `Result`. It never raises, so a poison message can't crash the loop.
+- `SqsConsumerApp(application, *, settlement=Settlement())` / `.from_definition(definition,
+  settlement=...)` — `handle_message(message)` decodes a `boto3` `receive_message()` message dict
+  (topic from the `topic` message attribute, `MessageAttributes` using `StringValue`/`DataType` —
+  **not** the Lambda-event `messageAttributes` shape) and returns the `Result`, decoded with the
+  envelope's `isSuccessful` authoritative (so an application-defined success is deleted, not
+  redelivered). Content never crashes the loop: a malformed body is a `bad-request` result.
 - `run_sqs_consumer_loop(app, client, queue_url, *, max_number_of_messages=10, wait_time_seconds=20,
   should_continue=..., delete=True, on_result=None)` drives a duck-typed SQS client
-  (`receive_message` / `delete_message`). With `delete=True` (the default, at-least-once) a message is
-  deleted only after a **successful** result, so a failed message is left on the queue individually for
-  redelivery/DLQ redrive. `wait_time_seconds` defaults to 20 (SQS's maximum long-poll). The synchronous
+  (`receive_message` / `delete_message`). With `delete=True` (the default) a message is deleted only
+  when `app.settlement` acknowledges its result — by default a **successful** one — so a failed message,
+  a missing result or an unmatched topic is left on the queue individually for redelivery/DLQ redrive
+  (the unit of settlement is the message). `Settlement(at_most_once=True)` deletes everything. `wait_time_seconds` defaults to 20 (SQS's maximum long-poll). The synchronous
   `boto3` calls are run via `asyncio.to_thread` so a 20-second long-poll never blocks other coroutines
   on the event loop — the pattern that lets this consumer share a process with an HTTP server.
 - `sqs_consumer_worker(app, client, queue_url, **loop_options)` returns a

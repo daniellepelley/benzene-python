@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from benzene.core import BenzeneStartUp, ServiceOverride, build_application
+from benzene.core import BenzeneStartUp, ServiceOverride, Settlement, build_application
 
 if TYPE_CHECKING:
     # Return types for editor/mypy help only — the cloud packages stay lazy runtime imports so
@@ -50,6 +50,7 @@ class TestHostBuilder:
         self._startup = startup
         self._overrides: list[ServiceOverride] = []
         self._config: dict[str, str] = {}
+        self._settlement = Settlement()
 
     def with_services(self, override: ServiceOverride) -> TestHostBuilder:
         """Register services over the startup's own (last wins) — the seam for fakes/mocks.
@@ -64,6 +65,12 @@ class TestHostBuilder:
     def with_config(self, values: Mapping[str, str]) -> TestHostBuilder:
         """Layer configuration values on top of the startup's defaults."""
         self._config.update(values)
+        return self
+
+    def with_settlement(self, settlement: Settlement) -> TestHostBuilder:
+        """Settle one-way messages as ``settlement`` says (at-most-once, unmatched-as-ignored) on
+        whichever one-way host is built — the same keyword every such host takes in deployment."""
+        self._settlement = settlement
         return self
 
     def _build(self) -> tuple[AppDefinition, Scope]:
@@ -98,7 +105,9 @@ class TestHostBuilder:
                 "build_gcp() requires the 'benzene-gcp' package to be installed"
             ) from ex
         definition, scope = self._build()
-        host = GcpFunctionsTestHost(GcpFunctionsApp.from_definition(definition))
+        host = GcpFunctionsTestHost(
+            GcpFunctionsApp.from_definition(definition, settlement=self._settlement)
+        )
         host.scope = scope
         return host
 
@@ -112,7 +121,9 @@ class TestHostBuilder:
                 "build_aws() requires the 'benzene-aws' package to be installed"
             ) from ex
         definition, scope = self._build()
-        host = AwsLambdaTestHost(AwsLambdaApp.from_definition(definition))
+        host = AwsLambdaTestHost(
+            AwsLambdaApp.from_definition(definition, settlement=self._settlement)
+        )
         host.scope = scope
         return host
 
@@ -149,7 +160,9 @@ class TestHostBuilder:
                 "build_kafka() requires the 'benzene-kafka' package to be installed"
             ) from ex
         definition, scope = self._build()
-        host = KafkaTestHost(KafkaConsumerApp.from_definition(definition))
+        host = KafkaTestHost(
+            KafkaConsumerApp.from_definition(definition, settlement=self._settlement)
+        )
         host.scope = scope
         return host
 
@@ -168,7 +181,9 @@ class TestHostBuilder:
                 "build_rabbitmq() requires the 'benzene-rabbitmq' package to be installed"
             ) from ex
         definition, scope = self._build()
-        host = RabbitMqTestHost(RabbitMqConsumerApp.from_definition(definition))
+        host = RabbitMqTestHost(
+            RabbitMqConsumerApp.from_definition(definition, settlement=self._settlement)
+        )
         host.scope = scope
         return host
 
@@ -189,7 +204,9 @@ class TestHostBuilder:
                 "build_sqs_consumer() requires the 'benzene-aws' package to be installed"
             ) from ex
         definition, scope = self._build()
-        host = SqsConsumerTestHost(SqsConsumerApp.from_definition(definition))
+        host = SqsConsumerTestHost(
+            SqsConsumerApp.from_definition(definition, settlement=self._settlement)
+        )
         host.scope = scope
         return host
 
@@ -203,7 +220,9 @@ class TestHostBuilder:
                 "build_azure() requires the 'benzene-azure' package to be installed"
             ) from ex
         definition, scope = self._build()
-        host = AzureFunctionsTestHost(AzureFunctionsApp.from_definition(definition))
+        host = AzureFunctionsTestHost(
+            AzureFunctionsApp.from_definition(definition, settlement=self._settlement)
+        )
         host.scope = scope
         return host
 
