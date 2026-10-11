@@ -28,8 +28,9 @@ from __future__ import annotations
 import json
 
 from benzene.core import decode_response, encode_body
+from benzene.http import from_http
 from benzene.http.client import HttpTransport, stdlib_transport
-from benzene.results import Result, Status
+from benzene.results import Result, is_successful
 
 
 class EnvelopeHttpMessageSender:
@@ -48,12 +49,18 @@ class EnvelopeHttpMessageSender:
         reply = await self._transport(
             self._url, {"content-type": "application/json"}, json.dumps(envelope)
         )
-        if not reply.body:
-            return Result.failure(Status.UNEXPECTED_ERROR, f"{self._url} returned an empty response")
+        # The envelope endpoint answers 200 for every envelope it processed and carries the outcome in
+        # the envelope, so read the body whatever the status; only a body that is not an envelope
+        # falls back to the reverse HTTP table (transport-bindings §1, "Outbound clients").
         try:
-            response_envelope = json.loads(reply.body)
+            response_envelope = json.loads(reply.body) if reply.body else None
         except (ValueError, TypeError):
-            return Result.unexpected_error(f"{self._url} returned a non-JSON response: {reply.body!r}")
-        if not isinstance(response_envelope, dict):
-            return Result.unexpected_error(f"{self._url} did not return a response envelope")
-        return decode_response(response_envelope)
+            response_envelope = None
+        if isinstance(response_envelope, dict) and "statusCode" in response_envelope:
+            return decode_response(response_envelope)
+        status = from_http(reply.status_code)
+        if is_successful(status):
+            return Result(status)
+        return Result.failure(
+            status, f"{self._url} answered HTTP {reply.status_code} without a response envelope"
+        )

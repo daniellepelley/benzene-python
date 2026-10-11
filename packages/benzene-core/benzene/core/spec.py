@@ -38,6 +38,39 @@ from .schema import Schema, json_schema
 #: The reserved topic id a service intercepts to return its derived spec document.
 SPEC_TOPIC = "benzene:spec"
 
+#: ``benzene:spec``'s request selects a document by ``type`` and ``format`` (wire-contracts §7). An
+#: absent, empty or null value means ``benzene`` / ``json``: the Contract Document.
+SPEC_TYPE_BENZENE = "benzene"
+#: This port's own ``{service, topics}`` :class:`ServiceSpec` — a port-extension ``type``.
+SPEC_TYPE_NATIVE = "native"
+#: The one ``format`` this port renders.
+SPEC_FORMAT_JSON = "json"
+
+
+def select_spec_document(type: object = None, format: object = None) -> tuple[str, str | None]:
+    """Resolve a ``benzene:spec`` request's ``type`` and ``format`` to the document to serve.
+
+    Returns ``(kind, None)`` — ``kind`` is :data:`SPEC_TYPE_BENZENE` (the Contract Document, also what
+    an absent/empty/null value means) or :data:`SPEC_TYPE_NATIVE` — or ``(requested, reason)`` when
+    the request names a type or format this port does not serve, which is answered
+    ``not-implemented`` and never with a different document (wire-contracts §7). Values compare
+    case-insensitively. Shared by the reserved topic and the HTTP ``GET /benzene/spec`` route, so the
+    two can never disagree about what a request means.
+    """
+    kind = str(type or "").strip().lower() or SPEC_TYPE_BENZENE
+    rendering = str(format or "").strip().lower() or SPEC_FORMAT_JSON
+    if rendering != SPEC_FORMAT_JSON:
+        return kind, (
+            f"benzene:spec format {rendering!r} is not implemented by this service; "
+            f"it renders {SPEC_FORMAT_JSON!r} only"
+        )
+    if kind not in (SPEC_TYPE_BENZENE, SPEC_TYPE_NATIVE):
+        return kind, (
+            f"benzene:spec type {kind!r} is not implemented by this service; it serves "
+            f"{SPEC_TYPE_BENZENE!r} (the contract document) and {SPEC_TYPE_NATIVE!r}"
+        )
+    return kind, None
+
 
 class OutboundTopic(Protocol):
     """One *declared* outbound topic — the structural shape of ``benzene.mesh``'s

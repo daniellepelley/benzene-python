@@ -1,21 +1,22 @@
-"""Serve the vendored mesh-ui page and the generated artifacts under ``/mesh-ui/``.
+"""Serve the vendored mesh-ui page and the generated artifacts under ``/benzene/mesh-ui/``.
 
 A thin ASGI wrapper around the mesh's :class:`~benzene.http.BenzeneHttpApp`: a request under the
-``/mesh-ui/`` mount is served as a static file (the canonical ``mesh-ui.html``, or a generated artifact
+``/benzene/mesh-ui/`` mount (the Mesh UI's default path, design-principles §5.2) is served as a static file (the canonical ``mesh-ui.html``, or a generated artifact
 JSON from ``MESH_ARTIFACT_DIR``); everything else is delegated to the inner app unchanged, so the
 ``/benzene/invoke`` collector surface and ``/mesh/refresh`` stay untouched. Mirrors
 ``deploy/mesh/collector/static.py``'s ``StaticUiApp``, kept local to this example (it wraps a plain
 ASGI callable, not anything specific to the Fargate collector's own wiring).
 
 The served page has ``data-manifest-url``/``data-fleet-url`` stamped onto its ``<html>`` root, pointing
-at this mount's own absolute artifact/collector paths (``/mesh-ui/manifest.json``, ``/benzene/invoke``)
-— mirrors .NET's ``MeshUiPage.GetHtml(manifestUrl, envelopeUrl)`` / ``UseMeshUi("/mesh-ui",
-"manifest.json", "/benzene/invoke")``. .NET's own default of the *bare* filename ``"manifest.json"``
-only resolves correctly there because its artifacts are served at the site **root**, not nested under
-``/mesh-ui/`` as they are here; nesting them (deliberately, so they can't collide with this app's own
-``/benzene/*``/``/mesh/*`` routes) means the page's default relative fetch — resolved against
-``document.baseURI``, i.e. the page's own URL, ``/mesh-ui`` with no trailing slash — lands on
-``/manifest.json`` instead of ``/mesh-ui/manifest.json`` and 404s. Stamping the absolute path sidesteps
+at this mount's own absolute artifact/collector paths (``/benzene/mesh-ui/manifest.json``,
+``/benzene/invoke``) — mirrors .NET's ``MeshUiPage.GetHtml(manifestUrl, envelopeUrl)`` /
+``UseMeshUi(path, "manifest.json", "/benzene/invoke")``. .NET's own default of the *bare* filename
+``"manifest.json"`` only resolves correctly there because its artifacts are served at the site
+**root**, not nested under the mount as they are here; nesting them (deliberately, so they can't
+collide with this app's own ``/benzene/*``/``/mesh/*`` routes) means the page's default relative
+fetch — resolved against ``document.baseURI``, i.e. the page's own URL, ``/benzene/mesh-ui`` with no
+trailing slash — lands on ``/benzene/manifest.json`` instead of ``/benzene/mesh-ui/manifest.json``
+and 404s. Stamping the absolute path sidesteps
 that entirely, regardless of whether the page was reached with or without a trailing slash.
 """
 
@@ -25,7 +26,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-_MOUNT = "/mesh-ui"
+_MOUNT = "/benzene/mesh-ui"
 _COLLECTOR_ENVELOPE_PATH = "/benzene/invoke"
 
 
@@ -35,7 +36,7 @@ def _inject_urls(html: str, manifest_url: str, fleet_url: str) -> str:
 
 
 class MeshUiApp:
-    """Wrap ``inner`` and serve the mesh-ui page + artifacts under ``/mesh-ui/``."""
+    """Wrap ``inner`` and serve the mesh-ui page + artifacts under ``/benzene/mesh-ui/``."""
 
     def __init__(self, inner: Any, *, ui_html: Path, artifacts_dir: Path) -> None:
         self._inner = inner

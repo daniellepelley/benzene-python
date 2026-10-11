@@ -1,13 +1,14 @@
-"""Serve the vendored mesh-ui and the generated artifacts under ``/mesh-ui/``.
+"""Serve the vendored mesh-ui and the generated artifacts under ``/benzene/mesh-ui/``.
 
 A thin ASGI wrapper around the collector's :class:`~benzene.http.BenzeneHttpApp`: a request under the
-``/mesh-ui/`` mount is served as a static file (the canonical ``mesh-ui.html`` from the image, or a
+``/benzene/mesh-ui/`` mount — the default path every port gives the Mesh UI (design-principles §5.2),
+configurable with ``mount=`` — is served as a static file (the canonical ``mesh-ui.html`` from the image, or a
 generated artifact JSON from the volume); everything else is delegated to the inner app unchanged, so
 the collector's ingest/query routes and ``/benzene/*`` surfaces are untouched.
 
 The UI fetches ``manifest.json`` (and ``services/{name}.json`` / ``topics.json`` / ``topology.json``)
-by path relative to itself, so serving the page at ``/mesh-ui/`` with the artifacts alongside it needs
-no UI configuration at all (mesh-ui.md §5).
+by path relative to itself, so serving the page at ``/benzene/mesh-ui/`` with the artifacts alongside it
+needs no UI configuration at all (mesh-ui.md §5).
 """
 
 from __future__ import annotations
@@ -15,25 +16,30 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-_MOUNT = "/mesh-ui"
+#: The Mesh UI's default path (design-principles §5.2): under ``/benzene/`` like every framework surface.
+DEFAULT_MOUNT = "/benzene/mesh-ui"
 
 
 class StaticUiApp:
-    """Wrap ``inner`` and serve the mesh-ui page + artifacts under ``/mesh-ui/``."""
+    """Wrap ``inner`` and serve the mesh-ui page + artifacts under ``mount`` (``/benzene/mesh-ui/``)."""
 
-    def __init__(self, inner: Any, *, ui_html: Path, artifacts_dir: Path) -> None:
+    def __init__(
+        self, inner: Any, *, ui_html: Path, artifacts_dir: Path, mount: str = DEFAULT_MOUNT
+    ) -> None:
         self._inner = inner
         self._ui_html = Path(ui_html)
         self._artifacts_dir = Path(artifacts_dir).resolve()
+        self._mount = mount.rstrip("/")
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope.get("type") == "http":
             path = scope.get("path", "/")
-            if path in (_MOUNT, _MOUNT + "/", _MOUNT + "/index.html"):
+            mount = self._mount
+            if path in (mount, mount + "/", mount + "/index.html"):
                 await self._send_file(send, self._ui_html, "text/html; charset=utf-8")
                 return
-            if path.startswith(_MOUNT + "/"):
-                await self._serve_artifact(send, path[len(_MOUNT) + 1 :])
+            if path.startswith(mount + "/"):
+                await self._serve_artifact(send, path[len(mount) + 1 :])
                 return
         await self._inner(scope, receive, send)
 

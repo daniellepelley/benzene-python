@@ -232,11 +232,17 @@ def test_the_native_shape_stays_reachable_under_type_native() -> None:
     assert [t["id"] for t in document["produces"]] == ["order:placed"]
 
 
-def test_an_unrecognised_type_answers_the_contract_document() -> None:
-    # The R5 spelling is ?type=benzene&format=json; anything else falls through to the same
-    # document, matching the .NET reference's SpecBuilder rather than 400-ing a caller.
+def test_an_unsupported_type_or_format_is_not_implemented() -> None:
+    # The R5 spelling is ?type=benzene&format=json. Anything this port does not render is answered
+    # not-implemented, never with a different document under a name that does not describe it
+    # (wire-contracts §7) - a caller asking for AsyncAPI must not be handed a Contract Document.
     assert _get(_app(), "type=benzene&format=json")["openapi"] == "3.0.1"
-    assert _get(_app(), "type=asyncapi")["openapi"] == "3.0.1"
+    assert _get(_app(), "type=Benzene")["openapi"] == "3.0.1"  # compared case-insensitively
+    for query in ("type=asyncapi", "format=yaml", "type=benzene&format=yaml"):
+        response = asyncio.run(_app().handle("GET", "/benzene/spec", query))
+        assert response.status_code == 501, query
+        problem = json.loads(response.body)
+        assert problem["benzeneStatus"] == "not-implemented"
 
 
 def test_declared_transports_reach_the_served_document() -> None:
@@ -286,6 +292,6 @@ def test_an_authored_contract_alone_enables_the_surface() -> None:
         standard_paths=StandardPaths(contract=ContractDocument.derive(registry, service="orders")),
     )
     assert _get(app)["info"]["title"] == "orders"
-    # …and ?type=native is honestly answered "not served here" rather than quietly given the other
-    # document under a name that does not describe it.
-    assert asyncio.run(app.handle("GET", "/benzene/spec", "type=native")).status_code == 404
+    # …and ?type=native is honestly answered "not implemented here" rather than quietly given the
+    # other document under a name that does not describe it.
+    assert asyncio.run(app.handle("GET", "/benzene/spec", "type=native")).status_code == 501

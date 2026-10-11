@@ -156,14 +156,14 @@ def test_static_ui_serves_page_and_artifacts_and_delegates_the_rest(tmp_path: Pa
     (arts / "manifest.json").write_text('{"services": []}', encoding="utf-8")
     app = StaticUiApp(_inner_marker, ui_html=ui, artifacts_dir=arts)
 
-    status, body = asyncio.run(_drive(app, "/mesh-ui/"))
+    status, body = asyncio.run(_drive(app, "/benzene/mesh-ui/"))
     assert status == 200 and b"MESH UI" in body  # the vendored page
 
-    status, body = asyncio.run(_drive(app, "/mesh-ui/manifest.json"))
+    status, body = asyncio.run(_drive(app, "/benzene/mesh-ui/manifest.json"))
     assert status == 200 and json.loads(body) == {"services": []}  # a generated artifact
 
-    assert asyncio.run(_drive(app, "/mesh-ui/missing.json"))[0] == 404
-    assert asyncio.run(_drive(app, "/mesh-ui/../secret.json"))[0] == 404  # no path traversal
+    assert asyncio.run(_drive(app, "/benzene/mesh-ui/missing.json"))[0] == 404
+    assert asyncio.run(_drive(app, "/benzene/mesh-ui/../secret.json"))[0] == 404  # no path traversal
 
     status, body = asyncio.run(_drive(app, "/mesh/fleet"))  # not under the mount -> inner app
     assert status == 299 and body == b"inner"

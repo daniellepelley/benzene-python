@@ -176,9 +176,9 @@ jobs:
           echo "refresh -> $RESP"
           echo "$RESP" | grep -Eq '"discovered":\s*3' \
             || { echo "::error::expected 3 discovered, got: $RESP"; exit 1; }
-          curl -fsS -m 10 -o /dev/null "http://$HOST/mesh-ui" \
-            || { echo "::error::Mesh UI did not answer at http://$HOST/mesh-ui"; exit 1; }
-          echo "--- manifest.json ---"; curl -fsS "http://$HOST/mesh-ui/manifest.json"
+          curl -fsS -m 10 -o /dev/null "http://$HOST/benzene/mesh-ui" \
+            || { echo "::error::Mesh UI did not answer at http://$HOST/benzene/mesh-ui"; exit 1; }
+          echo "--- manifest.json ---"; curl -fsS "http://$HOST/benzene/mesh-ui/manifest.json"
           echo ""
           echo "MESH_HOST=$HOST" >> "$GITHUB_ENV"
 
@@ -189,7 +189,7 @@ jobs:
         if: inputs.action == 'apply'
         run: |
           echo "### Public URLs" >> "$GITHUB_STEP_SUMMARY"
-          echo "Mesh UI: http://$MESH_HOST/mesh-ui" >> "$GITHUB_STEP_SUMMARY"
+          echo "Mesh UI: http://$MESH_HOST/benzene/mesh-ui" >> "$GITHUB_STEP_SUMMARY"
           for s in orders payments shipping; do
             echo "Waiting for svc/$s's LoadBalancer hostname..."
             HOST=""

@@ -69,6 +69,60 @@ def test_invoke_carries_the_domain_outcome_in_the_envelope_not_the_http_status()
     assert json.loads(response.body)["statusCode"] == "not-found"
 
 
+def test_invoke_answers_200_for_every_processed_envelope_whatever_its_status() -> None:
+    # transport-bindings §1 (D17): the envelope carries the outcome, so the status line does not - a
+    # deleted result is 200 with its envelope (not 204), a failure is 200 with its problem document,
+    # and that problem document omits RFC 9457's `status` because no HTTP response is its own.
+    async def remove(_request: dict) -> Result:
+        return Result.deleted({"removed": True})
+
+    async def refuse(_request: dict) -> Result:
+        return Result.unauthorized("no token")
+
+    router = HttpRouter()
+    registry = Registry().register("orders:delete", remove).register("orders:secret", refuse)
+    app = BenzeneHttpApp(
+        router, application=BenzeneMessageApplication(registry), standard_paths=StandardPaths()
+    )
+
+    deleted = asyncio.run(app.handle("POST", "/benzene/invoke", body=json.dumps(
+        {"topic": "orders:delete", "headers": {}, "body": "{}"})))
+    assert deleted.status_code == 200
+    assert json.loads(json.loads(deleted.body)["body"]) == {"removed": True}
+
+    refused = asyncio.run(app.handle("POST", "/benzene/invoke", body=json.dumps(
+        {"topic": "orders:secret", "headers": {}, "body": "{}"})))
+    assert refused.status_code == 200  # the pipeline's own auth outcome is a processed envelope
+    outer = json.loads(refused.body)
+    assert outer["statusCode"] == "unauthorized" and outer["isSuccessful"] is False
+    assert "status" not in json.loads(outer["body"])
+
+
+def test_invoke_topics_restricts_the_endpoint_to_not_found() -> None:
+    app = _app(StandardPaths(invoke_topics={"benzene:healthcheck"}))
+    envelope = {"topic": "say:hello", "headers": {}, "body": json.dumps({"name": "world"})}
+    response = asyncio.run(app.handle("POST", "/benzene/invoke", body=json.dumps(envelope)))
+    assert response.status_code == 200
+    outer = json.loads(response.body)
+    # Exactly as if no handler matched (D21) - the restricted handler never runs.
+    assert outer["statusCode"] == "not-found"
+    assert json.loads(outer["body"])["benzeneStatus"] == "not-found"
+    # The ordinary route to the same handler is unaffected: the restriction is the endpoint's.
+    routed = asyncio.run(app.handle("POST", "/greet", body=json.dumps({"name": "world"})))
+    assert routed.status_code == 200
+
+
+def test_invoke_topics_accepts_any_container_with_a_rule() -> None:
+    class Public:
+        def __contains__(self, topic: object) -> bool:
+            return isinstance(topic, str) and topic.startswith("say:")
+
+    app = _app(StandardPaths(invoke_topics=Public()))
+    envelope = {"topic": "say:hello", "headers": {}, "body": json.dumps({"name": "world"})}
+    response = asyncio.run(app.handle("POST", "/benzene/invoke", body=json.dumps(envelope)))
+    assert json.loads(response.body)["statusCode"] == "ok"
+
+
 def test_invoke_rejects_a_malformed_envelope_at_the_transport() -> None:
     app = _app(StandardPaths())
     response = asyncio.run(app.handle("POST", "/benzene/invoke", body="{not json"))

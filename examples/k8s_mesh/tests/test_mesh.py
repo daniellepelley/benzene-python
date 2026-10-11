@@ -114,22 +114,22 @@ async def _serve(app: MeshUiApp, path: str) -> tuple[int, str, bytes]:
 
 def test_ui_page_carries_the_mount_s_own_absolute_manifest_and_fleet_urls(tmp_path) -> None:
     """Regression: the page's default *relative* ``manifest.json`` fetch resolves against
-    ``document.baseURI`` — the page's own URL. Reached at the bare mount (``/mesh-ui``, no trailing
+    ``document.baseURI`` — the page's own URL. Reached at the bare mount (``/benzene/mesh-ui``, no trailing
     slash, exactly what .NET's k8s Ingress/Service and this repo's own README both point at), that
     resolves to ``/manifest.json`` at the site root — but this mount serves artifacts nested under
-    ``/mesh-ui/`` (deliberately, to avoid colliding with ``/benzene/*``/``/mesh/*``), so the unstamped
+    ``/benzene/mesh-ui/`` (deliberately, to avoid colliding with ``/benzene/*``/``/mesh/*``), so the unstamped
     page 404s. Stamping the absolute URLs sidesteps ``document.baseURI`` entirely.
     """
     ui_html = tmp_path / "mesh-ui.html"
     ui_html.write_text('<!doctype html><html lang="en"><body>mesh-ui</body></html>')
     app = MeshUiApp(inner=None, ui_html=ui_html, artifacts_dir=tmp_path)
 
-    status, content_type, body = asyncio.run(_serve(app, "/mesh-ui"))
+    status, content_type, body = asyncio.run(_serve(app, "/benzene/mesh-ui"))
 
     assert status == 200
     assert content_type.startswith("text/html")
     html = body.decode()
-    assert 'data-manifest-url="/mesh-ui/manifest.json"' in html
+    assert 'data-manifest-url="/benzene/mesh-ui/manifest.json"' in html
     assert 'data-fleet-url="/benzene/invoke"' in html
 
 
@@ -143,7 +143,7 @@ def test_ui_page_s_stamped_manifest_url_actually_resolves(tmp_path) -> None:
     (artifacts_dir / "manifest.json").write_text(json.dumps({"services": []}))
     app = MeshUiApp(inner=None, ui_html=ui_html, artifacts_dir=artifacts_dir)
 
-    _, _, page_body = asyncio.run(_serve(app, "/mesh-ui"))
+    _, _, page_body = asyncio.run(_serve(app, "/benzene/mesh-ui"))
     manifest_url = page_body.decode().split('data-manifest-url="')[1].split('"')[0]
 
     status, content_type, body = asyncio.run(_serve(app, manifest_url))

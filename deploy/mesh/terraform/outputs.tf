@@ -10,7 +10,7 @@ output "mesh_url" {
 
 output "mesh_ui_url" {
   description = "The Benzene Mesh UI (the estate dashboard), served by the collector from its artifacts."
-  value       = "http://${aws_lb.mesh.dns_name}/mesh-ui/"
+  value       = "http://${aws_lb.mesh.dns_name}/benzene/mesh-ui/"
 }
 
 output "cluster" {

@@ -9,7 +9,7 @@ directory ships it as a container (`collector/`) and the Terraform to run it on 
 > **Status.** Complete and validated locally (the host, the fleet service, the artifact projection, and
 > the static UI serving are unit-tested — `collector/tests`, `fleet/tests`, `tests/test_mesh_artifacts`).
 > One `terraform apply` stands up the whole mesh: the fleet on Lambda + the collector on Fargate, wired
-> together, **and the [Mesh UI](#the-mesh-ui) served from the collector** at `/mesh-ui/`. See
+> together, **and the [Mesh UI](#the-mesh-ui) served from the collector** at `/benzene/mesh-ui/`. See
 > the archived plan, [`work/archive/mesh-aws-plan.md`](../../work/archive/mesh-aws-plan.md).
 
 ## What gets created
@@ -109,13 +109,13 @@ curl "$MESH/mesh/topic/inventory:reserve"   # providers: [orders], consumers: [i
 curl "$MESH/mesh/topic/notify:send"         # providers: [inventory], consumers: [notifications]
 ```
 
-Open the dashboard in a browser: `terraform output -raw mesh_ui_url` (i.e. `$MESH/mesh-ui/`).
+Open the dashboard in a browser: `terraform output -raw mesh_ui_url` (i.e. `$MESH/benzene/mesh-ui/`).
 
 Logs: `aws logs tail "$(terraform output -raw log_group)" --follow`.
 
 ## The Mesh UI
 
-The collector serves the canonical, cross-language **Benzene Mesh UI** at **`/mesh-ui/`** — the same
+The collector serves the canonical, cross-language **Benzene Mesh UI** at **`/benzene/mesh-ui/`** — the same
 `mesh-ui.html` every port vendors (from the main Benzene repo; see
 [`docs/guides/mesh-ui.md`](https://github.com/daniellepelley/Benzene/blob/main/docs/guides/mesh-ui.md)),
 kept verbatim in [`collector/ui/`](collector/ui/) with its provenance banner.

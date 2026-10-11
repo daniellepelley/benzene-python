@@ -95,13 +95,17 @@ from .registry import (
 from .router import message_router
 from .schema import Schema, json_schema
 from .spec import (
+    SPEC_FORMAT_JSON,
     SPEC_TOPIC,
+    SPEC_TYPE_BENZENE,
+    SPEC_TYPE_NATIVE,
     OutboundTopic,
     ProducesSource,
     ServiceSpec,
     SpecSource,
     SupportsOutboundDefinitions,
     TopicSpec,
+    select_spec_document,
     spec_interception,
 )
 from .startup import AppDefinition, BenzeneStartUp, application_from, build_application
@@ -163,13 +167,17 @@ __all__ = [
     "HttpMapping",
     "is_reserved_topic",
     "resolve_contract",
+    "SPEC_FORMAT_JSON",
     "SPEC_TOPIC",
+    "SPEC_TYPE_BENZENE",
+    "SPEC_TYPE_NATIVE",
     "OutboundTopic",
     "ProducesSource",
     "ServiceSpec",
     "SpecSource",
     "SupportsOutboundDefinitions",
     "TopicSpec",
+    "select_spec_document",
     "spec_interception",
     "read_message_metadata",
     "AppDefinition",

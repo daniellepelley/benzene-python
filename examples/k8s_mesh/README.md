@@ -27,7 +27,7 @@ superseded by this one.
        │   2. GET http://<svc>.<ns>.svc.cluster.local/benzene/spec|health  (interrogate — the pull feed)
        ▼
    ┌────────┐   writes manifest.json / services/*.json / topics.json / registry.json
-   │  mesh  │   to /artifacts (pod volume) and serves the Mesh UI at /mesh-ui — NodePort 30080
+   │  mesh  │   to /artifacts (pod volume) and serves the Mesh UI at /benzene/mesh-ui— NodePort 30080
    └────────┘
 ```
 
@@ -94,7 +94,7 @@ documents the same reasoning for the outbound side.
 | Path | What it is |
 |---|---|
 | `service/` | one domain-service image; `MESH_SERVICE` picks the domain (orders/payments/shipping) — `domain.py` (handlers), `startup.py` (composition root), `host.py` (env-driven wiring), `reporting.py` (the mesh push loop), `main.py` (entrypoint) |
-| `mesh/` | the discovery + aggregation + UI service — `discovery_service.py` (Kubernetes discovery + poll + artifact-write pass), `host.py` (the collector + `/mesh/refresh` + Mesh UI wiring), `static.py` (serves `/mesh-ui/*`), `main.py` (entrypoint: HTTP server + a 30s discovery loop) |
+| `mesh/` | the discovery + aggregation + UI service — `discovery_service.py` (Kubernetes discovery + poll + artifact-write pass), `host.py` (the collector + `/mesh/refresh` + Mesh UI wiring), `static.py` (serves `/benzene/mesh-ui/*`), `main.py` (entrypoint: HTTP server + a 30s discovery loop) |
 | `envelope_client.py` | `EnvelopeHttpMessageSender` — the shared outbound client both the service chain and the collector reporting use |
 | `k8s/` | manifests: namespace, the 3 Deployments+Services, and the mesh (SA + RBAC + Deployment + NodePort Service), with a kustomize base for target-specific overlays |
 | `deploy/` | Terraform for the AWS leg: EKS cluster + node group + the two ECR repositories |
@@ -125,7 +125,7 @@ kubectl apply -k examples/k8s_mesh/k8s/   # -k: the directory is a kustomize bas
 kubectl -n benzene-mesh port-forward svc/mesh 8080:80
 # then, in another shell:
 curl -XPOST localhost:8080/mesh/refresh   # {"discovered":3}
-open http://localhost:8080/mesh-ui        # the discovered catalog + Topics table, merged with the
+open http://localhost:8080/benzene/mesh-ui       # the discovered catalog + Topics table, merged with the
                                           # live Fleet plane (observed) — services as they register,
                                           # heartbeat, and push traces to the mesh's collector
 ```
@@ -150,7 +150,7 @@ workflow:
    and does the same for each `benzene`-labelled Service, so orders/payments/shipping are directly
    callable from the internet as well.
 4. waits for the ELBs, `POST`s `/mesh/refresh`, asserts `{"discovered":3}`, and prints
-   `http://<elb-hostname>/mesh-ui` plus each service's `http://<elb-hostname>/benzene/spec` URL in the
+   `http://<elb-hostname>/benzene/mesh-ui` plus each service's `http://<elb-hostname>/benzene/spec` URL in the
    run summary — open the Mesh UI to watch the mesh discover the pods, or hit a service's
    `/benzene/spec`, `/benzene/health`, or `POST /benzene/invoke` directly.
 

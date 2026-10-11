@@ -338,7 +338,7 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     artifacts (`benzene.mesh.build_artifacts`/`write_artifacts` — manifest, topics with schemas +
     version + `schemaMismatch` + `changes[]` + `removedTopics`, topology, usage, an AsyncAPI export,
     annotations, and per-service spec + per-check health) and serves the canonical `mesh-ui.html` at
-    `/mesh-ui/`. Verified live end to end (estate, functional map, topology, usage) then torn down; the
+    `/benzene/mesh-ui/`. Verified live end to end (estate, functional map, topology, usage) then torn down; the
     artifact field set is pinned against the contract by `tests/test_mesh_artifact_contract.py`.
 16. **(done)** The Cloud Service Profile **self-check** — `benzene.mesh.evaluate_cloud_service_profile`
     grades a composition root's `AppDefinition` against the profile's R1–R8 at wiring time and returns a

@@ -4,7 +4,7 @@ Two legs on one :class:`~benzene.core.WorkerHost`: uvicorn with ``lifespan="off"
 wrapper is needed — ``BenzeneHttpApp`` only ever sees ``http`` scopes) and the fleet poll loop.
 
 When ``MESH_ARTIFACTS_DIR`` is set, the host also (re)publishes the mesh-ui artifacts after each poll
-sweep and serves them — plus the vendored ``mesh-ui.html`` — under ``/mesh-ui/``.
+sweep and serves them — plus the vendored ``mesh-ui.html`` — under ``/benzene/mesh-ui/``.
 
     python -m collector.main        # honours MESH_CONFIG / MESH_SERVICES and PORT
 """

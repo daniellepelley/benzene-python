@@ -21,4 +21,4 @@ output "mesh_image_repository" {
 # The internet-facing URL is minted by Kubernetes, not Terraform — the mesh Service becomes a
 # LoadBalancer under the deploy/eks overlay, and its ELB hostname appears on the Service status:
 #   kubectl -n benzene-mesh get svc mesh -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
-# The deploy workflow polls for it and prints http://<hostname>/mesh-ui at the end of the run.
+# The deploy workflow polls for it and prints http://<hostname>/benzene/mesh-ui at the end of the run.

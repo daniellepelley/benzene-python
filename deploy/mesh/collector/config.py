@@ -40,7 +40,7 @@ def load_config(env: Mapping[str, str] | None = None) -> MeshConfig:
     ``MESH_STORE_PATH``, when set, points the collector at a durable snapshot file on the mounted
     volume, so the fleet view survives a task restart; unset keeps the catalog purely in-memory.
     ``MESH_ARTIFACTS_DIR``, when set, is where the host writes the mesh-ui artifacts after each poll
-    and serves them (and the vendored UI) under ``/mesh-ui/``; unset disables the UI.
+    and serves them (and the vendored UI) under ``/benzene/mesh-ui/``; unset disables the UI.
     """
     env = os.environ if env is None else env
     raw = _read_raw(env)

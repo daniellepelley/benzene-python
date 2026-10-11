@@ -117,13 +117,19 @@ app = BenzeneHttpApp(
 )
 ```
 
-- **`POST /benzene/invoke`** (R4) — the **wire-envelope endpoint**. The request body *is* a message
-  envelope (`{topic, headers, body}`); the service returns the response envelope. HTTP `200` means the
-  envelope was processed — the domain outcome is the envelope's `statusCode` — and a malformed envelope
-  is a transport-level `400`. This makes a service invokable uniformly across transports.
-- **`GET /benzene/health`** (R3) — the `{isHealthy, healthChecks}` aggregate (wire-contracts §5), `200`
-  when healthy and `503` when not. The full aggregate is returned either way (it is run directly, so an
-  unhealthy report survives — the envelope drops a failure payload). Enabled by passing `health`.
+- **`POST /benzene/invoke`** (R4) — the **envelope endpoint** (transport-bindings §1). The request
+  body *is* a message envelope (`{topic, headers, body}`); the service returns the response envelope.
+  HTTP `200` for **every** envelope it processed, whatever its status — `deleted` is `200` with its
+  envelope (not `204`), and an `unauthorized` from your pipeline's own auth middleware is `200` too —
+  because the envelope's `statusCode`/`isSuccessful` carry the outcome and a client reads those, never
+  the status line. A problem document inside the envelope omits RFC 9457's `status`. Only a body that
+  is not an envelope is a carrier failure, `400`. The endpoint runs the same pipeline as every other
+  transport, so the same authentication middleware; because it reaches every registered handler,
+  including topics with no route of their own, `StandardPaths(invoke_topics=...)` restricts it — a
+  set of topic ids, or any object whose `__contains__` applies a rule — and a topic outside it is
+  answered `not-found`, exactly as if no handler matched.
+- **`GET /benzene/health`** (R3) — the `{isHealthy, healthChecks}` report (wire-contracts §5), `200`
+  when healthy and `503` when not, the report as the body either way. Enabled by passing `health`.
   The two health faces carry the same report: the transport-neutral `benzene:healthcheck` topic
   answers `ok` whenever the checks ran, with the report as its payload and the verdict in
   `isHealthy` (wire-contracts §5); this route maps that verdict onto the status line — the one place
@@ -139,19 +145,23 @@ app = BenzeneHttpApp(
 - **Prefix** (R7) — `prefix` defaults to `/benzene` and is configurable; relocating it moves every
   surface together (the prefix is the steer, not a cage), so tell your clients the new base.
 
-### `?type=` on `/benzene/spec`
+### `?type=` and `?format=` on `/benzene/spec`
 
-R5 names the Contract Document as `/benzene/spec?type=benzene&format=json`, and that is what the
-surface answers **by default** — a generator that follows the profile's documented path and asks for
-nothing must get the document the profile names, not a shape only this port can read. (It is also
-where the .NET reference lands for an absent or unrecognised type, so the two ports agree.)
+The route is the HTTP binding's default mapping for the reserved `benzene:spec` topic, and its query
+is that topic's request (wire-contracts §7). R5 names the Contract Document as
+`/benzene/spec?type=benzene&format=json`, and that is what the surface answers **by default** — a
+generator that follows the profile's documented path and asks for nothing must get the document the
+profile names, not a shape only this port can read.
 
 | `?type=` | Document |
 | --- | --- |
-| absent, `benzene`, or anything unrecognised | the Contract Document (contract-document.md) |
-| `native` | this port's own [`ServiceSpec`](core.md#service-spec) payload, `{service, topics[, produces]}` |
+| absent, empty, or `benzene` | the Contract Document (contract-document.md) |
+| `native` | this port's own [`ServiceSpec`](core.md#service-spec) payload, `{service, topics[, produces]}` — a port-extension type |
+| anything else (`openapi`, `asyncapi`, …) | `501 not-implemented` — never a different document under a name that does not describe it |
 
-`format` is accepted and ignored: JSON is the only rendering this port produces.
+`format` may be absent or `json`; any other format is `501 not-implemented`. Values compare
+case-insensitively. (For an OpenAPI document, use [`benzene-openapi`](openapi.md) and serve it where
+you like.)
 
 Left to itself the served document is projected from the `ServiceSpec`, with schemas written inline
 and this host's own knowledge folded in — `messageEndpoint` (`/benzene/invoke`), each topic's

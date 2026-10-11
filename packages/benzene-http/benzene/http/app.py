@@ -34,8 +34,10 @@ from benzene.core import (
     MiddlewarePipeline,
     Registry,
     application_from,
+    encode_response,
     error_payload,
     resolve_version,
+    select_spec_document,
 )
 from benzene.results import Result, Status, is_successful
 
@@ -154,8 +156,10 @@ class BenzeneHttpApp:
         verb = method.upper()
 
         # R4 — /benzene/invoke: the request body *is* a message envelope; hand it to the application
-        # verbatim and return the response envelope. HTTP 200 means "processed"; the domain outcome is
-        # in the envelope's statusCode (a malformed envelope is a transport-level 400).
+        # verbatim and return the response envelope. HTTP 200 for every envelope processed, whatever
+        # its status - deleted, not-found and an unauthorized from the pipeline's own auth included -
+        # because the envelope carries the outcome and a client reads it, never the status line
+        # (transport-bindings §1). Only a body that is not an envelope is a carrier failure, 400.
         if std.invoke and verb == "POST" and path == std.invoke_path:
             try:
                 envelope = json.loads(body) if body else {}
@@ -166,13 +170,18 @@ class BenzeneHttpApp:
                     Status.BAD_REQUEST,
                     "Request body must be a JSON message envelope: {topic, headers, body}",
                 )
-            response = await self._application.handle(
-                {
-                    "topic": envelope.get("topic") or "",
-                    "headers": envelope.get("headers") or {},
-                    "body": envelope.get("body") or "",
-                }
-            )
+            topic = envelope.get("topic") or ""
+            if topic and std.invoke_topics is not None and topic not in std.invoke_topics:
+                # Restricted: answered exactly as if no handler matched (D21).
+                response = encode_response(Result.not_found(f"No handler found for topic {topic!r}"))
+            else:
+                response = await self._application.handle(
+                    {
+                        "topic": topic,
+                        "headers": envelope.get("headers") or {},
+                        "body": envelope.get("body") or "",
+                    }
+                )
             return HttpResponse(200, {"content-type": "application/json"}, json.dumps(response))
 
         # R3 — /benzene/health: the full {isHealthy, healthChecks} aggregate, 200 healthy / 503 not.
@@ -184,20 +193,29 @@ class BenzeneHttpApp:
                 status_code, {"content-type": "application/json"}, json.dumps(report.to_payload())
             )
 
-        # R5 — /benzene/spec: the derived spec document. ?type= picks the format (the R5 spelling is
-        # ?type=benzene&format=json): the Contract Document by default — the shape every language's
-        # client generator parses, and what a caller asking for nothing must get — with this port's
-        # native {service, topics} payload still reachable at ?type=native. `format` is accepted and
-        # ignored: JSON is the only rendering this port produces.
+        # R5 — /benzene/spec: the HTTP route for the benzene:spec topic, whose request is the ?type=
+        # and ?format= query (wire-contracts §7): the Contract Document by default or for
+        # type=benzene — the shape every language's client generator parses — this port's native
+        # {service, topics} payload for type=native, and not-implemented for anything else, never a
+        # different document. JSON is the only format this port renders.
         if (
             (std.spec is not None or std.contract is not None)
             and verb == "GET"
             and path == std.spec_path
         ):
             query = dict(parse_qsl(query_string or ""))
-            if query.get("type", "").strip().lower() == NATIVE_SPEC_TYPE:
+            kind, unsupported = select_spec_document(query.get("type"), query.get("format"))
+            if unsupported is not None:
+                return self._error(Status.NOT_IMPLEMENTED, unsupported)
+            if kind == NATIVE_SPEC_TYPE:
                 spec = std.resolved_spec()
                 document = None if spec is None else spec.to_payload()
+                if document is None:
+                    return self._error(
+                        Status.NOT_IMPLEMENTED,
+                        "benzene:spec type 'native' needs StandardPaths(spec=...): this service "
+                        "serves only an authored Contract Document",
+                    )
             else:
                 contract = std.resolved_contract(_http_mappings(self._router))
                 document = None if contract is None else contract.to_payload()

@@ -54,8 +54,8 @@ jobs:
           echo "refresh -> $RESP"
           echo "$RESP" | grep -Eq '"discovered":\s*3' \
             || { echo "::error::expected 3 discovered, got: $RESP"; exit 1; }
-          echo "--- manifest.json ---"; curl -fsS http://localhost:8080/mesh-ui/manifest.json
-          echo "--- topics.json ---";   curl -fsS http://localhost:8080/mesh-ui/topics.json
+          echo "--- manifest.json ---"; curl -fsS http://localhost:8080/benzene/mesh-ui/manifest.json
+          echo "--- topics.json ---";   curl -fsS http://localhost:8080/benzene/mesh-ui/topics.json
 
       - name: Exercise the chain (orders -> payments -> shipping over HTTP)
         run: |

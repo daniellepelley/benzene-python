@@ -173,7 +173,7 @@ To keep the fleet view across a restart, give the collector a durable store:
 You don't have to wire the loop above yourself: [`deploy/mesh`](../../deploy/mesh/README.md) ships the
 **Mesh Host** — a container that runs the collector + poller, exposes the ingest/query API over HTTP,
 re-publishes the artifacts after each sweep, and serves the vendored `mesh-ui.html`. One
-`terraform apply` stands it up on Fargate behind an ALB, with the dashboard at `/mesh-ui/`.
+`terraform apply` stands it up on Fargate behind an ALB, with the dashboard at `/benzene/mesh-ui/`.
 
 ### Run it locally (no AWS)
 
@@ -195,7 +195,7 @@ Then read the mesh over HTTP and open the dashboard:
 ```bash
 curl localhost:8080/benzene/health          # {"isHealthy": true, ...}
 curl localhost:8080/mesh/fleet              # the polled fleet (after one sweep)
-open  http://localhost:8080/mesh-ui/        # the Benzene Mesh UI
+open  http://localhost:8080/benzene/mesh-ui/        # the Benzene Mesh UI
 ```
 
 The host's HTTP surface: the **push** feeds are POSTs (`/mesh/register`, `/mesh/heartbeat`,
@@ -203,11 +203,11 @@ The host's HTTP surface: the **push** feeds are POSTs (`/mesh/register`, `/mesh/
 at `POST <host>/mesh/register` to declare the call graph (its `produces`) and at `POST <host>/mesh/traces`
 to feed that graph's invocation/error stats — and the **query** read models are GETs (`/mesh/fleet`,
 `/mesh/service/{service}`, `/mesh/topic/{topic}`, `/mesh/trace/{traceId}`). Setting
-`MESH_ARTIFACTS_DIR` is what enables `/mesh-ui/`; leave it unset to run the API alone.
+`MESH_ARTIFACTS_DIR` is what enables `/benzene/mesh-ui/`; leave it unset to run the API alone.
 
 ## Troubleshooting
 
-- **`/mesh-ui/` 404s or the page loads but shows no data.** The UI mount only exists when
+- **`/benzene/mesh-ui/` 404s or the page loads but shows no data.** The UI mount only exists when
   `MESH_ARTIFACTS_DIR` is set, and it serves only generated `*.json` artifacts from that directory.
   Make sure the host has completed at least one poll sweep (or that you called `write_artifacts`) so the
   artifacts exist before the UI fetches them.
