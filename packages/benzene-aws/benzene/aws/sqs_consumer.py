@@ -32,9 +32,11 @@ from collections.abc import Callable
 from typing import Any, ClassVar
 
 from benzene.core import (
+    DEFAULT_METADATA_KEYS,
     QUEUE,
     AppDefinition,
     BenzeneMessageApplication,
+    MetadataKeys,
     Settlement,
     SettlementDefaults,
     StopSignal,
@@ -55,15 +57,17 @@ def _decode_attributes(raw: dict[str, Any] | None) -> dict[str, str]:
     return attributes
 
 
-def decode_sqs_message(message: dict[str, Any]) -> dict[str, Any]:
+def decode_sqs_message(
+    message: dict[str, Any], *, keys: MetadataKeys = DEFAULT_METADATA_KEYS
+) -> dict[str, Any]:
     """Decode one ``receive_message()`` message dict into a Benzene envelope ``{topic, headers, body}``.
 
-    The Benzene topic is resolved out of the ``topic`` message attribute; every other attribute becomes
+    The Benzene topic is resolved out of the ``topic`` (``keys.topic``) message attribute; every other attribute becomes
     a Benzene header. Note this is **not** the same shape as a Lambda SQS-trigger record
     (:func:`benzene.aws.events.sqs_record_envelope`) — ``receive_message``'s ``MessageAttributes`` uses
     ``StringValue``/``DataType`` where a Lambda event's ``messageAttributes`` uses lower-cased keys.
     """
-    topic, headers = read_message_metadata(_decode_attributes(message.get("MessageAttributes")))
+    topic, headers = read_message_metadata(_decode_attributes(message.get("MessageAttributes")), keys)
     return {"topic": topic, "headers": headers, "body": message.get("Body") or ""}
 
 
@@ -100,7 +104,11 @@ class SqsConsumerApp:
 
     async def handle_message(self, message: dict[str, Any]) -> Result:
         outcome = await dispatch_one_way(
-            self._application, self._settlement, decode_sqs_message, message
+            self._application,
+            self._settlement,
+            decode_sqs_message,
+            message,
+            keys=self._application.metadata_keys,
         )
         return outcome.result
 

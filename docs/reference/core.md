@@ -477,10 +477,23 @@ topic, headers = read_message_metadata({"topic": "orders:place", "x-correlation-
 ```
 
 The reserved names are **a single injectable value** (`MetadataKeys`, defaults `topic` /
-`benzene-version`), not a literal each binding hard-codes — the defaults carry interop, and an override
-applies to inbound bindings and outbound clients alike. Keys are matched case-insensitively and
-returned lower-cased; a non-reserved key never routes; `benzene-version` stays among the headers for
-`resolve_version` to read. The three cloud hosts share this one resolver.
+`benzene-version` / `benzene-headers`), not a literal each binding hard-codes — the defaults carry
+interop, and an override applies to inbound bindings and outbound clients alike. Set it once on the
+composition root and hand the same value to the outbound clients:
+
+```python
+keys = MetadataKeys(topic="x-my-topic")
+definition = AppDefinition(registry=registry, metadata_keys=keys)   # every inbound binding reads with it
+sender = SqsMessageSender(queue_url, metadata_keys=keys)            # ...and every client writes with it
+```
+
+`application_from(definition)` puts it on the application (`BenzeneMessageApplication.metadata_keys`,
+which also sets the version header), and every metadata-carrying binding — SQS (Lambda and the
+self-hosted consumer), SNS, Lambda Kafka/MSK, EventBridge's embedded `benzene-headers`, Service Bus,
+Event Hub, Pub/Sub, Kafka, RabbitMQ — decodes with it; the SNS, SQS, EventBridge, Kinesis, Service Bus,
+Event Hub, Pub/Sub, Kafka and RabbitMQ senders take `metadata_keys=`. Keys are matched
+case-insensitively and returned lower-cased; a non-reserved key never routes; `benzene-version` stays
+among the headers for `resolve_version` to read.
 
 ## Settlement on one-way bindings
 

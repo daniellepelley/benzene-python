@@ -26,11 +26,13 @@ from collections.abc import Callable
 from typing import Any, ClassVar
 
 from benzene.core import (
+    DEFAULT_METADATA_KEYS,
     QUEUE,
     REQUEST_RESPONSE,
     AppDefinition,
     BenzeneMessageApplication,
     MessageHandlingError,
+    MetadataKeys,
     Registry,
     Settlement,
     SettlementDefaults,
@@ -119,7 +121,13 @@ class GcpFunctionsApp:
         deriving that from the status text would redeliver an application-defined status forever.
         """
         outcome = asyncio.run(
-            dispatch_one_way(self._application, self._settlement, _decode_cloud_event, cloud_event)
+            dispatch_one_way(
+                self._application,
+                self._settlement,
+                _decode_cloud_event,
+                cloud_event,
+                keys=self._application.metadata_keys,
+            )
         )
         if not outcome.acknowledge:
             raise MessageHandlingError(outcome.topic, outcome.result.status, outcome.detail)
@@ -173,8 +181,10 @@ def _accepts_as_text(fn: Any) -> bool:
         return False
 
 
-def _decode_cloud_event(cloud_event: Any) -> dict[str, Any]:
-    return decode_pubsub_message(_pubsub_message(cloud_event))
+def _decode_cloud_event(
+    cloud_event: Any, *, keys: MetadataKeys = DEFAULT_METADATA_KEYS
+) -> dict[str, Any]:
+    return decode_pubsub_message(_pubsub_message(cloud_event), keys=keys)
 
 
 def _pubsub_message(cloud_event: Any) -> dict[str, Any]:

@@ -17,7 +17,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from benzene.core import encode_body
+from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, encode_body
 from benzene.results import Result, Status
 
 #: Header name carrying the Benzene topic (the cross-port convention; the consumer resolves it).
@@ -41,7 +41,9 @@ class KafkaMessageSender:
         bootstrap_servers: str | None = None,
         serializer: Callable[[Any], str] | None = None,
         flush_timeout: float = 10.0,
+        metadata_keys: MetadataKeys = DEFAULT_METADATA_KEYS,
     ) -> None:
+        self._keys = metadata_keys
         self._kafka_topic = kafka_topic
         self._producer = producer
         self._bootstrap_servers = bootstrap_servers
@@ -61,7 +63,7 @@ class KafkaMessageSender:
         header_list: list[tuple[str, bytes]] = [
             (str(k), str(v).encode("utf-8")) for k, v in (headers or {}).items()
         ]
-        header_list.append((TOPIC_HEADER, topic.encode("utf-8")))
+        header_list.append((self._keys.topic, topic.encode("utf-8")))
         data = self._serialize(message).encode("utf-8")
 
         delivery_errors: list[Any] = []

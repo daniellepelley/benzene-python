@@ -21,7 +21,7 @@ import binascii
 import json
 from typing import Any
 
-from benzene.core import encode_body, read_message_metadata
+from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, encode_body, read_message_metadata
 
 TOPIC_PROPERTY = "topic"
 
@@ -83,17 +83,19 @@ def _get_body(message: Any) -> Any:
     return getattr(message, "body", None)
 
 
-def decode_service_bus(message: Any) -> dict[str, Any]:
-    """Map a Service Bus message → a Benzene envelope. Topic from ``application_properties``."""
+def decode_service_bus(message: Any, *, keys: MetadataKeys = DEFAULT_METADATA_KEYS) -> dict[str, Any]:
+    """Map a Service Bus message → a Benzene envelope. Topic from the ``topic`` (``keys.topic``)
+    application property."""
     metadata = _properties(message, "application_properties", "properties")
-    topic, headers = read_message_metadata(metadata)
+    topic, headers = read_message_metadata(metadata, keys)
     return {"topic": topic, "headers": headers, "body": body_to_text(_get_body(message))}
 
 
-def decode_event_hub_event(event: Any) -> dict[str, Any]:
-    """Map an Event Hub event → a Benzene envelope. Topic from ``properties``."""
+def decode_event_hub_event(event: Any, *, keys: MetadataKeys = DEFAULT_METADATA_KEYS) -> dict[str, Any]:
+    """Map an Event Hub event → a Benzene envelope. Topic from the ``topic`` (``keys.topic``)
+    application property."""
     metadata = _properties(event, "properties", "application_properties")
-    topic, headers = read_message_metadata(metadata)
+    topic, headers = read_message_metadata(metadata, keys)
     return {"topic": topic, "headers": headers, "body": body_to_text(_get_body(event))}
 
 

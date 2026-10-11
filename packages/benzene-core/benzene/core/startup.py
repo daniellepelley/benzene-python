@@ -23,6 +23,7 @@ from .contract import ContractDocument, ContractInfo, derive_contract, spec_inte
 from .declarations import OutboundRegistry
 from .dependencies import Container, Scope, ServiceOverride
 from .envelope import BenzeneMessageApplication
+from .metadata import MetadataKeys
 from .pipeline import Middleware, MiddlewarePipeline
 from .registry import Registry
 
@@ -47,6 +48,11 @@ class AppDefinition:
     send declarations, the router's HTTP routes and the standard paths' envelope endpoint, and the
     ``benzene:spec`` topic answers with it — in the pipeline, so wherever the transport carries a reply,
     ``GET /benzene/spec`` included.
+
+    ``metadata_keys`` names the reserved metadata keys (wire-contracts §2) — the ``topic`` key, the
+    ``benzene-version`` header, the EventBridge ``benzene-headers`` key — in one place: the application
+    carries it, so every inbound binding built from this definition reads with it. The defaults are
+    the interop baseline; an override must be given to the service's outbound clients too.
     """
 
     registry: Registry | None = None
@@ -55,6 +61,7 @@ class AppDefinition:
     standard_paths: Any = None
     outbound: OutboundRegistry | None = None
     contract: ContractInfo | None = None
+    metadata_keys: MetadataKeys = MetadataKeys()
 
     def handler_registry(self) -> Registry:
         """The registry the app serves: ``registry``, else one built from the router's handlers."""
@@ -141,4 +148,6 @@ def application_from(definition: AppDefinition) -> BenzeneMessageApplication:
     document = definition.contract_document()
     if document is not None:
         middleware.append(spec_interception(document))
-    return BenzeneMessageApplication(registry, MiddlewarePipeline(middleware))
+    return BenzeneMessageApplication(
+        registry, MiddlewarePipeline(middleware), metadata_keys=definition.metadata_keys
+    )

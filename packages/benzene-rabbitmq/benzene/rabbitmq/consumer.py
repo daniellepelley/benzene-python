@@ -26,9 +26,11 @@ from collections.abc import Callable, Mapping
 from typing import Any, ClassVar
 
 from benzene.core import (
+    DEFAULT_METADATA_KEYS,
     QUEUE,
     AppDefinition,
     BenzeneMessageApplication,
+    MetadataKeys,
     Settlement,
     SettlementDefaults,
     application_from,
@@ -50,18 +52,20 @@ def _decode_headers(raw: Mapping[str, Any] | None) -> dict[str, str]:
     return attributes
 
 
-def decode_rabbitmq_message(method: Any, properties: Any, body: Any) -> dict[str, Any]:
+def decode_rabbitmq_message(
+    method: Any, properties: Any, body: Any, *, keys: MetadataKeys = DEFAULT_METADATA_KEYS
+) -> dict[str, Any]:
     """Decode a RabbitMQ delivery into a Benzene envelope ``{topic, headers, body}``.
 
     The Benzene topic is resolved out of the ``topic`` header carried in AMQP ``properties.headers``
-    (the reserved metadata key); every other header becomes a Benzene header. A delivery with no topic
+    (the reserved metadata key, ``keys.topic``); every other header becomes a Benzene header. A delivery with no topic
     header falls back to the delivery's AMQP **routing key** (``method.routing_key``), so a message from
     a non-Benzene producer still routes (``topicSources`` in ``transport-metadata-cases.json``); the
     header wins whenever it is present. The message body (bytes) is decoded as the UTF-8 JSON body.
     ``method`` is the delivery frame — the loop also reads its ``delivery_tag`` to ack.
     """
     raw_headers = getattr(properties, "headers", None)
-    topic, headers = read_message_metadata(_decode_headers(raw_headers))
+    topic, headers = read_message_metadata(_decode_headers(raw_headers), keys)
     if not topic:
         topic = _routing_key(method)
     if body is None:
@@ -112,7 +116,13 @@ class RabbitMqConsumerApp:
 
     async def handle_message(self, method: Any, properties: Any, body: Any) -> Result:
         outcome = await dispatch_one_way(
-            self._application, self._settlement, decode_rabbitmq_message, method, properties, body
+            self._application,
+            self._settlement,
+            decode_rabbitmq_message,
+            method,
+            properties,
+            body,
+            keys=self._application.metadata_keys,
         )
         return outcome.result
 

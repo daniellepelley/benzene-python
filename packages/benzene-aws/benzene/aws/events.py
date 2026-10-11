@@ -19,7 +19,13 @@ import base64
 from typing import Any
 from urllib.parse import urlencode
 
-from benzene.core import DEFAULT_HEADERS_KEY, encode_body, read_message_metadata
+from benzene.core import (
+    DEFAULT_HEADERS_KEY,
+    DEFAULT_METADATA_KEYS,
+    MetadataKeys,
+    encode_body,
+    read_message_metadata,
+)
 
 TOPIC_ATTRIBUTE = "topic"
 
@@ -92,20 +98,26 @@ def api_gateway_request(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def sqs_record_envelope(record: dict[str, Any]) -> dict[str, Any]:
-    """Map one SQS record to a Benzene envelope. Topic from the ``topic`` message attribute."""
+def sqs_record_envelope(
+    record: dict[str, Any], *, keys: MetadataKeys = DEFAULT_METADATA_KEYS
+) -> dict[str, Any]:
+    """Map one SQS record to a Benzene envelope. Topic from the ``topic`` (``keys.topic``) message
+    attribute."""
     attributes = record.get("messageAttributes") or {}
     metadata = {k: v.get("stringValue", "") for k, v in attributes.items()}
-    topic, headers = read_message_metadata(metadata)
+    topic, headers = read_message_metadata(metadata, keys)
     return {"topic": topic, "headers": headers, "body": record.get("body") or ""}
 
 
-def sns_record_envelope(record: dict[str, Any]) -> dict[str, Any]:
-    """Map one SNS record to a Benzene envelope. Topic from the ``topic`` message attribute."""
+def sns_record_envelope(
+    record: dict[str, Any], *, keys: MetadataKeys = DEFAULT_METADATA_KEYS
+) -> dict[str, Any]:
+    """Map one SNS record to a Benzene envelope. Topic from the ``topic`` (``keys.topic``) message
+    attribute."""
     sns = record.get("Sns") or {}
     attributes = sns.get("MessageAttributes") or {}
     metadata = {k: v.get("Value", "") for k, v in attributes.items()}
-    topic, headers = read_message_metadata(metadata)
+    topic, headers = read_message_metadata(metadata, keys)
     return {"topic": topic, "headers": headers, "body": sns.get("Message") or ""}
 
 
@@ -131,7 +143,10 @@ EMBEDDED_HEADERS_KEY = DEFAULT_HEADERS_KEY
 
 
 def eventbridge_envelope(
-    event: dict[str, Any], default_topic: str = DEFAULT_EVENTBRIDGE_TOPIC
+    event: dict[str, Any],
+    default_topic: str = DEFAULT_EVENTBRIDGE_TOPIC,
+    *,
+    keys: MetadataKeys = DEFAULT_METADATA_KEYS,
 ) -> dict[str, Any]:
     """Map an EventBridge event to a Benzene envelope (mirrors ``Benzene.Aws.Lambda.EventBridge``).
 
@@ -141,7 +156,7 @@ def eventbridge_envelope(
     ``benzene-headers`` member included, so a handler's request type must tolerate it (a dataclass
     request mapper ignores it; wire-contracts §2). EventBridge has no native per-message attributes,
     so headers are the ``eventbridge-``-prefixed envelope metadata plus the Benzene wire headers read
-    from ``benzene-headers`` — embedded headers win on key collision.
+    from ``benzene-headers`` (``keys.headers``) — embedded headers win on key collision.
     """
     detail = event.get("detail")
     topic = event.get("detail-type") or default_topic
@@ -159,7 +174,7 @@ def eventbridge_envelope(
         if value:
             headers[key] = str(value)
     if isinstance(detail, dict):
-        embedded = detail.get(EMBEDDED_HEADERS_KEY)
+        embedded = detail.get(keys.headers)
         if isinstance(embedded, dict):
             for key, value in embedded.items():
                 if isinstance(value, str):
@@ -255,15 +270,18 @@ def kafka_records(event: dict[str, Any]) -> list[dict[str, Any]]:
     return flat
 
 
-def kafka_record_envelope(record: dict[str, Any]) -> dict[str, Any]:
+def kafka_record_envelope(
+    record: dict[str, Any], *, keys: MetadataKeys = DEFAULT_METADATA_KEYS
+) -> dict[str, Any]:
     """Map one Kafka/MSK record to a Benzene envelope (mirrors ``Benzene.Aws.Lambda.Kafka``).
 
     Matches the self-hosted ``benzene.kafka`` consumer's contract: the Benzene topic is the ``topic``
-    header when present (the cross-port convention), otherwise the record's own Kafka ``topic``; the
-    remaining headers become Benzene headers, and the base64 ``value`` decodes to the UTF-8 JSON body.
+    (``keys.topic``) header when present (the cross-port convention), otherwise the record's own Kafka
+    ``topic``; the remaining headers become Benzene headers, and the base64 ``value`` decodes to the
+    UTF-8 JSON body.
     """
     metadata = _decode_kafka_headers(record.get("headers"))
-    topic, headers = read_message_metadata(metadata)
+    topic, headers = read_message_metadata(metadata, keys)
     if not topic:
         topic = str(record.get("topic", ""))
     body = _b64_to_text(record.get("value"))

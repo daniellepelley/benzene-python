@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from benzene.core import encode_body
+from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, encode_body
 from benzene.results import Result, Status
 
 #: Header name carrying the Benzene topic (the cross-port convention; the consumer resolves it).
@@ -50,7 +50,9 @@ class RabbitMqMessageSender:
         *,
         host: str | None = None,
         serializer: Callable[[Any], str] | None = None,
+        metadata_keys: MetadataKeys = DEFAULT_METADATA_KEYS,
     ) -> None:
+        self._keys = metadata_keys
         self._exchange = exchange
         self._routing_key = routing_key
         self._channel = channel
@@ -80,7 +82,7 @@ class RabbitMqMessageSender:
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
         amqp_headers: dict[str, str] = {str(k): str(v) for k, v in (headers or {}).items()}
-        amqp_headers[TOPIC_HEADER] = topic
+        amqp_headers[self._keys.topic] = topic
         data = self._serialize(message).encode("utf-8")
 
         try:

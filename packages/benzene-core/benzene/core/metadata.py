@@ -9,8 +9,11 @@ downstream by :func:`~benzene.core.resolve_version`, exactly as in the envelope 
 
 The reserved names are **a single injectable value** (:class:`MetadataKeys`), not a literal each
 binding hard-codes: the defaults carry interop (two untouched Benzene services must interoperate), and
-an override applies to inbound bindings and outbound clients alike. Keys are matched
-case-insensitively and returned lower-cased, per the wire-contract header convention.
+an override applies to inbound bindings and outbound clients alike. A service sets it once, on its
+:class:`~benzene.core.AppDefinition` (``metadata_keys=MetadataKeys(...)``): the application it builds
+carries it (:attr:`~benzene.core.BenzeneMessageApplication.metadata_keys`), every inbound binding reads
+the native metadata with it, and the outbound clients take the same value (``metadata_keys=...``).
+Keys are matched case-insensitively and returned lower-cased, per the wire-contract header convention.
 """
 
 from __future__ import annotations
@@ -19,11 +22,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .envelope import VERSION_HEADER
-
 #: The default reserved metadata key names (wire-contracts §2). The interop baseline.
 DEFAULT_TOPIC_KEY = "topic"
-DEFAULT_VERSION_KEY = VERSION_HEADER  # "benzene-version"
+DEFAULT_VERSION_KEY = "benzene-version"
 #: The object inside an EventBridge ``detail`` that carries the wire headers on a transport with no
 #: per-message metadata (wire-contracts §2). It names a header, so it is spelled like one.
 DEFAULT_HEADERS_KEY = "benzene-headers"
@@ -33,7 +34,9 @@ DEFAULT_HEADERS_KEY = "benzene-headers"
 class MetadataKeys:
     """The reserved metadata key names — override to opt a service out of the interop defaults.
 
-    ``headers`` is only read by a transport that embeds the headers in the payload (EventBridge).
+    ``topic`` routes a message on every metadata-carrying transport; ``version`` is the one header a
+    message's version travels in; ``headers`` is only read by a transport that embeds the headers in
+    the payload (EventBridge). Use the same value on the inbound and outbound sides (wire-contracts §2).
     """
 
     topic: str = DEFAULT_TOPIC_KEY

@@ -17,16 +17,19 @@ import base64
 from collections.abc import Callable
 from typing import Any
 
-from benzene.core import encode_body, read_message_metadata
+from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, encode_body, read_message_metadata
 from benzene.results import Result, Status
 
 #: Message-attribute name carrying the Benzene topic (the cross-port convention).
 TOPIC_ATTRIBUTE = "topic"
 
 
-def decode_pubsub_message(message: dict[str, Any]) -> dict[str, Any]:
-    """Decode a Pub/Sub ``message`` dict into a Benzene envelope ``{topic, headers, body}``."""
-    topic, headers = read_message_metadata(message.get("attributes"))
+def decode_pubsub_message(
+    message: dict[str, Any], *, keys: MetadataKeys = DEFAULT_METADATA_KEYS
+) -> dict[str, Any]:
+    """Decode a Pub/Sub ``message`` dict into a Benzene envelope ``{topic, headers, body}``; the topic
+    is the ``topic`` (``keys.topic``) attribute."""
+    topic, headers = read_message_metadata(message.get("attributes"), keys)
 
     raw = message.get("data")
     if raw is None:
@@ -57,7 +60,10 @@ class PubSubMessageSender:
         topic_path: str,
         publisher: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
+        *,
+        metadata_keys: MetadataKeys = DEFAULT_METADATA_KEYS,
     ) -> None:
+        self._keys = metadata_keys
         self._topic_path = topic_path
         self._publisher = publisher
         self._serialize = serializer or encode_body
@@ -73,7 +79,7 @@ class PubSubMessageSender:
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
         attributes = {str(k): str(v) for k, v in (headers or {}).items()}
-        attributes[TOPIC_ATTRIBUTE] = topic
+        attributes[self._keys.topic] = topic
         data = self._serialize(message).encode("utf-8")
 
         def _publish() -> None:

@@ -5,7 +5,16 @@ from __future__ import annotations
 import json
 
 import pytest
-from benzene.core import DEFAULT_TOPIC_KEY, MetadataKeys, read_message_metadata, resolve_version
+from benzene.core import (
+    DEFAULT_TOPIC_KEY,
+    AppDefinition,
+    BenzeneMessageApplication,
+    MetadataKeys,
+    Registry,
+    application_from,
+    read_message_metadata,
+    resolve_version,
+)
 
 from .conformance_runner import CONFORMANCE_DIR, run_transport_metadata
 
@@ -47,3 +56,25 @@ def test_non_reserved_key_does_not_route() -> None:
     topic, headers = read_message_metadata({"benzene-topic": "orders:place"})
     assert topic == ""  # only the configured key routes
     assert headers == {"benzene-topic": "orders:place"}
+
+
+# --- configured once: the AppDefinition's keys reach the application and its bindings --------------
+
+
+def test_the_definitions_metadata_keys_reach_the_application() -> None:
+    keys = MetadataKeys(topic="x-my-topic", version="x-my-version")
+    app = application_from(AppDefinition(registry=Registry(), metadata_keys=keys))
+    assert app.metadata_keys == keys
+    assert app.version_header == "x-my-version"  # the version header is the same one setting
+
+
+def test_the_default_application_carries_the_interop_defaults() -> None:
+    assert application_from(AppDefinition(registry=Registry())).metadata_keys == MetadataKeys()
+
+
+def test_version_header_and_metadata_keys_cannot_disagree() -> None:
+    with pytest.raises(ValueError, match="configured in one place"):
+        BenzeneMessageApplication(
+            Registry(), version_header="a", metadata_keys=MetadataKeys(version="b")
+        )
+    assert BenzeneMessageApplication(Registry(), version_header="v").metadata_keys.version == "v"

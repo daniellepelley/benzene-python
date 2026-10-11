@@ -32,16 +32,18 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from benzene.core import decode_response, encode_body
+from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, decode_response, encode_body
 from benzene.results import Result, Status
 
-from .events import EMBEDDED_HEADERS_KEY, TOPIC_ATTRIBUTE
 
-
-def _string_attributes(topic: str, headers: dict[str, str] | None) -> dict[str, dict[str, str]]:
-    attrs = {TOPIC_ATTRIBUTE: {"DataType": "String", "StringValue": topic}}
+def _string_attributes(
+    topic: str, headers: dict[str, str] | None, keys: MetadataKeys
+) -> dict[str, dict[str, str]]:
+    """The message attributes: one per header, plus the topic under ``keys.topic`` (``topic``)."""
+    attrs: dict[str, dict[str, str]] = {}
     for key, value in (headers or {}).items():
         attrs[str(key)] = {"DataType": "String", "StringValue": str(value)}
+    attrs[keys.topic] = {"DataType": "String", "StringValue": topic}
     return attrs
 
 
@@ -53,7 +55,10 @@ class SnsMessageSender:
         topic_arn: str,
         client: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
+        *,
+        metadata_keys: MetadataKeys = DEFAULT_METADATA_KEYS,
     ) -> None:
+        self._keys = metadata_keys
         self._topic_arn = topic_arn
         self._client = client
         self._serialize = serializer or encode_body
@@ -73,7 +78,7 @@ class SnsMessageSender:
                 self._sns().publish,
                 TopicArn=self._topic_arn,
                 Message=self._serialize(message),
-                MessageAttributes=_string_attributes(topic, headers),
+                MessageAttributes=_string_attributes(topic, headers, self._keys),
             )
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
@@ -88,7 +93,10 @@ class SqsMessageSender:
         queue_url: str,
         client: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
+        *,
+        metadata_keys: MetadataKeys = DEFAULT_METADATA_KEYS,
     ) -> None:
+        self._keys = metadata_keys
         self._queue_url = queue_url
         self._client = client
         self._serialize = serializer or encode_body
@@ -108,7 +116,7 @@ class SqsMessageSender:
                 self._sqs().send_message,
                 QueueUrl=self._queue_url,
                 MessageBody=self._serialize(message),
-                MessageAttributes=_string_attributes(topic, headers),
+                MessageAttributes=_string_attributes(topic, headers, self._keys),
             )
         except Exception as ex:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
@@ -121,10 +129,13 @@ class SqsMessageSender:
 
 
 def _embed_headers(
-    message: Any, headers: dict[str, str] | None, serialize: Callable[[Any], str]
+    message: Any,
+    headers: dict[str, str] | None,
+    serialize: Callable[[Any], str],
+    key: str = DEFAULT_METADATA_KEYS.headers,
 ) -> str:
     """Serialize ``message`` for a transport with no metadata channel (EventBridge, Kinesis),
-    embedding ``headers`` under :data:`EMBEDDED_HEADERS_KEY` when the serialized payload is a JSON
+    embedding ``headers`` under ``key`` (``benzene-headers``, ``MetadataKeys.headers``) when the serialized payload is a JSON
     object — matching .NET's ``OutboundEventBridgeContextConverter.BuildDetail``. A non-object
     payload (or no headers at all) is left exactly as the serializer produced it, so a plain
     (non-Benzene) consumer of the stream/bus sees the domain payload verbatim.
@@ -138,7 +149,7 @@ def _embed_headers(
         return body
     if not isinstance(parsed, dict):
         return body
-    parsed[EMBEDDED_HEADERS_KEY] = dict(headers)
+    parsed[key] = dict(headers)
     return json.dumps(parsed)
 
 
@@ -158,7 +169,10 @@ class EventBridgeMessageSender:
         detail_type: str | None = None,
         client: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
+        *,
+        metadata_keys: MetadataKeys = DEFAULT_METADATA_KEYS,
     ) -> None:
+        self._keys = metadata_keys
         self._event_bus_name = event_bus_name
         self._source = source
         self._detail_type = detail_type
@@ -183,7 +197,7 @@ class EventBridgeMessageSender:
                         "EventBusName": self._event_bus_name,
                         "Source": self._source,
                         "DetailType": self._detail_type or topic,
-                        "Detail": _embed_headers(message, headers, self._serialize),
+                        "Detail": _embed_headers(message, headers, self._serialize, self._keys.headers),
                     }
                 ],
             )
@@ -207,7 +221,10 @@ class KinesisMessageSender:
         partition_key_header: str = "partition-key",
         client: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
+        *,
+        metadata_keys: MetadataKeys = DEFAULT_METADATA_KEYS,
     ) -> None:
+        self._keys = metadata_keys
         self._stream_name = stream_name
         self._partition_key_header = partition_key_header
         self._client = client
@@ -234,7 +251,7 @@ class KinesisMessageSender:
             await asyncio.to_thread(
                 self._kinesis().put_record,
                 StreamName=self._stream_name,
-                Data=_embed_headers(message, headers, self._serialize),
+                Data=_embed_headers(message, headers, self._serialize, self._keys.headers),
                 PartitionKey=self._partition_key(topic, headers),
             )
         except Exception as ex:

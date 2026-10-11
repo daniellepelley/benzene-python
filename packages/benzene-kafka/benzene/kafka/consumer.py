@@ -32,11 +32,13 @@ from collections.abc import Callable
 from typing import Any, ClassVar, Protocol
 
 from benzene.core import (
+    DEFAULT_METADATA_KEYS,
     SKIP_AND_CONTINUE,
     STREAM,
     AppDefinition,
     BenzeneMessageApplication,
     MessageHandlingError,
+    MetadataKeys,
     Settlement,
     SettlementDefaults,
     StopSignal,
@@ -66,13 +68,16 @@ def _decode_headers(raw: list[tuple[str, Any]] | None) -> dict[str, str]:
     return attributes
 
 
-def decode_kafka_message(message: KafkaMessage) -> dict[str, Any]:
+def decode_kafka_message(
+    message: KafkaMessage, *, keys: MetadataKeys = DEFAULT_METADATA_KEYS
+) -> dict[str, Any]:
     """Decode a Kafka record into a Benzene envelope ``{topic, headers, body}``.
 
-    The Benzene topic is resolved out of the ``topic`` header (the reserved metadata key); every other
+    The Benzene topic is resolved out of the ``topic`` header (the reserved metadata key,
+    ``keys.topic``); every other
     header becomes a Benzene header. The record value (bytes) is decoded as the UTF-8 JSON body.
     """
-    topic, headers = read_message_metadata(_decode_headers(message.headers()))
+    topic, headers = read_message_metadata(_decode_headers(message.headers()), keys)
     raw = message.value()
     if raw is None:
         body = ""
@@ -118,7 +123,11 @@ class KafkaConsumerApp:
 
     async def handle_message(self, message: KafkaMessage) -> Result:
         outcome = await dispatch_one_way(
-            self._application, self._settlement, decode_kafka_message, message
+            self._application,
+            self._settlement,
+            decode_kafka_message,
+            message,
+            keys=self._application.metadata_keys,
         )
         return outcome.result
 

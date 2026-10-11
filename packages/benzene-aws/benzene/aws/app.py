@@ -44,7 +44,8 @@ invoked with ``InvocationType="Event"``, which the function cannot detect: deplo
 ``invocation_type="Event"`` and a failure raises so Lambda's asynchronous retry takes over.
 
 Topic for the attribute-carrying transports (SQS, SNS, Kafka) comes from the reserved ``topic``
-metadata key; the channel-less sources (S3, EventBridge, DynamoDB, Kinesis) take their topic from an
+metadata key (renamed, with the version and EventBridge ``benzene-headers`` keys, by the application's
+``metadata_keys`` — ``AppDefinition(metadata_keys=...)``); the channel-less sources (S3, EventBridge, DynamoDB, Kinesis) take their topic from an
 injectable convention configured on the host; a direct invoke's topic is exactly what the caller sent.
 The free function :func:`to_lambda_handler` produces the ``handler(event, context)`` callable Lambda
 invokes — the *same* function answers every source above, so a Lambda already reached over API
@@ -65,6 +66,7 @@ from benzene.core import (
     AppDefinition,
     BenzeneMessageApplication,
     MessageHandlingError,
+    MetadataKeys,
     Registry,
     Settlement,
     SettlementDefaults,
@@ -223,7 +225,7 @@ class AwsLambdaApp:
             failures: list[dict[str, str]] = []
             for record in event.get("Records", []):
                 outcome = await dispatch_one_way(
-                    self._application, self._settlement, sqs_record_envelope, record
+                    self._application, self._settlement, sqs_record_envelope, record, keys=self._keys
                 )
                 if not outcome.acknowledge:
                     failures.append({"itemIdentifier": record.get("messageId", "")})
@@ -235,7 +237,7 @@ class AwsLambdaApp:
     def _handle_sns(self, event: dict[str, Any]) -> None:
         async def run() -> None:
             for record in event.get("Records", []):
-                await self._settle_or_raise(sns_record_envelope, record)
+                await self._settle_or_raise(sns_record_envelope, record, keys=self._keys)
 
         asyncio.run(run())
 
@@ -250,7 +252,9 @@ class AwsLambdaApp:
     # --- EventBridge (a single event) ------------------------------------------------------
     def _handle_eventbridge(self, event: dict[str, Any]) -> None:
         async def run() -> None:
-            await self._settle_or_raise(eventbridge_envelope, event, self._eventbridge_topic)
+            await self._settle_or_raise(
+                eventbridge_envelope, event, self._eventbridge_topic, keys=self._keys
+            )
 
         asyncio.run(run())
 
@@ -258,7 +262,7 @@ class AwsLambdaApp:
     def _handle_kafka(self, event: dict[str, Any]) -> None:
         async def run() -> None:
             for record in kafka_records(event):
-                await self._settle_or_raise(kafka_record_envelope, record)
+                await self._settle_or_raise(kafka_record_envelope, record, keys=self._keys)
 
         asyncio.run(run())
 
@@ -319,8 +323,13 @@ class AwsLambdaApp:
             return dict(outcome) if outcome is not None else {}
         return asyncio.run(self._application.handle(invoke_envelope(event)))
 
+    @property
+    def _keys(self) -> MetadataKeys:
+        """The reserved metadata names, configured once on the application (wire-contracts §2)."""
+        return self._application.metadata_keys
+
     async def _settle_or_raise(
-        self, decode: Callable[..., Mapping[str, Any]], *args: Any
+        self, decode: Callable[..., Mapping[str, Any]], *args: Any, **kwargs: Any
     ) -> Mapping[str, Any] | None:
         """Run one message for a source with no partial-batch channel; fault the invocation unless
         it is acknowledged.
@@ -330,7 +339,9 @@ class AwsLambdaApp:
         and the problem document. Whether it failed is the envelope's ``isSuccessful`` to say
         (wire-contracts §1.2), never the status text.
         """
-        outcome = await dispatch_one_way(self._application, self._settlement, decode, *args)
+        outcome = await dispatch_one_way(
+            self._application, self._settlement, decode, *args, **kwargs
+        )
         if not outcome.acknowledge:
             raise MessageHandlingError(outcome.topic, outcome.result.status, outcome.detail)
         return outcome.response

@@ -27,10 +27,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from benzene.core import encode_body, to_jsonable
+from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, encode_body, to_jsonable
 from benzene.results import Result, Status
-
-from .events import TOPIC_PROPERTY
 
 
 def _require_config(
@@ -76,7 +74,10 @@ class ServiceBusMessageSender:
         entity_name: str | None = None,
         sender: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
+        *,
+        metadata_keys: MetadataKeys = DEFAULT_METADATA_KEYS,
     ) -> None:
+        self._keys = metadata_keys
         _require_config(
             sender="ServiceBusMessageSender",
             injected="sender",
@@ -96,7 +97,7 @@ class ServiceBusMessageSender:
         # so the narrower literal type does not satisfy the parameter even though every value we
         # put in it is a str. Only visible when the optional SDK is installed to typecheck against.
         properties: dict[str | bytes, Any] = {str(k): str(v) for k, v in (headers or {}).items()}
-        properties[TOPIC_PROPERTY] = topic
+        properties[self._keys.topic] = topic
         return ServiceBusMessage(self._serialize(message), application_properties=properties)
 
     def _get_sender(self) -> Any:
@@ -137,7 +138,10 @@ class EventHubMessageSender:
         eventhub_name: str | None = None,
         producer: Any | None = None,
         serializer: Callable[[Any], str] | None = None,
+        *,
+        metadata_keys: MetadataKeys = DEFAULT_METADATA_KEYS,
     ) -> None:
+        self._keys = metadata_keys
         # eventhub_name is NOT required: a Service Bus/Event Hub connection string may carry the
         # entity in its own EntityPath, and the SDK accepts None for the name in that case.
         _require_config(
@@ -165,7 +169,7 @@ class EventHubMessageSender:
         from azure.eventhub import EventData  # lazy: optional dependency
 
         properties: dict[str | bytes, Any] = {str(k): str(v) for k, v in (headers or {}).items()}
-        properties[TOPIC_PROPERTY] = topic
+        properties[self._keys.topic] = topic
         event = EventData(self._serialize(message))
         event.properties = properties
 

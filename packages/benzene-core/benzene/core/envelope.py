@@ -17,6 +17,7 @@ from benzene.results.problems import problem_title, problem_type
 from .context import Context
 from .dependencies import Container
 from .mapping import to_jsonable
+from .metadata import DEFAULT_VERSION_KEY, MetadataKeys
 from .pipeline import MiddlewarePipeline
 from .registry import Registry, VersionSelector
 from .router import message_router
@@ -24,9 +25,9 @@ from .router import message_router
 #: The one header carrying a message's version (wire-contracts §2, core-concepts §2): it selects the
 #: handler and names the payload's schema version. Read inbound and echoed outbound under this name.
 #: There is no fallback list — a caller's own ``version`` / ``x-version`` header is an ordinary
-#: header and selects nothing. Rename it per application with
-#: ``BenzeneMessageApplication(version_header=...)``.
-VERSION_HEADER = "benzene-version"
+#: header and selects nothing. Rename it per application with ``MetadataKeys(version=...)`` on the
+#: ``AppDefinition`` (or ``BenzeneMessageApplication(version_header=...)``).
+VERSION_HEADER = DEFAULT_VERSION_KEY
 
 
 def resolve_version(headers: Mapping[str, str], name: str = VERSION_HEADER) -> str:
@@ -52,12 +53,22 @@ class BenzeneMessageApplication:
         container: Container | None = None,
         *,
         version_selector: VersionSelector | None = None,
-        version_header: str = VERSION_HEADER,
+        version_header: str | None = None,
+        metadata_keys: MetadataKeys | None = None,
     ) -> None:
         self._registry = registry
         self._container = container or Container()
         self._pipeline = pipeline or MiddlewarePipeline()
-        self._version_header = version_header.lower()
+        keys = metadata_keys or MetadataKeys()
+        if version_header is not None:
+            if metadata_keys is not None and version_header.lower() != metadata_keys.version.lower():
+                raise ValueError(
+                    f"version_header={version_header!r} contradicts metadata_keys.version="
+                    f"{metadata_keys.version!r}: the version header is configured in one place"
+                )
+            keys = MetadataKeys(topic=keys.topic, version=version_header, headers=keys.headers)
+        self._metadata_keys = keys
+        self._version_header = keys.version.lower()
         # The router is the terminal middleware, registered last.
         self._pipeline.use(message_router(registry, version_selector))
 
@@ -67,6 +78,14 @@ class BenzeneMessageApplication:
         the one place it is configured, which every binding (the HTTP ``/v{version}`` route segment
         included) writes through."""
         return self._version_header
+
+    @property
+    def metadata_keys(self) -> MetadataKeys:
+        """The reserved metadata names this application's bindings read native metadata with
+        (wire-contracts §2): the ``topic`` key, the ``benzene-version`` header and the EventBridge
+        ``benzene-headers`` key — configured once (``AppDefinition(metadata_keys=...)``), and the value
+        its outbound clients must be given too."""
+        return self._metadata_keys
 
     async def handle(
         self, request_envelope: dict[str, Any], *, ignore_unmatched_topic: bool = False
