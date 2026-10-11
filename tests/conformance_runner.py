@@ -443,6 +443,27 @@ def _metadata_case_failures(binding: str, case: dict, keys: MetadataKeys) -> lis
     return failures
 
 
+def _fallback_failures(where: str, binding: str, named: bool) -> list[str]:
+    """A ``topicSources`` ``fallback`` (RabbitMQ's routing key, Kafka's consumed topic): it routes a
+    delivery with no topic key, and loses to the key whenever the key is present."""
+    hosts = bindings.FALLBACK_HOSTS.get(binding, {})
+    if named != bool(hosts):
+        return [
+            f"{where}: the fixture {'names' if named else 'names no'} fallback, the runner "
+            f"{'checks none' if named else 'checks one'} - drift"
+        ]
+    failures: list[str] = []
+    keys = MetadataKeys()
+    for host, deliver in hosts.items():
+        fell_back = deliver({"tenant": "acme"}, keys, bindings.TOPIC)
+        if fell_back.topic != bindings.TOPIC:
+            failures.append(f"{where} {host}: no topic key, fallback {bindings.TOPIC!r} resolved {fell_back.topic!r}")
+        key_wins = deliver({"topic": bindings.TOPIC}, keys, "native-name")
+        if key_wins.topic != bindings.TOPIC:
+            failures.append(f"{where} {host}: the topic key lost to the fallback ({key_wins.topic!r})")
+    return failures
+
+
 def _topic_source_failures(entry: dict, cases: list[dict]) -> list[str]:
     """One ``topicSources`` entry: the binding takes its topic from where the fixture says."""
     try:
@@ -461,16 +482,7 @@ def _topic_source_checks(entry: dict, cases: list[dict]) -> list[str]:
         if binding not in bindings.METADATA_HOSTS:
             return [f"{where}: no host here - add it to METADATA_HOSTS, or to UNSHIPPED_TOPIC_SOURCES with the reason"]
         failures = [f for case in cases for f in _metadata_case_failures(binding, case, keys)]
-        if binding == "rabbitmq":
-            # The one fallback the fixture names: the AMQP routing key, for a non-Benzene producer.
-            fallback = bindings.rabbitmq_delivery({"tenant": "acme"}, keys, routing_key=bindings.TOPIC)
-            if fallback.topic != bindings.TOPIC:
-                failures.append(f"{where}: no topic header, routing key {bindings.TOPIC!r} resolved {fallback.topic!r}")
-            header_wins = bindings.rabbitmq_delivery({"topic": bindings.TOPIC}, keys, routing_key="a.queue")
-            if header_wins.topic != bindings.TOPIC:
-                failures.append(f"{where}: the topic header lost to the routing key ({header_wins.topic!r})")
-        elif "fallback" in entry:
-            failures.append(f"{where}: the fixture names a fallback the runner does not check - drift")
+        failures.extend(_fallback_failures(where, binding, "fallback" in entry))
         return failures
     if NON_METADATA_SOURCES.get(binding) != source:
         return [f"{where}: source {source!r} unknown to the runner for this binding - drift"]

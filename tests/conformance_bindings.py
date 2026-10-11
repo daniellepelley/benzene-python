@@ -128,33 +128,34 @@ def _event_hub(metadata: dict[str, str], keys: MetadataKeys) -> Seen:
     return recorder.one()
 
 
-def _kafka(metadata: dict[str, str], keys: MetadataKeys) -> Seen:
+def kafka_record(metadata: dict[str, str], keys: MetadataKeys, kafka_topic: str = "") -> Seen:
+    """One record to the self-hosted Kafka consumer, consumed from ``kafka_topic``."""
     recorder = _Recorder(keys)
     headers = [(k, v.encode("utf-8")) for k, v in metadata.items()]
-    message = SimpleNamespace(headers=lambda: headers, value=lambda: b"{}", error=lambda: None)
+    message = SimpleNamespace(
+        headers=lambda: headers, value=lambda: b"{}", error=lambda: None, topic=lambda: kafka_topic
+    )
     asyncio.run(KafkaConsumerApp(recorder.application).handle_message(message))
     return recorder.one()
 
 
-def _lambda_msk(metadata: dict[str, str], keys: MetadataKeys) -> Seen:
-    # The record sits on a physical Kafka topic of its own: Kafka names no fallback (topicSources),
-    # so that topic must never surface as the Benzene topic.
+def lambda_msk_record(metadata: dict[str, str], keys: MetadataKeys, kafka_topic: str = "") -> Seen:
+    """One Kafka/MSK record to the Lambda host, on Kafka topic ``kafka_topic``."""
     recorder = _Recorder(keys)
     record = {
-        "topic": "physical-kafka-topic",
+        "topic": kafka_topic,
         "partition": 0,
         "offset": 0,
         "headers": [{k: list(v.encode("utf-8"))} for k, v in metadata.items()],
         "value": _b64("{}"),
     }
-    event = {"eventSource": "aws:kafka", "records": {"physical-kafka-topic-0": [record]}}
+    event = {"eventSource": "aws:kafka", "records": {f"{kafka_topic}-0": [record]}}
     AwsLambdaApp(application=recorder.application).handle(event)
     return recorder.one()
 
 
 def rabbitmq_delivery(metadata: dict[str, str], keys: MetadataKeys, routing_key: str = "") -> Seen:
-    """One RabbitMQ delivery. The metadata cases send it with no routing key, so the headers alone
-    decide; the routing-key fallback is checked on its own (``topicSources``)."""
+    """One RabbitMQ delivery with AMQP routing key ``routing_key``."""
     recorder = _Recorder(keys)
     method = SimpleNamespace(delivery_tag=1, routing_key=routing_key)
     properties = SimpleNamespace(headers=dict(metadata))
@@ -162,8 +163,20 @@ def rabbitmq_delivery(metadata: dict[str, str], keys: MetadataKeys, routing_key:
     return recorder.one()
 
 
-def _rabbitmq(metadata: dict[str, str], keys: MetadataKeys) -> Seen:
-    return rabbitmq_delivery(metadata, keys)
+#: A delivery whose native fallback (the ``topicSources`` entry's ``fallback``: RabbitMQ's routing
+#: key, Kafka's consumed topic) is set to the given value, per host.
+FallbackDeliver = Callable[[dict[str, str], MetadataKeys, str], Seen]
+
+#: The hosts of every binding with a ``topicSources`` fallback. The metadata cases send these with an
+#: empty fallback, so the metadata alone decides; the fallback is checked on its own.
+FALLBACK_HOSTS: dict[str, dict[str, FallbackDeliver]] = {
+    "kafka": {"KafkaConsumerApp": kafka_record, "AwsLambdaApp (MSK)": lambda_msk_record},
+    "rabbitmq": {"RabbitMqConsumerApp": rabbitmq_delivery},
+}
+
+
+def _without_fallback(deliver: FallbackDeliver) -> Deliver:
+    return lambda metadata, keys: deliver(metadata, keys, "")
 
 
 #: Every host of every metadata-sourced binding this port ships, keyed by its ``topicSources`` id.
@@ -173,8 +186,10 @@ METADATA_HOSTS: dict[str, dict[str, Deliver]] = {
     "pubsub": {"GcpFunctionsApp": _pubsub},
     "servicebus": {"AzureFunctionsApp": _service_bus},
     "eventhub": {"AzureFunctionsApp": _event_hub},
-    "kafka": {"KafkaConsumerApp": _kafka, "AwsLambdaApp (MSK)": _lambda_msk},
-    "rabbitmq": {"RabbitMqConsumerApp": _rabbitmq},
+    **{
+        binding: {host: _without_fallback(deliver) for host, deliver in hosts.items()}
+        for binding, hosts in FALLBACK_HOSTS.items()
+    },
 }
 
 
