@@ -99,7 +99,7 @@ Two ways to invoke it:
 ## Well-known surfaces (the Cloud Service Profile)
 
 Pass `standard_paths=StandardPaths(...)` to expose the profile's well-known operational surfaces under
-a configurable `/benzene/` prefix (design-principles §5.2; profile R3/R4/R5/R7). They are served ahead
+a configurable `/benzene/` prefix (transport-bindings §1; profile R3/R4/R5/R7). They are served ahead
 of ordinary routing and never shadow your routes.
 
 ```python

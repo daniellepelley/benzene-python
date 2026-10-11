@@ -276,7 +276,7 @@ in `UNRUN_FIXTURES` in `tests/conformance_runner.py`, where a check fails if any
 fixture goes unrun. Passing these plus the live cross-language
 interop checks (send/receive the envelope against a
 running .NET Benzene service) is what "conformant" means — see the spec's
-[porting guide §3](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/porting-guide.md).
+[porting guide §3](https://github.com/daniellepelley/Benzene/blob/main/docs/guides/porting-guide.md).
 
 ## Roadmap
 
@@ -297,7 +297,7 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 2. **(done)** An HTTP inbound binding end-to-end (ASGI), including the status-code mapping.
 3. **(done)** Layered, install-what-you-use packages (`benzene-results` / `-core` / `-http`).
 4. **(done)** Cloud hosts — the "host anywhere" proof on Python, each a multi-transport,
-   dogfood-tested example per the [Port Quality Standards](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/port-quality-standards.md):
+   dogfood-tested example per the [Port Quality Standards](https://github.com/daniellepelley/Benzene/blob/main/docs/guides/port-quality-standards.md):
    **GCP** (`benzene-gcp`, HTTP + Pub/Sub), **AWS** (`benzene-aws`, API Gateway + SQS + SNS), and
    **Azure** (`benzene-azure`, HTTP + Service Bus + Event Hub) — all done, each with egress.
 5. **(done)** The mesh module (`benzene-mesh`) — the `ServiceDescriptor` (derived from the registry,
@@ -335,7 +335,7 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     payload types, composed by breadth-first search, direct preferred) + `casting_handler`, which
     upcasts an older request to the canonical type and downcasts the response back, so a handler serves
     a retired version in one registration instead of a hand-written forwarder.
-13. **(done)** The Cloud Service Profile's well-known HTTP surfaces (design-principles §5.2; profile
+13. **(done)** The Cloud Service Profile's well-known HTTP surfaces (transport-bindings §1; profile
     R3/R4/R5/R7) — `BenzeneHttpApp(standard_paths=StandardPaths(...))` exposes `/benzene/invoke` (the
     wire-envelope endpoint), `/benzene/health` (the `{isHealthy, healthChecks}` aggregate, 200/503), and
     `/benzene/spec` (the registry-derived **Contract Document** — the cross-language format
