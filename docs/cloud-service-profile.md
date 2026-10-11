@@ -15,7 +15,7 @@ ids that are retired and not reused.
 | **R3** | Health checks: `benzene:healthcheck` intercepted, plus HTTP `/benzene/health` where there is an HTTP surface | `HealthChecks` + `health_interception` (reserved `benzene:healthcheck`, answering `ok` with the verdict in `isHealthy`) — installed by the startup, or by `application_from` from `StandardPaths(health=...)`, so one declaration answers both; the HTTP surface returns the `{isHealthy, healthChecks}` report, `200`/`503` by `isHealthy`. A message-only service meets R3 with the topic alone | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py`, `tests/test_cloud_service_profile.py` |
 | **R4** | Wire-envelope invocability + HTTP `/benzene/invoke` | `BenzeneMessageApplication.handle` is the envelope entry point; `StandardPaths` exposes `POST /benzene/invoke` (200 for every processed envelope, 400 only for a malformed one; `invoke_topics` restricts it) | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
 | **R5** | Registry-derived spec: the `benzene:spec` topic wherever the transport carries a reply, and `/benzene/spec` over HTTP | The cross-language **Contract Document** (contract-document.md), derived once at the composition root from `AppDefinition(contract=ContractInfo(...), outbound=...)`; the reserved `benzene:spec` topic is intercepted in the pipeline and answered with it wherever the transport carries a reply (`spec_interception`, installed by `application_from`) and `GET /benzene/spec` runs that topic through the pipeline (`not-implemented`/501 for a type or format it does not render) | `tests/test_contract_document.py`, `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py`, `contract-document-cases.json` |
-| **R7** | Default `/benzene/` standard paths, configurable | `StandardPaths(prefix="/benzene", ...)` — one config object, relocatable prefix; threaded into every HTTP-capable host | `tests/test_wellknown.py::test_prefix_is_configurable_and_relocates_every_surface` |
+| **R7** | Default `/benzene/` standard paths, configurable | `StandardPaths(prefix="/benzene", ...)` — one config object, relocatable prefix; threaded into every HTTP-capable host. A service with no HTTP surface exposes no well-known HTTP surfaces, so meets R7 trivially | `tests/test_wellknown.py::test_prefix_is_configurable_and_relocates_every_surface` |
 
 ## The meshed-service claim (M1, M2)
 
@@ -95,4 +95,5 @@ mesh registration (M1) reuses it rather than describing the service a second tim
 The self-check's verdict rides on the document's `profile`
 (`benzene.mesh.declare_cloud_service_profile`): `{"name": "cloud-service", "missing": [...]}`, where
 `missing` lists only R1–R5/R7 ids and is omitted when none. The probe audits R5's topic half by
-invoking `benzene:spec` over `/benzene/invoke`, and its HTTP half at `/benzene/spec`.
+invoking `benzene:spec` over `/benzene/invoke`, and its HTTP half at `/benzene/spec`; R3 likewise, by
+invoking `benzene:healthcheck` over `/benzene/invoke` and reading `/benzene/health`.

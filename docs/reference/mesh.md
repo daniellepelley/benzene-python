@@ -126,7 +126,8 @@ definition = declare_cloud_service_profile(definition)
   non-reserved application topic), **R5** (a `contract`, so the pipeline answers `benzene:spec` with
   the derived document wherever the transport carries a reply — a one-way binding never costs R5 — plus — where there is an HTTP surface — `/benzene/spec`), and — from the
   [`StandardPaths`](http.md) declaration — **R4** (`/benzene/invoke` enabled) and **R7** (the
-  surfaces under the default `/benzene/` prefix). **R3** is `benzene:healthcheck` intercepted in the
+  surfaces under the default `/benzene/` prefix; a service with no HTTP surface — no standard paths
+  and no router — exposes no well-known HTTP surfaces, so meets R7 trivially). **R3** is `benzene:healthcheck` intercepted in the
   pipeline (a `health_interception` in `middleware`, or `StandardPaths(health=...)`, which
   `application_from` installs as one) plus — only where there is an HTTP surface — `/benzene/health`
   (`StandardPaths(health=...)`); a message-only service meets it with the topic alone.
@@ -167,7 +168,9 @@ report.to_payload()       # {"baseUrl", "requirements": [{"id", "verdict", "reas
 
 The probe audits **R1–R5 and R7**. **R5** has two halves and both must hold: `GET /benzene/spec`
 returns a Contract Document, and a `benzene:spec` envelope over `/benzene/invoke` answers with one
-(either half positively unmet → `not-satisfied`). **R7** is `inconclusive` whenever the caller probes a
+(either half positively unmet → `not-satisfied`). **R3** is graded the same way: a
+`benzene:healthcheck` envelope over `/benzene/invoke` answers with the health report, and — the probed
+service having an HTTP surface — `GET /benzene/health` returns the aggregate. **R7** is `inconclusive` whenever the caller probes a
 non-default prefix (the service's own defaults become unknowable). The meshed-service claim is
 reported apart on `report.mesh` and is **not observable from outside**, so both are `inconclusive` by
 design, never silently upgraded and never counted toward `is_clean`: **M1** (registration, heartbeat

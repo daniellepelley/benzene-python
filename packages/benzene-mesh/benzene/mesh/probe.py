@@ -117,6 +117,9 @@ class CloudServiceProbeReport:
 #: The reserved topic that answers with the service's Contract Document (contract-document §7).
 SPEC_TOPIC = "benzene:spec"
 
+#: The reserved topic that answers with the service's health report (wire-contracts §5, profile R3).
+HEALTH_TOPIC = "benzene:healthcheck"
+
 
 async def probe_cloud_service(
     base_url: str,
@@ -140,6 +143,8 @@ async def probe_cloud_service(
     health = await _get_json(call, f"{root}{prefix}/health", ok_statuses=(200, 503))
     # The self-description over the envelope endpoint: the same document a registration carries.
     described = await _invoke(call, f"{root}{prefix}/invoke", SPEC_TOPIC)
+    # The health report over the envelope endpoint: R3's topic half.
+    checked = await _invoke(call, f"{root}{prefix}/invoke", HEALTH_TOPIC)
 
     reachable = any(result.reached for result in (spec, health, described))
     # A surface *answering* (a parsed spec/health document, or an invoke envelope) is stronger than a
@@ -179,16 +184,9 @@ async def probe_cloud_service(
             )
         )
 
-    # R3 — health aggregate at /benzene/health.
-    probes.append(
-        _surface_verdict(
-            "R3",
-            health,
-            lambda doc: isinstance(doc.get("isHealthy"), bool),
-            present="/benzene/health returns the {isHealthy, healthChecks} aggregate",
-            malformed="/benzene/health did not return a health aggregate",
-        )
-    )
+    # R3 — health checks, both halves: the benzene:healthcheck topic (probed as an envelope over
+    # /benzene/invoke) and, the service having an HTTP surface, the /benzene/health aggregate.
+    probes.append(_health_verdict(health, checked))
 
     # R4 — wire-envelope invocability: /benzene/invoke accepted an envelope and answered with one.
     probes.append(
@@ -262,6 +260,51 @@ async def probe_cloud_service(
     return CloudServiceProbeReport(base_url=root, probes=tuple(probes), mesh=mesh)
 
 
+def _is_health_report(document: dict[str, Any]) -> bool:
+    return isinstance(document.get("isHealthy"), bool)
+
+
+def _health_verdict(health: _Fetched, checked: _Fetched) -> RequirementProbe:
+    """Grade R3 from its two halves: the ``benzene:healthcheck`` topic and the ``/benzene/health``
+    route (required here, since a service the probe reaches over HTTP has an HTTP surface)."""
+    route = _surface_verdict(
+        "R3",
+        health,
+        _is_health_report,
+        present="/benzene/health returns the {isHealthy, healthChecks} aggregate",
+        malformed="/benzene/health did not return a health aggregate",
+    )
+    if checked.envelope and checked.document is not None and _is_health_report(checked.document):
+        topic = RequirementProbe(
+            "R3", Verdict.SATISFIED, "benzene:healthcheck over /benzene/invoke answers with the report"
+        )
+    elif checked.envelope:
+        topic = RequirementProbe(
+            "R3",
+            Verdict.NOT_SATISFIED,
+            "benzene:healthcheck over /benzene/invoke did not answer with a health report",
+        )
+    else:
+        # No envelope endpoint to carry the topic (R4 grades that): this half is unobservable here.
+        topic = RequirementProbe(
+            "R3",
+            Verdict.INCONCLUSIVE,
+            f"the benzene:healthcheck topic could not be probed: {checked.detail}",
+        )
+    return _combine("R3", route, topic)
+
+
+def _combine(requirement_id: str, *halves: RequirementProbe) -> RequirementProbe:
+    """Any half positively unmet fails the requirement; every half met satisfies it."""
+    if any(half.verdict is Verdict.NOT_SATISFIED for half in halves):
+        verdict = Verdict.NOT_SATISFIED
+    elif all(half.verdict is Verdict.SATISFIED for half in halves):
+        verdict = Verdict.SATISFIED
+    else:
+        verdict = Verdict.INCONCLUSIVE
+    return RequirementProbe(requirement_id, verdict, "; ".join(half.reason for half in halves))
+
+
 def _spec_verdict(spec: _Fetched, described: _Fetched) -> RequirementProbe:
     """Grade R5 from its two halves: the ``/benzene/spec`` route and the ``benzene:spec`` topic."""
     route = _surface_verdict(
@@ -291,14 +334,7 @@ def _spec_verdict(spec: _Fetched, described: _Fetched) -> RequirementProbe:
             Verdict.INCONCLUSIVE,
             f"the benzene:spec topic could not be probed: {described.detail}",
         )
-    halves = (route, topic)
-    if any(half.verdict is Verdict.NOT_SATISFIED for half in halves):
-        verdict = Verdict.NOT_SATISFIED
-    elif all(half.verdict is Verdict.SATISFIED for half in halves):
-        verdict = Verdict.SATISFIED
-    else:
-        verdict = Verdict.INCONCLUSIVE
-    return RequirementProbe("R5", verdict, "; ".join(half.reason for half in halves))
+    return _combine("R5", route, topic)
 
 
 @dataclass(frozen=True)

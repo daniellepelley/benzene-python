@@ -69,6 +69,9 @@ def test_a_fully_provisioned_service_audits_clean() -> None:
     # ...R5 on both halves: the /benzene/spec route and the benzene:spec topic over /benzene/invoke...
     assert "/benzene/spec" in _reason(report, "R5")
     assert "benzene:spec over /benzene/invoke" in _reason(report, "R5")
+    # ...R3 on both halves too: the benzene:healthcheck topic and the /benzene/health route...
+    assert "benzene:healthcheck over /benzene/invoke answers" in _reason(report, "R3")
+    assert "/benzene/health returns" in _reason(report, "R3")
     # ...and the meshed-service claim is reported apart, unobservable from outside by design.
     assert [p.id for p in report.mesh] == ["M1", "M2"]
     assert report.verdict("M1") is Verdict.INCONCLUSIVE
@@ -105,6 +108,38 @@ def test_the_spec_topic_half_of_r5_is_audited_on_its_own() -> None:
     report = asyncio.run(probe_cloud_service("http://svc", http=call))
     assert report.verdict("R5") is Verdict.NOT_SATISFIED
     assert report.verdict("R4") is Verdict.SATISFIED
+
+
+def test_the_health_topic_half_of_r3_is_audited_on_its_own() -> None:
+    # /benzene/health serves the report, but benzene:healthcheck over /benzene/invoke is not answered:
+    # R3 requires the topic to be intercepted, so it is not satisfied.
+    report_body = json.dumps({"isHealthy": True, "healthChecks": {}})
+
+    async def call(method: str, url: str, body: str | None) -> tuple[int, str]:
+        path = urlsplit(url).path
+        if path == "/benzene/health":
+            return 200, report_body
+        if path == "/benzene/invoke":
+            return 200, json.dumps({"statusCode": "not-found", "headers": {}, "body": ""})
+        return 404, ""
+
+    report = asyncio.run(probe_cloud_service("http://svc", http=call))
+    assert report.verdict("R3") is Verdict.NOT_SATISFIED
+    assert "benzene:healthcheck over /benzene/invoke did not answer" in _reason(report, "R3")
+
+
+def test_the_health_route_half_of_r3_is_audited_on_its_own() -> None:
+    # The topic answers over /benzene/invoke, but /benzene/health 404s: an HTTP service needs both.
+    report_body = json.dumps({"isHealthy": True, "healthChecks": {}})
+
+    async def call(method: str, url: str, body: str | None) -> tuple[int, str]:
+        if urlsplit(url).path == "/benzene/invoke" and "benzene:healthcheck" in (body or ""):
+            return 200, json.dumps({"statusCode": "ok", "headers": {}, "body": report_body})
+        return 404, ""
+
+    report = asyncio.run(probe_cloud_service("http://svc", http=call))
+    assert report.verdict("R3") is Verdict.NOT_SATISFIED
+    assert "benzene:healthcheck over /benzene/invoke answers" in _reason(report, "R3")
 
 
 def test_a_bare_service_is_found_missing_its_surfaces() -> None:
