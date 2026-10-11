@@ -33,6 +33,7 @@ from benzene.core import (
     message,
     registration_hash,
     schema_name,
+    to_jsonable,
 )
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths, http_endpoint
 from benzene.results import Result
@@ -133,7 +134,8 @@ def test_the_registry_and_outbound_declarations_project_into_one_document() -> N
     assert schemas["PlaceOrder"] == {
         "type": "object",
         "properties": {"sku": {"type": "string"}, "quantity": {"type": "integer"}},
-        "required": ["sku"],  # quantity has a default
+        # quantity has a default, but the marshaler always writes it, so it is required (§4.2).
+        "required": ["sku", "quantity"],
     }
     assert "additionalProperties" not in schemas["PlaceOrder"]  # records carry none (§4.2)
     # No synthesized examples: only an author-supplied one would be written (§2).
@@ -269,6 +271,31 @@ class Everything:
     labels: dict[str, list[int]] = field(default_factory=dict)
 
 
+@dataclass
+class _Defaulted:
+    id: str
+    count: int = 0
+    tags: list[str] = field(default_factory=list)
+    note: str | None = None
+
+
+def test_required_is_every_property_the_marshaler_always_emits_defaults_included() -> None:
+    """contract-document §4.2 (Benzene 9c7aa36d): required describes the payload as written.
+
+    ``to_jsonable`` writes every dataclass field whatever its default, so every field is required -
+    a field with a default, a default factory or a ``None`` default included.
+    """
+    async def handle(_request: _Defaulted) -> Result:
+        return Result.ok()
+
+    registry = Registry().register("t:x", handle, request_type=_Defaulted)
+    document = ContractDocument.derive(registry, service="s").to_payload()
+    schema = document["components"]["schemas"]["_Defaulted"]
+    written = to_jsonable(_Defaulted(id="a"))
+    assert set(written) == set(schema["properties"])  # the marshaler wrote every property...
+    assert schema["required"] == ["id", "count", "tags", "note"]  # ...so each one is required
+
+
 def test_the_derivation_table_through_pythons_types() -> None:
     document = _derive(Registry().register("things:do", handle, request_type=Everything))
     schemas = document["components"]["schemas"]
@@ -300,7 +327,8 @@ def test_the_derivation_table_through_pythons_types() -> None:
         "type": "object",
         "additionalProperties": {"type": "array", "items": {"type": "integer"}},
     }
-    assert "labels" not in schemas["Everything"]["required"]  # it has a default
+    # A default does not make a field optional: the marshaler always emits it (§4.2).
+    assert "labels" in schemas["Everything"]["required"]
 
 
 def _item(module: str, field_name: str) -> type:

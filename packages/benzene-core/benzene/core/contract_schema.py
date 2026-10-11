@@ -23,9 +23,11 @@ anything else                      ``{}``  (``Any``, a wider union, a plain ``En
 =================================  ================================================================
 
 Properties are the dataclass fields, camelCased exactly as the marshaler writes them; inherited
-fields are flattened as ``dataclasses.fields`` flattens them. A field is ``required`` iff it has no
-default — the reading of "always emitted" this port has always used, and the one the mesh fixtures
-pin. Records carry no ``additionalProperties``. ``format`` is emitted where it is known; it is
+fields are flattened as ``dataclasses.fields`` flattens them. Every field is ``required``: the
+marshaler (:func:`~benzene.core.to_jsonable`) always emits every dataclass field, and §4.2 makes a
+property the marshaler always emits ``required`` even when the type declares a default for it —
+``required`` describes the payload as written, not what a sender may leave out. Records carry no
+``additionalProperties``. ``format`` is emitted where it is known; it is
 stripped before hashing (§6.2).
 
 **Components and names (§4.1).** Every dataclass and serializable enum reachable from an entry is
@@ -276,8 +278,8 @@ class SchemaCatalogue:
         for f in dataclasses.fields(cls):
             name = to_camel(f.name)
             properties[name] = self._derive(hints.get(f.name, Any), refs, bindings)
-            if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING:
-                required.append(name)
+            # to_jsonable writes every field, defaulted or not, so every field is always emitted.
+            required.append(name)
         schema: Schema = {"type": "object", "properties": properties}
         if required:
             schema["required"] = required

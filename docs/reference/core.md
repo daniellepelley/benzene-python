@@ -393,7 +393,8 @@ AppDefinition(
  "events": [{"topic": "order:placed", "message": {"$ref": "#/components/schemas/OrderPlaced"}}],
  "sends": [{"topic": "payment:take", "request": {"$ref": "#/components/schemas/TakePayment"}}],
  "components": {"schemas": {"PlaceOrder": {"type": "object",
-     "properties": {"sku": {"type": "string"}, "quantity": {"type": "integer"}}, "required": ["sku"]}}}}
+     "properties": {"sku": {"type": "string"}, "quantity": {"type": "integer"}},
+     "required": ["sku", "quantity"]}}}}
 ```
 
 - **Events and sends** are split by *who owns the contract*: an event is a topic this service
@@ -407,8 +408,10 @@ AppDefinition(
 - **Schemas** are OpenAPI 3.0 Schema Objects derived from the dataclasses (`contract_schema.py`):
   `T | None` is `nullable: true`, or the `{"type", "nullable": true, "allOf": [{"$ref"}]}` wrapper for
   a named type; every dataclass and `str`/`int` enum is hoisted into `components.schemas`; `format`
-  where it is known (`date-time`, `double`, `byte`); a field is `required` iff it has no default. A
-  pydantic model derives to `{}` (a recorded gap).
+  where it is known (`date-time`, `double`, `byte`); every field is `required`, a defaulted one
+  included — the marshaler always writes every dataclass field, and contract-document §4.2 makes a
+  property it always emits `required` even when the type declares a default. A pydantic model
+  derives to `{}` (a recorded gap).
 - **Names** are the type's `__name__`, or the name declared with `@schema_name("…")`; a generic
   instance puts its arguments first (`Page[Order]` → `OrderPage`). Two different types claiming one
   name fail derivation — so building the app — with `ComponentNameCollisionError`, naming both types,
