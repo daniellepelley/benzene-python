@@ -78,25 +78,26 @@ Result.failure("conflict", "already exists")   # any status by name
 Result.validation_error(BenzeneError("Name must not be empty", field="name", code="NotEmpty"))
 ```
 
-### `Result.set` — stating success outright
+### `Result.set` — an application-defined status
 
 ```python
 Result.set(status: str, payload=None, successful: bool | None = None)
 ```
 
-The one place `.successful` is set. It decouples the success classification from the status, for the
-case wire-contracts §1.3 names: a health check answering `service-unavailable` so an HTTP probe sees
-a 503 and a load balancer drains the instance, while still rendering its **report** as the body
-rather than a problem document. It is also how an application-defined status is carried as a
-success — `isSuccessful` is what every receiver reads (§1.2), so without it a status outside the
-shared vocabulary reads as a failure to every peer.
+The one place `.successful` is set: how an **application-defined** status says whether it is a
+success. `isSuccessful` is what every receiver reads (wire-contracts §1.2), and a status outside the
+shared vocabulary means nothing to a receiver, so without it such a status reads as a failure to every
+peer.
 
 ```python
-Result.set("cache-warm", {"entries": 12}, successful=True)   # a success, whatever the status says
+Result.set("cache-warm", {"entries": 12}, successful=True)   # an app-defined success
 ```
 
-For ordinary results prefer `ok` / `failure` and the status-derived default; reach for this only
-when the transport outcome and the body's meaning genuinely diverge.
+For a status **in** the vocabulary, `isSuccessful` MUST equal the status's class — no exceptions — so
+`Result.set("ok", ..., successful=False)` or `Result.set("service-unavailable", ..., successful=True)`
+raises `ValueError` rather than putting a contradiction on the wire. (A health report on an unhealthy
+service is not such a case any more: the health topic answers `ok` and carries the verdict in its
+payload's `isHealthy`; see [health checks](core.md#health-checks).)
 
 ### `Result.problem` — an application-authored problem document
 

@@ -24,6 +24,7 @@ from benzene.core import (
     MessageSender,
     MiddlewarePipeline,
     Registry,
+    decode_response,
     encode_body,
 )
 from benzene.mesh import (
@@ -60,7 +61,7 @@ class _InProcessSender:
         response = await self._target.handle(
             {"topic": topic, "headers": headers or {}, "body": encode_body(message)}
         )
-        return Result(response["statusCode"])
+        return decode_response(response)  # isSuccessful decides, not the status text
 
 
 def _service(name: str, registry: Registry) -> tuple[BenzeneMessageApplication, QueueTraceExporter]:
@@ -83,7 +84,7 @@ class Fleet:
             {"topic": PLACE_ORDER, "headers": {}, "body": encode_body({"sku": sku, "quantity": quantity})}
         )
         self._report_traces()
-        return Result(response["statusCode"])
+        return decode_response(response)  # isSuccessful decides, not the status text
 
     def _report_traces(self) -> None:
         for exporter in self.exporters.values():

@@ -183,8 +183,9 @@ predates it (an older peer, or a port that has not adopted it).
 
 This matters for an application-defined status, which is outside the shared vocabulary and so means
 nothing to a receiver classifying by string alone. Every transport binding here reads it, which is
-what makes `Result.set(status, payload, successful=True)` survive the round trip instead of being
-nacked by SQS, redelivered by Pub/Sub, or answered as gRPC `Internal`.
+what makes `Result.set("cache-warm", payload, successful=True)` survive the round trip instead of
+being nacked by SQS, redelivered by Pub/Sub, or answered as gRPC `Internal`. (For a status in the
+vocabulary the two always agree: `Result.set` refuses to state a contradiction.)
 
 ```python
 from benzene.core import successful_from
@@ -338,13 +339,18 @@ pipeline = MiddlewarePipeline().use(health_interception(checks))
 ```
 
 A check returns a `HealthCheckResult` (or a bool), sync or async; a check that raises counts as
-unhealthy rather than crashing the endpoint. Registering two checks under the same name is a startup
-error (`DuplicateHealthCheckError`), mirroring the registry — a health endpoint must not silently drop
-a check. All healthy → status `ok` with the aggregate; any unhealthy → `service-unavailable` naming
-the failed checks. The aggregate
+failed rather than crashing the endpoint. Each check reports a `HealthStatus` — `ok`, `warning`
+(degraded but serving: reported, does not flip `isHealthy`) or `failed` — built with
+`HealthCheckResult.healthy()`, `.warning()` or `.unhealthy()`, each taking an optional `detail`, and
+keyword-only `type` (the kind of dependency) and `data` (a diagnostic bag written verbatim); a bool
+is `ok`/`failed`. Registering two checks under the same name is a startup error
+(`DuplicateHealthCheckError`), mirroring the registry — a health endpoint must not silently drop a
+check. The topic always answers status `ok` once the checks ran — an unhealthy service is still a
+successful health query — and the verdict is the report's `isHealthy` (wire-contracts §5); the HTTP
+`/benzene/health` route maps it to `503`. The report
 
 ```json
-{"isHealthy": true, "healthChecks": {"db": {"isHealthy": true}, "queue": {"isHealthy": true}}}
+{"isHealthy": true, "healthChecks": {"db": {"status": "ok"}, "disk": {"status": "warning", "detail": "85% full"}}}
 ```
 
 is exactly the shape the mesh [`Heartbeat`](mesh.md) reports, so a service runs its checks once and
@@ -549,7 +555,7 @@ make a blocking SDK call safe: sharing one event loop works because the consumer
 `HandlerDefinition`, `Lifetime`, `Middleware`, `MiddlewarePipeline`, `Next`, `Registry`,
 `SupportsDefinitions`, `Scope`,
 `ServiceNotRegisteredError`, `AppDefinition`, `BenzeneStartUp`, `HealthChecks`, `HealthCheck`,
-`HealthCheckResult`, `HealthReport`, `DuplicateHealthCheckError`, `HEALTH_TOPIC`,
+`HealthCheckResult`, `HealthReport`, `HealthStatus`, `DuplicateHealthCheckError`, `HEALTH_TOPIC`,
 `health_interception`, `VERSION_HEADER`, `NoDefaultHandlerWarning`, `VersionSelector`, `application_from`, `build_application`, `definition_of`,
 `decode_response`, `encode_response`, `error_payload`, `exact_version`, `highest_version`, `message`, `message_router`,
 `resolve_version`, `read_message_metadata`, `MetadataKeys`, `DEFAULT_METADATA_KEYS`,

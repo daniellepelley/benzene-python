@@ -1,4 +1,8 @@
-"""Health checks: the reserved ``benzene:healthcheck`` endpoint and the aggregate."""
+"""Health checks: the reserved ``benzene:healthcheck`` topic and the health response (wire §5).
+
+The topic answers ``ok`` whenever the checks ran; ``isHealthy`` carries the verdict, and each check
+reports a ``status`` of ``ok``, ``warning`` or ``failed``.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ from benzene.core import (
     DuplicateHealthCheckError,
     HealthCheckResult,
     HealthChecks,
+    HealthStatus,
     MiddlewarePipeline,
     Registry,
     health_interception,
@@ -39,40 +44,40 @@ def test_all_healthy_returns_ok_with_the_aggregate() -> None:
     assert response["statusCode"] == "ok"
     body = json.loads(response["body"])
     assert body["isHealthy"] is True
-    assert body["healthChecks"]["db"] == {"isHealthy": True}
-    assert body["healthChecks"]["cache"] == {"isHealthy": True, "detail": "warm"}
+    assert body["healthChecks"]["db"] == {"status": "ok"}
+    assert body["healthChecks"]["cache"] == {"status": "ok", "detail": "warm"}
 
 
-def test_an_unhealthy_check_returns_service_unavailable_naming_it() -> None:
+def test_an_unhealthy_service_is_still_a_successful_health_query() -> None:
     checks = HealthChecks().add("db", lambda: True).add("queue", lambda: HealthCheckResult.unhealthy("timeout"))
     response = _hit(_app(checks))
 
-    assert response["statusCode"] == "service-unavailable"
-
-    # The body is still the report, per check, not a problem document. That is the whole point of
-    # hitting a health endpoint: "unhealthy" alone tells an operator nothing they did not already
-    # know from the 503. wire-contracts.md 1.3 carves this case out, and Result.set is how the
-    # middleware claims it - service-unavailable for the probe, isSuccessful for the body.
+    # The checks ran, so the query succeeded: status ok, the verdict in isHealthy (wire §5). The body
+    # is the report, per check, never a problem document - which check failed and why is the point.
+    assert response["statusCode"] == "ok"
+    assert response["isSuccessful"] is True
     body = json.loads(response["body"])
     assert body["isHealthy"] is False
-    assert body["healthChecks"]["db"] == {"isHealthy": True}
-    assert body["healthChecks"]["queue"] == {"isHealthy": False, "detail": "timeout"}
+    assert body["healthChecks"]["db"] == {"status": "ok"}
+    assert body["healthChecks"]["queue"] == {"status": "failed", "detail": "timeout"}
 
 
-def test_an_unhealthy_report_is_signalled_successful_so_its_body_survives() -> None:
-    """The regression guard for the carve-out itself.
+def test_a_warning_is_reported_without_flipping_is_healthy() -> None:
+    checks = HealthChecks().add("disk", lambda: HealthCheckResult.warning("85% full"))
+    body = json.loads(_hit(_app(checks))["body"])
+    assert body["isHealthy"] is True
+    assert body["healthChecks"]["disk"] == {"status": HealthStatus.WARNING, "detail": "85% full"}
 
-    Before Result.set existed here, the encoder branched on the status class alone, saw
-    service-unavailable, and replaced the carefully-built report with a problem document naming only
-    the failed check. isSuccessful is what keeps the body - and section 1.2 requires the envelope to
-    state it either way.
-    """
-    checks = HealthChecks().add("queue", lambda: HealthCheckResult.unhealthy("timeout"))
-    response = _hit(_app(checks))
 
-    assert response["isSuccessful"] is True
-    assert response["statusCode"] == "service-unavailable"
-    assert "benzeneStatus" not in json.loads(response["body"])
+def test_type_and_data_are_written_verbatim() -> None:
+    checks = HealthChecks().add(
+        "Database",
+        lambda: HealthCheckResult.healthy(type="Database", data={"CanConnect": True}),
+    )
+    body = json.loads(_hit(_app(checks))["body"])
+    assert body["healthChecks"]["Database"] == {
+        "status": "ok", "type": "Database", "data": {"CanConnect": True}
+    }
 
 
 def test_a_raising_check_is_unhealthy_not_a_crash() -> None:
@@ -80,8 +85,10 @@ def test_a_raising_check_is_unhealthy_not_a_crash() -> None:
         raise RuntimeError("down")
 
     response = _hit(_app(HealthChecks().add("boom", boom)))
-    assert response["statusCode"] == "service-unavailable"
-    assert json.loads(response["body"])["healthChecks"]["boom"]["isHealthy"] is False
+    assert response["statusCode"] == "ok"
+    body = json.loads(response["body"])
+    assert body["isHealthy"] is False
+    assert body["healthChecks"]["boom"]["status"] == "failed"
 
 
 def test_async_checks_are_awaited() -> None:
@@ -115,4 +122,4 @@ def test_report_payload_matches_the_heartbeat_health_shape() -> None:
     payload = report.to_payload()
     # exactly the {isHealthy, healthChecks} shape the mesh Heartbeat carries
     assert set(payload) == {"isHealthy", "healthChecks"}
-    assert payload["healthChecks"]["db"]["isHealthy"] is True
+    assert payload["healthChecks"]["db"] == {"status": "ok"}

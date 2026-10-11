@@ -111,7 +111,7 @@ def test_operational_service_answers_benzene_health_through_the_harness() -> Non
     assert response.status_code == 200  # healthy -> ok -> 200
     body = json.loads(response.body)
     assert body["isHealthy"] is True
-    assert body["healthChecks"]["order-store"]["isHealthy"] is True
+    assert body["healthChecks"]["order-store"]["status"] == "ok"
 
 
 def test_mesh_enabled_service_traces_a_real_order_through_the_harness() -> None:

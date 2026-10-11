@@ -91,7 +91,7 @@ def test_health_returns_the_aggregate_200_when_healthy() -> None:
     assert response.status_code == 200
     body = json.loads(response.body)
     assert body["isHealthy"] is True
-    assert body["healthChecks"]["db"]["isHealthy"] is True
+    assert body["healthChecks"]["db"]["status"] == "ok"
     assert set(body["healthChecks"]) == {"db", "queue"}
 
 
@@ -101,11 +101,20 @@ def test_health_returns_the_full_aggregate_503_when_unhealthy() -> None:
     response = asyncio.run(app.handle("GET", "/benzene/health"))
 
     assert response.status_code == 503
+    # The health report, not a problem document: problem+json is for an unsuccessful result, and the
+    # health query succeeded - only the verdict is unhealthy (wire-contracts §4.1, §5).
+    assert response.headers["content-type"] == "application/json"
     body = json.loads(response.body)
-    # The whole aggregate survives on an unhealthy response (the envelope would have dropped it).
     assert body["isHealthy"] is False
-    assert body["healthChecks"]["db"]["isHealthy"] is True
-    assert body["healthChecks"]["queue"]["isHealthy"] is False
+    assert body["healthChecks"]["db"]["status"] == "ok"
+    assert body["healthChecks"]["queue"]["status"] == "failed"
+
+
+def test_a_warning_check_is_still_200() -> None:
+    checks = HealthChecks().add("disk", lambda: HealthCheckResult.warning("nearly full"))
+    response = asyncio.run(_app(StandardPaths(health=checks)).handle("GET", "/benzene/health"))
+    assert response.status_code == 200
+    assert json.loads(response.body)["healthChecks"]["disk"]["status"] == "warning"
 
 
 def test_health_absent_when_no_checks_supplied() -> None:

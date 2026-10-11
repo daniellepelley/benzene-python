@@ -132,4 +132,4 @@ def test_unhealthy_check_maps_to_503_through_the_cloud_host(builder_name) -> Non
     assert response.status_code == 503
     report = json.loads(response.body)
     assert report["isHealthy"] is False
-    assert report["healthChecks"]["db"]["isHealthy"] is False
+    assert report["healthChecks"]["db"]["status"] == "failed"

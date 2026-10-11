@@ -1,29 +1,43 @@
-"""Health checks — the reserved ``benzene:healthcheck`` endpoint (core-concepts §, health checks).
+"""Health checks — the reserved ``benzene:healthcheck`` topic (wire-contracts §5, §7).
 
 A service intercepts the reserved topic ``benzene:healthcheck`` (plus an app-chosen alias), runs its
-registered checks, and answers with the standard result: status ``ok`` and the health aggregate when
-everything is healthy, ``service-unavailable`` (naming the failed checks) otherwise. Interception is
-by topic id, version ignored — exactly like the mesh endpoint.
+registered checks, and answers with the health response. The result's status is ``ok`` whenever the
+checks ran — an unhealthy service is still a *successful health query* — and the payload's
+``isHealthy`` carries the verdict. A transport with a status of its own maps the verdict onto it: the
+HTTP binding's ``GET /benzene/health`` answers 503 when ``isHealthy`` is false. Interception is by
+topic id, version ignored — exactly like the mesh endpoint.
 
-The aggregate shape (``{"isHealthy": ..., "healthChecks": {name: {"isHealthy": ...}}}``) is the one
-the mesh :class:`~benzene.mesh.Heartbeat` reports, so a service runs its checks once and both the
-health endpoint and the heartbeat feed reuse the result.
+The response shape (``{"isHealthy": ..., "healthChecks": {name: {"status": "ok"|"warning"|"failed",
+...}}}``) is also what the mesh :class:`~benzene.mesh.Heartbeat` reports, so a service runs its checks
+once and both the health endpoint and the heartbeat feed reuse the result.
 """
 
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from benzene.results import Result, Status
+from benzene.results import Result
 
 from .context import Context
 from .pipeline import Middleware, Next
 
 #: The reserved topic id a service intercepts to report its health.
 HEALTH_TOPIC = "benzene:healthcheck"
+
+
+class HealthStatus:
+    """A check's status (wire-contracts §5) — its own vocabulary, distinct from the result statuses.
+
+    Plain string constants, like :class:`~benzene.results.Status`: ``isHealthy`` is true iff no check
+    reports ``failed``, so a ``warning`` is visible without draining the instance.
+    """
+
+    OK = "ok"
+    WARNING = "warning"
+    FAILED = "failed"
 
 
 class DuplicateHealthCheckError(Exception):
@@ -36,21 +50,49 @@ class DuplicateHealthCheckError(Exception):
 
 @dataclass(frozen=True)
 class HealthCheckResult:
-    """One check's outcome: healthy or not, with an optional human-readable detail."""
+    """One check's outcome: a :class:`HealthStatus`, plus optional detail for whoever reads the report.
 
-    is_healthy: bool
+    Build one with :meth:`healthy`, :meth:`warning` or :meth:`unhealthy`; a check may also just return
+    a ``bool`` (``True`` is ``ok``, ``False`` is ``failed``). ``type`` names the kind of dependency
+    (``"Database"``) and ``data`` is a free-form diagnostic bag written verbatim (wire-contracts §5).
+    ``detail`` is a human-readable line this port adds; readers ignore what they don't know.
+    """
+
+    status: str = HealthStatus.OK
     detail: str | None = None
+    type: str | None = None
+    data: Mapping[str, Any] | None = None
+
+    @property
+    def is_healthy(self) -> bool:
+        """Whether this check keeps the service healthy: anything but ``failed`` (a warning does)."""
+        return self.status != HealthStatus.FAILED
 
     @classmethod
-    def healthy(cls, detail: str | None = None) -> HealthCheckResult:
-        return cls(True, detail)
+    def healthy(
+        cls, detail: str | None = None, *, type: str | None = None, data: Mapping[str, Any] | None = None
+    ) -> HealthCheckResult:
+        return cls(HealthStatus.OK, detail, type, data)
 
     @classmethod
-    def unhealthy(cls, detail: str | None = None) -> HealthCheckResult:
-        return cls(False, detail)
+    def warning(
+        cls, detail: str | None = None, *, type: str | None = None, data: Mapping[str, Any] | None = None
+    ) -> HealthCheckResult:
+        """Degraded but serving — reported, and does not flip ``isHealthy``."""
+        return cls(HealthStatus.WARNING, detail, type, data)
+
+    @classmethod
+    def unhealthy(
+        cls, detail: str | None = None, *, type: str | None = None, data: Mapping[str, Any] | None = None
+    ) -> HealthCheckResult:
+        return cls(HealthStatus.FAILED, detail, type, data)
 
     def to_payload(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"isHealthy": self.is_healthy}
+        payload: dict[str, Any] = {"status": self.status}
+        if self.type is not None:
+            payload["type"] = self.type
+        if self.data is not None:
+            payload["data"] = dict(self.data)  # keys verbatim — no naming policy (wire-contracts §5)
         if self.detail is not None:
             payload["detail"] = self.detail
         return payload
@@ -62,7 +104,7 @@ HealthCheck = Callable[[], HealthCheckResult | bool | Awaitable[HealthCheckResul
 
 @dataclass(frozen=True)
 class HealthReport:
-    """The aggregate of every check: healthy iff all checks are (an empty set of checks is healthy)."""
+    """The aggregate of every check: healthy iff no check failed (an empty set of checks is healthy)."""
 
     is_healthy: bool
     checks: dict[str, HealthCheckResult]
@@ -104,39 +146,31 @@ class HealthChecks:
                 results[name] = _coerce(outcome)
             except Exception as exc:  # a check must never break the health endpoint
                 results[name] = HealthCheckResult.unhealthy(f"raised {type(exc).__name__}: {exc}")
-        overall = all(result.is_healthy for result in results.values())
+        overall = all(result.is_healthy for result in results.values())  # a warning is healthy
         return HealthReport(overall, results)
 
 
 def _coerce(outcome: HealthCheckResult | bool) -> HealthCheckResult:
     if isinstance(outcome, HealthCheckResult):
         return outcome
-    return HealthCheckResult(bool(outcome))
+    return HealthCheckResult.healthy() if outcome else HealthCheckResult.unhealthy()
 
 
 def health_interception(checks: HealthChecks, *, aliases: Iterable[str] = ()) -> Middleware:
-    """Middleware that answers ``benzene:healthcheck`` (and any ``aliases``) with the health aggregate.
+    """Middleware that answers ``benzene:healthcheck`` (and any ``aliases``) with the health response.
 
-    Healthy → status ``ok`` with the aggregate payload; unhealthy → ``service-unavailable`` naming the
-    failed checks. Interception is by topic id, version ignored. Install it before the message router.
+    Always status ``ok`` once the checks ran, with the report as payload; ``isHealthy`` in it carries
+    the verdict (wire-contracts §5). A transport maps the verdict where it has a convention for one —
+    the HTTP ``/benzene/health`` route answers 503 — so a queue or a direct invoke asking for health
+    gets the report as an ordinary success. Interception is by topic id, version ignored. Install it
+    before the message router.
     """
     topics = {HEALTH_TOPIC, *aliases}
 
     async def middleware(context: Context, next: Next) -> None:  # noqa: A002 - spec name
         if context.topic in topics:
             report = await checks.run()
-            if report.is_healthy:
-                context.result = Result.ok(report.to_payload())
-            else:
-                # service-unavailable so an HTTP probe sees a 503 and a load balancer drains this
-                # instance, but explicitly successful so the response still carries the report - which
-                # check failed and why is the entire value of hitting a health endpoint. Without the
-                # override the encoder would replace the report with a problem document naming only
-                # the failed checks (wire-contracts.md 1.3's carve-out; the same call .NET's
-                # HealthCheckProcessor makes).
-                context.result = Result.set(
-                    Status.SERVICE_UNAVAILABLE, report.to_payload(), successful=True
-                )
+            context.result = Result.ok(report.to_payload())
             return  # short-circuit: the reserved topic never reaches the router
         await next()
 

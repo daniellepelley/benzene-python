@@ -284,11 +284,26 @@ def test_decode_response_prefers_the_envelopes_is_successful_over_the_status_tex
     assert result.payload == {"entries": 12}
 
 
-def test_decode_response_honours_a_stated_failure_on_a_success_status() -> None:
-    # The other direction, and why the fallback tests `is None` rather than truthiness.
-    result = decode_response(encode_response(Result.set(Status.OK, {"draining": True}, False)))
+def test_decode_response_trusts_a_stated_failure_even_on_a_success_status() -> None:
+    # A sender MUST NOT write this (isSuccessful MUST equal a vocabulary status's class), but a
+    # receiver MUST NOT reclassify from status text either (wire-contracts.md 1.2) - so if a peer
+    # does, its isSuccessful is still what decides. The reason the fallback tests `is None`.
+    envelope = {"statusCode": Status.OK, "isSuccessful": False, "headers": {}, "body": ""}
+    result = decode_response(envelope)
     assert result.status == Status.OK
     assert not result.is_successful
+
+
+def test_result_set_refuses_to_contradict_the_vocabulary() -> None:
+    # No exceptions to the status table (wire-contracts.md 1.2): a vocabulary status carries its own
+    # class, and saying otherwise is refused where it is written, not discovered on the wire.
+    with pytest.raises(ValueError, match="'ok' is a success status"):
+        Result.set(Status.OK, {"draining": True}, successful=False)
+    with pytest.raises(ValueError, match="'service-unavailable' is a failure status"):
+        Result.set(Status.SERVICE_UNAVAILABLE, {"report": 1}, successful=True)
+    # Agreeing with the table, or an application-defined status, is fine.
+    assert Result.set(Status.CREATED, None, successful=True).is_successful
+    assert not Result.set("card-declined", None, successful=False).is_successful
 
 
 def test_decode_response_falls_back_to_the_status_class_for_a_peer_without_is_successful() -> None:

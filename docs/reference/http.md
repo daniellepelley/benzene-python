@@ -124,11 +124,12 @@ app = BenzeneHttpApp(
 - **`GET /benzene/health`** (R3) — the `{isHealthy, healthChecks}` aggregate (wire-contracts §5), `200`
   when healthy and `503` when not. The full aggregate is returned either way (it is run directly, so an
   unhealthy report survives — the envelope drops a failure payload). Enabled by passing `health`.
-  Note the two health faces differ on failure: this HTTP surface returns the full aggregate on `503`,
-  while the transport-neutral `benzene:healthcheck` envelope reply carries the standard failure body —
-  the RFC 9457 problem document (`{type, title, detail, benzeneStatus, errors[]}`, wire-contracts
-  §1.3) — because an unhealthy `Result` is `service-unavailable` and the envelope drops its payload.
-  Both name the failing checks; the HTTP surface additionally keeps the per-check breakdown.
+  The two health faces carry the same report: the transport-neutral `benzene:healthcheck` topic
+  answers `ok` whenever the checks ran, with the report as its payload and the verdict in
+  `isHealthy` (wire-contracts §5); this route maps that verdict onto the status line — the one place
+  an HTTP binding maps a payload field rather than the result's status — so a load balancer that
+  reads only the status line drains an unhealthy instance. A `warning` check is reported and stays
+  `200`. The body is the report (`application/json`), never a problem document.
 - **`GET /benzene/spec`** (R5) — the derived **[Contract Document](core.md#contract-document)**:
   `{openapi, info, messageEndpoint, transports?, requests[], events[], components}`, projected from the
   registry (never hand-written). This is the format `contract-document.md` specifies and every

@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeAlias, TypeVar
 
-from .status import Status, is_successful
+from .status import KNOWN_STATUSES, Status, is_successful
 
 T = TypeVar("T")
 
@@ -138,8 +138,10 @@ class Result(Generic[T]):
         problem_document: an application-authored problem document the wire edge emits verbatim, set
             only by :meth:`problem`. ``None`` for every other result, and then the document is
             derived from the status and ``errors`` as usual.
-        successful: an explicit success classification that overrides the one derived from the
-            status. ``None`` - the normal case - means derive it. Set it only through :meth:`set`.
+        successful: an explicit success classification. ``None`` - the normal case - means derive it
+            from the status. Only an application-defined status needs it (wire-contracts.md 1.2: for
+            a status in the vocabulary ``isSuccessful`` MUST equal that status's class); set it
+            through :meth:`set`, which enforces that. A decoded peer result may also carry one.
     """
 
     status: str
@@ -205,16 +207,26 @@ class Result(Generic[T]):
 
     @staticmethod
     def set(status: str, payload: Any = None, successful: bool | None = None) -> Result[Any]:
-        """A result whose success classification is stated outright, decoupled from its status.
+        """A result with an **application-defined** status, and whether it counts as a success.
 
-        The intended use is the reserved health check returning ``service-unavailable`` so an HTTP
-        probe sees a 503 and a load balancer drains the instance, while still rendering its report
-        body rather than a problem document - the carve-out wire-contracts.md section 1.3 names,
-        where the branch is on ``isSuccessful`` and not on status class.
+        The vocabulary is strings so an application can extend it, but a receiver cannot classify a
+        status it has never heard of - ``isSuccessful`` is the only signal it has (wire-contracts.md
+        1.2), so say it::
 
-        For ordinary results prefer ``ok`` / ``failure`` and the status-derived default; reach for
-        this only when the transport outcome and the body's meaning genuinely diverge.
+            Result.set("cache-warm", report, successful=True)
+
+        Left ``None``, the status is classified as the vocabulary would (an unknown status is a
+        failure). For a status *in* the vocabulary ``successful`` must agree with its class - there
+        are no exceptions, and a mismatch raises ``ValueError`` here rather than reaching the wire.
         """
+        if successful is not None and status in KNOWN_STATUSES and successful != is_successful(status):
+            kind = "a success" if is_successful(status) else "a failure"
+            raise ValueError(
+                f"{status!r} is {kind} status, so its isSuccessful is {is_successful(status)} - "
+                f"Result.set(..., successful={successful}) would put a contradiction on the wire "
+                "(wire-contracts.md 1.2). Use an application-defined status for an outcome the "
+                "vocabulary does not describe, or drop successful= and keep the status's class."
+            )
         return Result(status, payload, successful=successful)
 
     # --- failure factories -----------------------------------------------------------------
@@ -235,6 +247,11 @@ class Result(Generic[T]):
             raise ValueError(
                 "ProblemDetails.benzene_status is required - a problem document with no status "
                 "cannot be classified by anything downstream"
+            )
+        if is_successful(document.benzene_status):
+            raise ValueError(
+                f"ProblemDetails.benzene_status {document.benzene_status!r} is a success status, "
+                "but a problem document is a failure's body - use a failure status"
             )
         return Result(document.benzene_status, None, tuple(document.errors), document, successful=False)
 

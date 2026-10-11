@@ -44,10 +44,9 @@ Two escape hatches sit alongside:
 - `Result.problem(ProblemDetails(...))` — an application-authored problem document, emitted
   verbatim, for a service that owns its own problem vocabulary and wants its own `type` URI on the
   wire rather than the registry URI Benzene would derive from the status.
-- `Result.set(status, payload, successful=...)` — state the success classification outright,
-  decoupled from the status. The reserved health check uses it to answer `service-unavailable` (so
-  an HTTP probe sees a 503 and a load balancer drains the instance) while still rendering its
-  report body instead of a problem document.
+- `Result.set(status, payload, successful=...)` — an application-defined status, stating whether
+  it is a success (`isSuccessful` is the only signal a receiver has for a status outside the
+  vocabulary). For a vocabulary status it must agree with the status's class, or it raises.
 
 Install just this layer if all you want is Benzene's result/status model (e.g. to type a domain
 service's return values) without any pipeline or transport code:

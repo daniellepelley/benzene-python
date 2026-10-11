@@ -57,6 +57,7 @@ from .health import (
     HealthCheckResult,
     HealthChecks,
     HealthReport,
+    HealthStatus,
     health_interception,
 )
 from .inprocess import (
@@ -141,6 +142,7 @@ __all__ = [
     "HealthCheckResult",
     "HealthChecks",
     "HealthReport",
+    "HealthStatus",
     "Lifetime",
     "MessageHandlingError",
     "MessageSender",
