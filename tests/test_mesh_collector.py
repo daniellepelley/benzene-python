@@ -561,3 +561,13 @@ def test_request_schemas_are_kept_dereferenced_and_the_document_retained() -> No
         "requestSchema": {"type": "object", "properties": {"sku": {"type": "string"}}},
     }
     assert entry["document"] == body
+
+
+def test_a_traced_reserved_topic_is_never_undeclared_drift() -> None:
+    # benzene: topics are never listed in a document, so a trace of one (a GET /benzene/spec, a
+    # health probe) is not a contract the registration failed to declare.
+    c = MeshCollector()
+    _register(c, "orders", ["order:create"])
+    _trace(c, "orders", "benzene:spec", "s1")
+    _trace(c, "orders", "benzene:healthcheck", "s2")
+    assert c.query_fleet({})["issues"] == []

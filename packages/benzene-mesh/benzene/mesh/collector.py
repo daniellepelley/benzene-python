@@ -49,6 +49,7 @@ from benzene.results import Result, is_successful
 from .feeds import HEARTBEAT_TOPIC, ISSUES_TOPIC, REGISTER_TOPIC, TRACES_TOPIC
 from .issues import issue_fingerprint
 from .specdoc import (
+    is_reserved_topic,
     known_members,
     resolve_schema,
     schema_catalogue,
@@ -235,8 +236,8 @@ class MeshCollector:
         service that has never registered has no declared contract to diverge from, so it is never
         flagged.
         """
-        if not record.registered or topic in declared:
-            return
+        if not record.registered or topic in declared or is_reserved_topic(topic):
+            return  # a benzene: topic is never declared (contract-document §1), so never undeclared
         fingerprint = issue_fingerprint(record.name, topic, "", "contract-drift", "undeclared-edge")
         self._merge_issue(
             fingerprint,
