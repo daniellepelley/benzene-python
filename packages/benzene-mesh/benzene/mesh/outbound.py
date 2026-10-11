@@ -11,7 +11,6 @@ from __future__ import annotations
 from benzene.core.declarations import (
     DuplicateOutboundRegistrationError,
     EventDeclaration,
-    OutboundDefinition,
     OutboundRegistry,
     SendDeclaration,
 )
@@ -19,7 +18,6 @@ from benzene.core.declarations import (
 __all__ = [
     "DuplicateOutboundRegistrationError",
     "EventDeclaration",
-    "OutboundDefinition",
     "OutboundRegistry",
     "SendDeclaration",
 ]

@@ -58,7 +58,6 @@ from .issues import (
 from .outbound import (
     DuplicateOutboundRegistrationError,
     EventDeclaration,
-    OutboundDefinition,
     OutboundRegistry,
     SendDeclaration,
 )
@@ -152,7 +151,6 @@ __all__ = [
     "MeshCollector",
     "MeshFeedSender",
     "NullCollectorStore",
-    "OutboundDefinition",
     "OutboundRegistry",
     "QUERY_FLEET_TOPIC",
     "QUERY_SERVICE_TOPIC",

@@ -54,20 +54,6 @@ class SendDeclaration:
     response_type: Any = None
 
 
-@dataclass(frozen=True)
-class OutboundDefinition:
-    """One outbound topic in the mesh descriptor's kind-less shape (``produces``, mesh.md §2.3).
-
-    The descriptor predates the event/send split and still lists both kinds in one ``produces``
-    array until it is retired; :meth:`OutboundRegistry.definitions` projects into this shape for it.
-    """
-
-    topic: str
-    version: str = ""
-    request_type: Any = None
-    response_type: Any = None
-
-
 class OutboundRegistry:
     """The service's event and send declarations (contract-document §3.3).
 
@@ -129,16 +115,6 @@ class OutboundRegistry:
     def sends(self) -> list[SendDeclaration]:
         """The declared sends, in declaration order."""
         return list(self._sends.values())
-
-    def definitions(self) -> list[OutboundDefinition]:
-        """Every declaration, both kinds, in the mesh descriptor's kind-less ``produces`` shape."""
-        return [
-            *(OutboundDefinition(e.topic, e.version, e.message_type) for e in self._events.values()),
-            *(
-                OutboundDefinition(s.topic, s.version, s.request_type, s.response_type)
-                for s in self._sends.values()
-            ),
-        ]
 
     def _claim(self, topic: str, version: str, kind: str) -> None:
         key = (topic, version)

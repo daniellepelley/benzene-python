@@ -48,7 +48,6 @@ from .contract_schema import ComponentNameCollisionError, declared_schema_name, 
 from .declarations import (
     DuplicateOutboundRegistrationError,
     EventDeclaration,
-    OutboundDefinition,
     OutboundRegistry,
     SendDeclaration,
 )
@@ -219,7 +218,6 @@ __all__ = [
     "EventDeclaration",
     "HttpMapping",
     "NoPayload",
-    "OutboundDefinition",
     "OutboundRegistry",
     "SendDeclaration",
     "SupportsHttpMappings",
