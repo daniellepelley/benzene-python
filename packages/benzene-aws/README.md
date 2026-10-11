@@ -25,7 +25,7 @@ handler = to_lambda_handler(app)  # your Lambda entry point: handler(event, cont
 - **EventBridge** — a single event; topic from `detail-type`, body is the `detail`. A failure raises.
 - **DynamoDB Streams** / **Kinesis Data Streams** — one scope per record; both support partial batches,
   so failures are reported via `batchItemFailures` keyed by the record's sequence number. DynamoDB's
-  topic defaults to `dynamodb:<eventname>`; Kinesis decodes the base64 payload as the body.
+  topic is derived as `{tableName}:{eventName}` (e.g. `orders:INSERT`); Kinesis decodes the base64 payload as the body.
 - **Kafka / MSK** — records grouped by topic-partition; one scope per record; topic from the `topic`
   header (else the Kafka topic), headers decoded UTF-8, base64 `value` as the body. A failure raises.
 - **Direct invoke** — a bare `{"topic", "headers", "body"}` Payload, exactly what another Lambda's

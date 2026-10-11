@@ -22,6 +22,7 @@ from benzene.aws import (
     KinesisMessageSender,
     LambdaMessageSender,
     dynamodb_record_envelope,
+    dynamodb_table_name,
     event_source,
     eventbridge_envelope,
     invoke_envelope,
@@ -129,18 +130,39 @@ def test_eventbridge_sender_then_decoder_round_trips_the_domain_body_and_headers
     assert json.loads(envelope["body"])["total"] == 42
 
 
-def test_dynamodb_decoder_derives_topic_from_eventname_and_carries_the_projection() -> None:
+def test_dynamodb_decoder_derives_table_and_eventname_topic_and_carries_the_projection() -> None:
     record = {
         "eventSource": "aws:dynamodb",
+        "eventSourceARN": "arn:aws:dynamodb:eu-west-1:123456789012:table/orders/stream/2024-01-01T00:00:00.000",
         "eventName": "INSERT",
         "dynamodb": {"Keys": {"id": {"S": "1"}}, "NewImage": {"name": {"S": "ada"}}},
     }
     envelope = dynamodb_record_envelope(record)
-    assert envelope["topic"] == "dynamodb:insert"
+    # {tableName}:{eventName} (transport-bindings §1 obligation 2; topicSources), eventName verbatim.
+    assert envelope["topic"] == "orders:INSERT"
     assert json.loads(envelope["body"]) == {
         "Keys": {"id": {"S": "1"}},
         "NewImage": {"name": {"S": "ada"}},
     }
+
+
+def test_dynamodb_record_without_a_table_arn_routes_on_the_bare_eventname() -> None:
+    assert dynamodb_record_envelope({"eventName": "REMOVE", "dynamodb": {}})["topic"] == "REMOVE"
+    assert dynamodb_table_name("arn:aws:dynamodb:us-east-1:1:table/t/stream/2024-01-01T00:00:00") == "t"
+    assert dynamodb_table_name("arn:aws:kinesis:us-east-1:1:stream/s") == ""
+    assert dynamodb_table_name(None) == ""
+
+
+def test_the_test_host_delivers_on_the_named_tables_stream() -> None:
+    seen: list[str] = []
+
+    async def handler(_request: dict) -> Result:
+        seen.append("orders")
+        return Result.ok()
+
+    host = AwsLambdaTestHost(AwsLambdaApp(registry=Registry().register("orders:MODIFY", handler)))
+    response = host.send_dynamodb("MODIFY", {"id": {"S": "1"}}, table_name="orders")
+    assert response.item_identifiers == [] and seen == ["orders"]
 
 
 def test_dynamodb_decoder_honours_an_injected_topic_override() -> None:
@@ -222,9 +244,9 @@ def test_dynamodb_reports_only_failed_records_via_partial_batch() -> None:
         # Fail the MODIFY record only, keyed by its sequence number below.
         return Result.not_found("nope") if request["Keys"]["id"]["S"] == "bad" else Result.ok()
 
-    app = AwsLambdaApp(registry=Registry().register("dynamodb:insert", handler))
+    app = AwsLambdaApp(registry=Registry().register("orders:INSERT", handler))
     event = (
-        DynamoDbStreamBuilder()
+        DynamoDbStreamBuilder("orders")
         .with_record("INSERT", {"id": {"S": "ok"}}, sequence_number="seq-ok")
         .with_record("INSERT", {"id": {"S": "bad"}}, sequence_number="seq-bad")
         .build()

@@ -9,7 +9,7 @@ transports (SQS, SNS, Kafka) is carried in the reserved ``topic`` metadata key a
 The remaining native sources — **S3** object-created notifications, **EventBridge**, **DynamoDB
 Streams**, and **Kinesis Data Streams** — have *no* Benzene metadata channel on the wire, so their
 topic comes from an injectable convention (a configured default, or, for DynamoDB, the record's
-``eventName``) rather than from the payload. Their bodies are the JSON projections described per
+table and ``eventName``) rather than from the payload. Their bodies are the JSON projections described per
 decoder. This mirrors .NET's ``Benzene.Aws.Lambda.{S3,EventBridge,DynamoDb,Kinesis,Kafka}``.
 """
 
@@ -168,18 +168,39 @@ def eventbridge_envelope(
     return {"topic": topic, "headers": headers, "body": body}
 
 
+def dynamodb_table_name(event_source_arn: str | None) -> str:
+    """The table name out of a DynamoDB stream ARN, or ``""`` when the ARN is absent or not one.
+
+    ``arn:aws:dynamodb:<region>:<account>:table/<TableName>/stream/<timestamp>`` — the resource segment
+    holds colons of its own (the stream timestamp), so the ARN is split on its first five colons before
+    the resource is split on ``/``.
+    """
+    parts = (event_source_arn or "").split(":", 5)
+    if len(parts) < 6:
+        return ""
+    resource = parts[5].split("/")
+    if len(resource) < 2 or resource[0] != "table":
+        return ""
+    return resource[1]
+
+
 def dynamodb_record_envelope(record: dict[str, Any], topic: str | None = None) -> dict[str, Any]:
     """Map one DynamoDB Streams record to a Benzene envelope (mirrors ``Benzene.Aws.Lambda.DynamoDb``).
 
-    With no metadata channel the topic defaults to a ``dynamodb:<eventname>`` convention derived from
-    the record's ``eventName`` (``INSERT`` / ``MODIFY`` / ``REMOVE``); pass ``topic`` to override it.
-    The body is the ``dynamodb`` projection (``Keys`` / ``NewImage`` / ``OldImage`` in DynamoDB's
-    attribute-value encoding) so a handler sees exactly what the stream delivered.
+    A stream has no producer to set metadata, so the topic is derived from the change event:
+    ``{tableName}:{eventName}`` (transport-bindings §1 obligation 2, ``topicSources`` in
+    ``transport-metadata-cases.json``) — the table parsed from the record's ``eventSourceARN`` and the
+    native ``eventName`` verbatim (``INSERT`` / ``MODIFY`` / ``REMOVE``), e.g. ``orders:INSERT``. A
+    record whose ARN names no table routes on the bare ``eventName``. Pass ``topic`` to override the
+    derivation. The body is the ``dynamodb`` projection (``Keys`` / ``NewImage`` / ``OldImage`` in
+    DynamoDB's attribute-value encoding) so a handler sees exactly what the stream delivered.
     """
-    event_name = record.get("eventName", "")
-    resolved = topic if topic is not None else f"dynamodb:{event_name.lower()}"
+    if topic is None:
+        event_name = str(record.get("eventName", ""))
+        table = dynamodb_table_name(record.get("eventSourceARN"))
+        topic = f"{table}:{event_name}" if table else event_name
     body = encode_body(record.get("dynamodb") or {})
-    return {"topic": resolved, "headers": {}, "body": body}
+    return {"topic": topic, "headers": {}, "body": body}
 
 
 def kinesis_record_envelope(

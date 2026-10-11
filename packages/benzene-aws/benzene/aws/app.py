@@ -139,7 +139,7 @@ class AwsLambdaApp:
         self._settlement = settlement
         self._invocation_type = invocation_type
         # Topic conventions for the sources with no native metadata channel. ``dynamodb_topic`` stays
-        # ``None`` to mean "derive per record from its eventName" (e.g. ``dynamodb:insert``).
+        # ``None`` to mean "derive per record as {tableName}:{eventName}" (e.g. ``orders:INSERT``).
         self._s3_topic = s3_topic
         self._eventbridge_topic = eventbridge_topic
         self._kinesis_topic = kinesis_topic

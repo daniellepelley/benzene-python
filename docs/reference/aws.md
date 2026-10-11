@@ -66,7 +66,8 @@ takes over, instead of returning an envelope nobody reads.
 Topic for the attribute-carrying transports (SQS, SNS, Kafka) comes from the `topic` message attribute
 / header. The channel-less sources (S3, EventBridge, DynamoDB, Kinesis) have no metadata channel on the
 wire, so their topic comes from an injectable convention configured on the host — or, for DynamoDB,
-from the record's `eventName` (`dynamodb:insert`). A direct invoke's topic is exactly what the caller
+is derived from the change event as `{tableName}:{eventName}` (`orders:INSERT`: the table parsed from
+the record's `eventSourceARN`, the `eventName` verbatim). A direct invoke's topic is exactly what the caller
 sent, no convention involved.
 
 ## `AwsLambdaApp`
@@ -85,8 +86,8 @@ handler = to_lambda_handler(app)                            # def handler(event,
 - `to_lambda_handler(app)` — the callable AWS Lambda invokes.
 - The topic conventions for the channel-less sources are constructor keyword arguments:
   `s3_topic="s3:object-created"`, `eventbridge_topic="eventbridge:event"`,
-  `kinesis_topic="kinesis:record"`, and `dynamodb_topic=None` (`None` means "derive per record from its
-  `eventName`", e.g. `dynamodb:modify`). A direct invoke has no convention — its topic travels
+  `kinesis_topic="kinesis:record"`, and `dynamodb_topic=None` (`None` means "derive per record as
+  `{tableName}:{eventName}`", e.g. `orders:MODIFY`). A direct invoke has no convention — its topic travels
   explicitly in the Payload.
 
 `benzene.aws` also exports the per-source decoders behind these bindings for custom wiring:

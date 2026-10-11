@@ -318,8 +318,9 @@ headers (`benzene.core.read_message_metadata`).
 > Lambda outbound clients** (on top of the SNS/SQS senders) and a **self-hosted SQS consumer**
 > (`SqsConsumerApp` / `run_sqs_consumer_loop`) for a long-running worker or a Kubernetes Deployment that
 > polls a queue itself rather than being invoked by a Lambda event-source mapping. The channel-less
-> sources (S3, EventBridge, DynamoDB, Kinesis) take their topic from an injectable convention on the
-> host; SQS, SNS, and Kafka read it from the `topic` message attribute; a direct invoke's topic travels
+> sources take their topic from the event or a convention: EventBridge routes on `detail-type`,
+> DynamoDB Streams derives `{tableName}:{eventName}`, and S3 and Kinesis use an injectable convention
+> on the host; SQS, SNS, and Kafka read it from the `topic` message attribute; a direct invoke's topic travels
 > explicitly in its `{topic, headers, body}` Payload — the one **synchronous** source besides API
 > Gateway, since `LambdaMessageSender` decodes the target's response envelope straight back into a
 > `Result`. The one .NET affordance still missing is a `UsePresetTopic` option for the attribute-carrying

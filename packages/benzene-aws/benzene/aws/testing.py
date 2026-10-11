@@ -160,10 +160,18 @@ class EventBridgeEventBuilder:
 
 
 class DynamoDbStreamBuilder:
-    """Builds a DynamoDB Streams event; add one record per change."""
+    """Builds a DynamoDB Streams event on ``table_name``'s stream; add one record per change.
 
-    def __init__(self) -> None:
+    Each record carries the stream's ``eventSourceARN``, so the binding derives the topic
+    ``{table_name}:{eventName}`` (e.g. ``orders:INSERT``) exactly as it does for a real stream.
+    """
+
+    def __init__(self, table_name: str = "table") -> None:
         self._records: list[dict[str, Any]] = []
+        self._arn = (
+            f"arn:aws:dynamodb:us-east-1:000000000000:table/{table_name}"
+            "/stream/2024-01-01T00:00:00.000"
+        )
 
     def with_record(
         self,
@@ -182,7 +190,12 @@ class DynamoDbStreamBuilder:
         if old_image is not None:
             dynamodb["OldImage"] = old_image
         self._records.append(
-            {"eventSource": "aws:dynamodb", "eventName": event_name, "dynamodb": dynamodb}
+            {
+                "eventSource": "aws:dynamodb",
+                "eventSourceARN": self._arn,
+                "eventName": event_name,
+                "dynamodb": dynamodb,
+            }
         )
         return self
 
@@ -359,10 +372,13 @@ class AwsLambdaTestHost:
         keys: dict[str, Any],
         new_image: dict[str, Any] | None = None,
         sequence_number: str | None = None,
+        *,
+        table_name: str = "table",
     ) -> SqsBatchResponse:
-        """Deliver one DynamoDB Streams record; returns the partial-batch response."""
+        """Deliver one DynamoDB Streams record on ``table_name``'s stream (topic
+        ``{table_name}:{event_name}``); returns the partial-batch response."""
         event = (
-            DynamoDbStreamBuilder()
+            DynamoDbStreamBuilder(table_name)
             .with_record(event_name, keys, new_image=new_image, sequence_number=sequence_number)
             .build()
         )
