@@ -8,18 +8,23 @@ It only speaks the language-neutral HTTP surfaces (``/benzene/spec``, ``/benzene
 including reading the Contract Document ``/benzene/spec`` answers with (:mod:`benzene.mesh.specdoc`).
 It depends on nothing else in the port.
 
-A black-box probe genuinely cannot verify everything a service-side self-check can, so — matching the
-profile spec (cloud-service-profile.md §5) — two things stay ``inconclusive`` by design and are never
-silently upgraded:
+The profile is **R1–R5 and R7** (cloud-service-profile.md §2). **R5** has two halves, and the probe
+audits both: ``/benzene/spec`` must return the Contract Document, and the reserved ``benzene:spec`` topic
+must answer with it — probed as a ``benzene:spec`` envelope over ``/benzene/invoke``.
 
-- **R8** (trace-context propagation) needs a *second* service to observe a forwarded ``traceparent``,
+The separate **meshed-service** claim (mesh.md §7.1) is reported apart, on
+:attr:`CloudServiceProbeReport.mesh`, and is never part of :attr:`~CloudServiceProbeReport.not_satisfied`
+or :attr:`~CloudServiceProbeReport.is_clean`. A black-box probe genuinely cannot observe it, so both its
+requirements stay ``inconclusive`` by design and are never silently upgraded:
+
+- **M1**'s three feeds — registration, heartbeats, traces — are sent to a collector, which a probe
+  cannot see. (The register body is the Contract Document R5 audits; its *delivery* is the M1 part.)
+- **M2** (trace-context propagation) needs a *second* service to observe a forwarded ``traceparent``,
   or a collector deriving consumer edges — unobservable from one service.
-- **R6**'s three feeds — registration, heartbeats, traces — are sent to a collector, which a probe
-  cannot see. What it can observe is the registration's *body*: the Contract Document the reserved
-  ``benzene:spec`` topic answers with over ``/benzene/invoke`` (mesh.md §2). A passing check is
-  reported as that *observable half only*, never the whole of R6.
 
-**R7** likewise degrades to ``inconclusive`` the moment the caller points the probe at a non-default
+The ids R6 and R8 are retired (they became M1 and M2) and not reused.
+
+**R7** degrades to ``inconclusive`` the moment the caller points the probe at a non-default
 prefix — it then has no way to know the service's own defaults, only that something answers where it
 looked.
 
@@ -67,30 +72,33 @@ class RequirementProbe:
 
 @dataclass(frozen=True)
 class CloudServiceProbeReport:
-    """The outcome of auditing one service's base URL against the profile (R1–R8)."""
+    """The outcome of auditing one service's base URL against the profile (R1–R5, R7), with the
+    meshed-service claim (M1, M2) reported separately on :attr:`mesh`."""
 
     base_url: str
     probes: tuple[RequirementProbe, ...]
+    mesh: tuple[RequirementProbe, ...] = ()
 
     def verdict(self, requirement_id: str) -> Verdict:
-        for probe in self.probes:
+        """The verdict for one requirement id — R or M (raises ``KeyError`` if unknown)."""
+        for probe in (*self.probes, *self.mesh):
             if probe.id == requirement_id:
                 return probe.verdict
         raise KeyError(requirement_id)
 
     @property
     def not_satisfied(self) -> list[str]:
-        """Requirement ids the probe positively found *unmet* — the actionable failures."""
+        """Profile ids the probe positively found *unmet* — the actionable failures."""
         return [p.id for p in self.probes if p.verdict is Verdict.NOT_SATISFIED]
 
     @property
     def inconclusive(self) -> list[str]:
-        """Requirement ids the probe could not verify from outside (never a failure by itself)."""
+        """Profile ids the probe could not verify from outside (never a failure by itself)."""
         return [p.id for p in self.probes if p.verdict is Verdict.INCONCLUSIVE]
 
     @property
     def is_clean(self) -> bool:
-        """True when nothing was positively found unmet (inconclusive results are tolerated)."""
+        """True when no profile requirement was positively found unmet (inconclusive tolerated)."""
         return not self.not_satisfied
 
     def to_payload(self) -> dict[str, Any]:
@@ -98,6 +106,9 @@ class CloudServiceProbeReport:
             "baseUrl": self.base_url,
             "requirements": [
                 {"id": p.id, "verdict": p.verdict.value, "reason": p.reason} for p in self.probes
+            ],
+            "mesh": [
+                {"id": p.id, "verdict": p.verdict.value, "reason": p.reason} for p in self.mesh
             ],
         }
 
@@ -112,7 +123,8 @@ async def probe_cloud_service(
     prefix: str = DEFAULT_PREFIX,
     http: HttpCall | None = None,
 ) -> CloudServiceProbeReport:
-    """Audit the service at ``base_url`` against the Cloud Service Profile's R1–R8 over HTTP.
+    """Audit the service at ``base_url`` against the Cloud Service Profile's R1–R5 and R7 over HTTP,
+    and report what is observable of the meshed-service claim (M1, M2 — not observable from outside).
 
     ``prefix`` is the well-known path prefix to probe (default ``/benzene``); pointing it elsewhere
     makes R7 ``inconclusive`` (the probe can no longer know the service's own defaults). ``http`` is an
@@ -192,45 +204,9 @@ async def probe_cloud_service(
         )
     )
 
-    # R5 — derived spec at /benzene/spec.
-    probes.append(
-        _surface_verdict(
-            "R5",
-            spec,
-            is_contract_document,
-            present="/benzene/spec returns a Contract Document",
-            malformed="/benzene/spec did not return a Contract Document "
-            '({schemaDialect: "openapi-3.0", service, requests, events, sends, components})',
-        )
-    )
-
-    # R6 — the registration body is the Contract Document benzene:spec answers with; its delivery to a
-    # collector (and the heartbeat and trace feeds) is not observable, so the most a black-box probe
-    # can say is "the observable half holds" → inconclusive by design.
-    if (
-        described.reached
-        and described.document is not None
-        and is_contract_document(described.document)
-    ):
-        probes.append(
-            RequirementProbe(
-                "R6",
-                Verdict.INCONCLUSIVE,
-                "benzene:spec returns the Contract Document a registration carries (observable "
-                "half); registration, heartbeat and trace delivery to a collector is not observable "
-                "from outside",
-            )
-        )
-    else:
-        probes.append(
-            RequirementProbe(
-                "R6",
-                Verdict.NOT_SATISFIED if described.reached else Verdict.INCONCLUSIVE,
-                "benzene:spec over /benzene/invoke did not return a Contract Document"
-                if described.reached
-                else described.detail,
-            )
-        )
+    # R5 — the derived spec, both halves: GET /benzene/spec, and the benzene:spec topic (probed as an
+    # envelope over /benzene/invoke). Either half positively unmet fails R5; both met satisfies it.
+    probes.append(_spec_verdict(spec, described))
 
     # R7 — default standard paths: satisfiable only when we probed the default prefix and it answered.
     if not at_default_prefix:
@@ -266,17 +242,62 @@ async def probe_cloud_service(
             )
         )
 
-    # R8 — trace propagation is structurally unobservable from a single service.
-    probes.append(
+    # The meshed-service claim (mesh.md §7.1) — reported apart; neither half is observable from outside.
+    mesh = (
         RequirementProbe(
-            "R8",
+            "M1",
+            Verdict.INCONCLUSIVE,
+            "registration, heartbeat and trace delivery to a collector is not observable from outside "
+            "(the register body is the Contract Document R5 audits)",
+        ),
+        RequirementProbe(
+            "M2",
             Verdict.INCONCLUSIVE,
             "propagation needs a second service or a collector to observe forwarded traceparent",
-        )
+        ),
     )
 
     probes.sort(key=lambda p: p.id)
-    return CloudServiceProbeReport(base_url=root, probes=tuple(probes))
+    return CloudServiceProbeReport(base_url=root, probes=tuple(probes), mesh=mesh)
+
+
+def _spec_verdict(spec: _Fetched, described: _Fetched) -> RequirementProbe:
+    """Grade R5 from its two halves: the ``/benzene/spec`` route and the ``benzene:spec`` topic."""
+    route = _surface_verdict(
+        "R5",
+        spec,
+        is_contract_document,
+        present="/benzene/spec returns a Contract Document",
+        malformed="/benzene/spec did not return a Contract Document "
+        '({schemaDialect: "openapi-3.0", service, requests, events, sends, components})',
+    )
+    if described.envelope and described.document is not None and is_contract_document(
+        described.document
+    ):
+        topic = RequirementProbe(
+            "R5", Verdict.SATISFIED, "benzene:spec over /benzene/invoke answers with it"
+        )
+    elif described.envelope:
+        topic = RequirementProbe(
+            "R5",
+            Verdict.NOT_SATISFIED,
+            "benzene:spec over /benzene/invoke did not answer with a Contract Document",
+        )
+    else:
+        # No envelope endpoint to carry the topic (R4 grades that): this half is unobservable here.
+        topic = RequirementProbe(
+            "R5",
+            Verdict.INCONCLUSIVE,
+            f"the benzene:spec topic could not be probed: {described.detail}",
+        )
+    halves = (route, topic)
+    if any(half.verdict is Verdict.NOT_SATISFIED for half in halves):
+        verdict = Verdict.NOT_SATISFIED
+    elif all(half.verdict is Verdict.SATISFIED for half in halves):
+        verdict = Verdict.SATISFIED
+    else:
+        verdict = Verdict.INCONCLUSIVE
+    return RequirementProbe("R5", verdict, "; ".join(half.reason for half in halves))
 
 
 @dataclass(frozen=True)
@@ -373,7 +394,8 @@ def _main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="benzene.mesh.probe",
-        description="Audit a deployed Benzene service against the Cloud Service Profile (R1–R8).",
+        description="Audit a deployed Benzene service against the Cloud Service Profile "
+        "(R1–R5, R7); the meshed-service claim (M1, M2) is reported separately.",
     )
     parser.add_argument("url", help="the service's base URL, e.g. https://orders.example.com")
     parser.add_argument("--prefix", default=DEFAULT_PREFIX, help="well-known path prefix")
@@ -386,6 +408,9 @@ def _main(argv: list[str] | None = None) -> int:
     else:
         print(f"Cloud Service Profile audit of {report.base_url}")
         for probe in report.probes:
+            print(f"  {probe.id}: {probe.verdict.value:<14} {probe.reason}")
+        print("Meshed service (mesh.md §7.1), reported separately:")
+        for probe in report.mesh:
             print(f"  {probe.id}: {probe.verdict.value:<14} {probe.reason}")
         print(
             f"\n{'CLEAN' if report.is_clean else 'FAILURES: ' + ', '.join(report.not_satisfied)}"

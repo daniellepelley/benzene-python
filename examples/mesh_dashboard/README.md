@@ -12,7 +12,7 @@ Two scenarios, each driving the projection from real collector state (no hand-wr
 |---|---|---|
 | [`demo.py`](demo.py) | a healthy fleet under load | typed Contract Document registrations → real request/response **schemas** + a versioned topic; **heartbeats** → per-check health; real traced invocations → **topology** + **usage** |
 | [`evolution.py`](evolution.py) | a fleet mid-rollout | the governance signals: **schema-changed**, **removedTopics**, **contractDrift**, **schemaMismatch** |
-| [`profile.py`](profile.py) | a service self-checking | grade the wiring against the **Cloud Service Profile** (R1–R8) and carry the verdict on the Contract Document's `profile` field (served on `benzene:spec`, registered with the collector) |
+| [`profile.py`](profile.py) | a service self-checking | grade the wiring against the **Cloud Service Profile** (R1–R5, R7) — and the meshed-service claim (M1, M2) separately — and carry the verdict on the Contract Document's `profile` field (served on `benzene:spec`, registered with the collector) |
 
 ## Run it
 

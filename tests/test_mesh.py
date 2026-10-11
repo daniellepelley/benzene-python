@@ -175,10 +175,10 @@ def test_registration_document_is_the_document_benzene_spec_serves() -> None:
 def test_deployment_fields_are_outside_both_hashes() -> None:
     plain = registration_document(_definition())
     dressed = registration_document(
-        _definition(profile={"name": "cloud-service", "missing": ["R6"]}, degraded=("sends",))
+        _definition(profile={"name": "cloud-service", "missing": ["R3"]}, degraded=("sends",))
     )
     payload = dressed.to_payload()
-    assert payload["profile"] == {"name": "cloud-service", "missing": ["R6"]}
+    assert payload["profile"] == {"name": "cloud-service", "missing": ["R3"]}
     assert payload["degraded"] == ["sends"]
     assert "degraded" not in plain.to_payload()  # omitted when empty
     assert dressed.registration_hash == plain.registration_hash

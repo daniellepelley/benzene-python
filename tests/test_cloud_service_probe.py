@@ -1,9 +1,9 @@
-"""The Cloud Service Profile live-probe checker — audit a service over HTTP, tri-state per R1–R8.
+"""The Cloud Service Profile live-probe checker — audit a service over HTTP, tri-state per R1–R5, R7.
 
 Routes the probe's HTTP calls at a real in-memory ``BenzeneHttpApp`` (no sockets): a fully-provisioned
-service audits clean with R6/R7/R8 the by-design ``inconclusive`` trio, a bare service is positively
-found missing its surfaces, and an unreachable host degrades to inconclusive rather than a false
-failure.
+service audits clean with every profile requirement satisfied and the meshed-service claim (M1, M2)
+reported separately as the by-design ``inconclusive`` pair, a bare service is positively found missing
+its surfaces, and an unreachable host degrades to inconclusive rather than a false failure.
 """
 
 from __future__ import annotations
@@ -62,16 +62,20 @@ def test_a_fully_provisioned_service_audits_clean() -> None:
     report = asyncio.run(probe_cloud_service("http://svc", http=_client(_profiled_app())))
     assert report.is_clean
     assert report.not_satisfied == []
-    # The observable requirements are satisfied outright...
+    # Every profile requirement is satisfied outright...
     for satisfied in ("R1", "R2", "R3", "R4", "R5", "R7"):
         assert report.verdict(satisfied) is Verdict.SATISFIED, satisfied
-    # ...and the structurally-unobservable trio stays inconclusive by design.
-    assert report.inconclusive == ["R6", "R8"]
-    # R6's observable half is the self-description on benzene:spec, never the retired benzene:mesh.
-    assert "benzene:spec" in _reason(report, "R6")
+    assert report.inconclusive == []
+    # ...R5 on both halves: the /benzene/spec route and the benzene:spec topic over /benzene/invoke...
+    assert "/benzene/spec" in _reason(report, "R5")
+    assert "benzene:spec over /benzene/invoke" in _reason(report, "R5")
+    # ...and the meshed-service claim is reported apart, unobservable from outside by design.
+    assert [p.id for p in report.mesh] == ["M1", "M2"]
+    assert report.verdict("M1") is Verdict.INCONCLUSIVE
+    assert report.verdict("M2") is Verdict.INCONCLUSIVE
 
 
-def test_a_service_without_benzene_spec_fails_r6s_observable_half() -> None:
+def test_a_service_without_benzene_spec_fails_r5() -> None:
     # The surfaces are there, but no ContractInfo: benzene:spec is not answered with a document.
     router = HttpRouter().register("POST", "/orders", "orders:place", _place, request_type=Order)
     app = BenzeneHttpApp.from_definition(
@@ -82,8 +86,25 @@ def test_a_service_without_benzene_spec_fails_r6s_observable_half() -> None:
         )
     )
     report = asyncio.run(probe_cloud_service("http://svc", http=_client(app)))
-    assert report.verdict("R6") is Verdict.NOT_SATISFIED
+    assert report.verdict("R5") is Verdict.NOT_SATISFIED
+    assert "benzene:spec over /benzene/invoke did not answer" in _reason(report, "R5")
     assert report.verdict("R4") is Verdict.SATISFIED  # /benzene/invoke still answered an envelope
+
+
+def test_the_spec_topic_half_of_r5_is_audited_on_its_own() -> None:
+    # /benzene/spec serves the document, but the benzene:spec topic over /benzene/invoke does not:
+    # R5 requires both halves (cloud-service-profile.md R5), so it is not satisfied.
+    async def call(method: str, url: str, body: str | None) -> tuple[int, str]:
+        path = urlsplit(url).path
+        if path == "/benzene/spec":
+            return 200, json.dumps(_DOTNET_CONTRACT_DOCUMENT)
+        if path == "/benzene/invoke":
+            return 200, json.dumps({"statusCode": "not-found", "headers": {}, "body": ""})
+        return 404, ""
+
+    report = asyncio.run(probe_cloud_service("http://svc", http=call))
+    assert report.verdict("R5") is Verdict.NOT_SATISFIED
+    assert report.verdict("R4") is Verdict.SATISFIED
 
 
 def test_a_bare_service_is_found_missing_its_surfaces() -> None:
@@ -124,8 +145,9 @@ def test_report_payload_round_trips() -> None:
     payload = report.to_payload()
     assert payload["baseUrl"] == "http://svc"
     ids = [r["id"] for r in payload["requirements"]]
-    assert ids == ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]
-    assert all(r["reason"] for r in payload["requirements"])
+    assert ids == ["R1", "R2", "R3", "R4", "R5", "R7"]  # R6/R8 retired, not reused
+    assert [r["id"] for r in payload["mesh"]] == ["M1", "M2"]
+    assert all(r["reason"] for r in (*payload["requirements"], *payload["mesh"]))
 
 
 def _reason(report, requirement_id: str) -> str:
@@ -193,7 +215,7 @@ def test_a_foreign_contract_document_service_grades_the_same_as_this_ports() -> 
     assert report.not_satisfied == []
     assert report.verdict("R5") is Verdict.SATISFIED
     assert report.verdict("R2") is Verdict.SATISFIED
-    assert report.verdict("R6") is Verdict.INCONCLUSIVE  # observable half holds
+    assert report.verdict("M1") is Verdict.INCONCLUSIVE  # the mesh claim is not observable
 
 
 def test_the_probes_topic_count_ignores_the_reserved_framework_topics() -> None:

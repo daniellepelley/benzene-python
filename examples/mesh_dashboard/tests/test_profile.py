@@ -1,6 +1,7 @@
 """The Cloud Service Profile self-check, dogfooded on a fully-wired service.
 
-Grades a realistic composition root against R1–R8 and asserts the verdict rides on the Contract
+Grades a realistic composition root against R1–R5/R7 (and the meshed-service M1/M2, reported
+separately) and asserts the verdict rides on the Contract
 Document's ``profile`` field without changing either hash — the flow a meshed service uses to
 advertise its conformance to fleet tooling (served on ``benzene:spec``, registered with a collector).
 """
@@ -25,6 +26,7 @@ def test_a_fully_wired_service_grades_itself_conformant() -> None:
     assert report.is_conformant
     assert report.missing == []
     assert report.to_profile() == {"name": PROFILE_NAME}
+    assert report.is_meshed
 
 
 def test_the_document_carries_the_profile_without_changing_its_hashes() -> None:
@@ -37,7 +39,10 @@ def test_the_document_carries_the_profile_without_changing_its_hashes() -> None:
     assert plain.contract_hash == profiled.contract_hash
 
 
-def test_without_the_mesh_feeds_it_reports_them_missing() -> None:
-    # The same HTTP wiring, but not meshed: R6 (feeds) + R8 (propagation) are the honest gaps.
+def test_without_the_mesh_feeds_it_is_a_cloud_service_but_not_meshed() -> None:
+    # The same HTTP wiring, but not meshed: M1 (feeds) + M2 (propagation) are the honest gaps, and
+    # they cost the meshed-service claim (mesh.md §7.1), never the profile.
     report = evaluate_cloud_service_profile(build_profiled_definition())
-    assert report.missing == ["R6", "R8"]
+    assert report.missing == []
+    assert report.mesh_missing == ["M1", "M2"]
+    assert not report.is_meshed

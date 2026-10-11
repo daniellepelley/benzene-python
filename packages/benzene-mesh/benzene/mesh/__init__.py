@@ -76,6 +76,7 @@ from .probe import (
     probe_cloud_service,
 )
 from .profile import (
+    MESH_REQUIREMENT_IDS,
     PROFILE_NAME,
     REQUIREMENT_IDS,
     CloudServiceProfileReport,
@@ -132,6 +133,7 @@ __all__ = [
     "DuplicateOutboundRegistrationError",
     "EventDeclaration",
     "SendDeclaration",
+    "MESH_REQUIREMENT_IDS",
     "PROFILE_NAME",
     "REQUIREMENT_IDS",
     "RequirementCheck",

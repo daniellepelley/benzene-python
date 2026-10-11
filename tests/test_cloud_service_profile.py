@@ -1,9 +1,11 @@
-"""The Cloud Service Profile self-check — evaluate an AppDefinition against R1–R8.
+"""The Cloud Service Profile self-check — evaluate an AppDefinition against R1–R5 and R7.
 
 Pins the mapping from what a composition root wired to the Contract Document's ``profile`` field: a
 fully provisioned service is conformant (profile carries only its name), a partly-wired one lists
 exactly the requirement ids it is missing, and the verdict rides on the document — served on
 ``benzene:spec`` and registered with a collector — without touching either hash (contract-document §1).
+The meshed-service claim (M1, M2 — mesh.md §7.1, the former R6/R8) is reported separately and never
+reaches ``profile.missing``.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from dataclasses import dataclass
 from benzene.core import AppDefinition, ContractInfo, HealthChecks, Registry, application_from
 from benzene.http import StandardPaths
 from benzene.mesh import (
+    MESH_REQUIREMENT_IDS,
     PROFILE_NAME,
     REQUIREMENT_IDS,
     CloudServiceProfileReport,
@@ -54,23 +57,63 @@ def test_a_fully_wired_service_is_conformant() -> None:
     assert report.missing == []
     # Conformant → the profile carries only its name; missing is omitted, never emitted empty.
     assert report.to_profile() == {"name": PROFILE_NAME}
+    # ... and, with the feeds and propagation declared, meshed too (mesh.md §7.1).
+    assert report.mesh_missing == []
+    assert report.is_meshed
 
 
-def test_missing_mesh_and_propagation_are_reported() -> None:
-    # HTTP surfaces are all wired, but the root didn't declare the mesh feeds or trace propagation.
+def test_an_unmeshed_service_still_claims_the_profile_in_full() -> None:
+    # HTTP surfaces are all wired, but the root didn't declare the mesh feeds or trace propagation:
+    # that costs the meshed-service claim (M1, M2), never the profile.
     report = evaluate_cloud_service_profile(_full_definition())
-    assert report.missing == ["R6", "R8"]
-    assert report.to_profile() == {"name": PROFILE_NAME, "missing": ["R6", "R8"]}
-    assert "mesh feeds not declared" in report.reason("R6")
+    assert report.missing == []
+    assert report.to_profile() == {"name": PROFILE_NAME}
+    assert report.mesh_missing == ["M1", "M2"]
+    assert not report.is_meshed
+    assert "mesh feeds not declared" in report.reason("M1")
+    assert "trace propagation not declared" in report.reason("M2")
+
+
+def test_mesh_ids_never_reach_profile_missing() -> None:
+    # The worst case for the mesh claim on the worst-wired service: missing stays within R1–R5/R7.
+    report = evaluate_cloud_service_profile(AppDefinition())
+    assert set(report.missing) <= set(REQUIREMENT_IDS)
+    assert report.mesh_missing == ["M1", "M2"]
+    assert "M1" not in report.to_profile()["missing"]
+    assert "M2" not in report.to_profile()["missing"]
 
 
 def test_message_only_service_misses_the_http_surfaces() -> None:
     registry = Registry().register("orders:place", _place, request_type=Order)
     report = evaluate_cloud_service_profile(AppDefinition(registry=registry))
-    # No standard_paths → health (R3), spec (R5), the default paths (R7) are absent; mesh/propagation
-    # undeclared (R6/R8). R1 (hostable) + R2 (a topic) + R4 (envelope-invocable) still hold.
-    assert report.missing == ["R3", "R5", "R6", "R7", "R8"]
+    # No standard_paths → health (R3) and the default paths (R7) are absent, and with no ContractInfo
+    # benzene:spec has nothing to answer with (R5). R1 (hostable) + R2 (a topic) + R4
+    # (envelope-invocable) still hold.
+    assert report.missing == ["R3", "R5", "R7"]
     assert set(report.missing).isdisjoint({"R1", "R2", "R4"})
+
+
+def test_r5_is_the_spec_topic_on_every_transport_for_a_message_only_service() -> None:
+    # No HTTP surface: R5 is benzene:spec answering with the derived document, which a ContractInfo
+    # provisions on every transport — there is no /benzene/spec half to require.
+    registry = Registry().register("orders:place", _place, request_type=Order)
+    report = evaluate_cloud_service_profile(
+        AppDefinition(registry=registry, contract=ContractInfo("orders"))
+    )
+    assert "R5" not in report.missing
+    assert "every transport" in report.reason("R5")
+
+
+def test_r5_needs_the_http_route_where_there_is_an_http_surface() -> None:
+    registry = Registry().register("orders:place", _place, request_type=Order)
+    definition = AppDefinition(
+        registry=registry,
+        standard_paths=StandardPaths(spec=False, health=HealthChecks().add("core", lambda: True)),
+        contract=ContractInfo("orders"),
+    )
+    report = evaluate_cloud_service_profile(definition)
+    assert report.missing == ["R5"]
+    assert "/benzene/spec" in report.reason("R5")
 
 
 def test_a_relocated_prefix_only_costs_r7() -> None:
@@ -83,7 +126,7 @@ def test_a_relocated_prefix_only_costs_r7() -> None:
         ),
         contract=ContractInfo("orders"),
     )
-    report = evaluate_cloud_service_profile(definition, mesh_feeds=True, trace_propagation=True)
+    report = evaluate_cloud_service_profile(definition)
     assert report.missing == ["R7"]
     assert "/_internal" in report.reason("R7")
 
@@ -106,7 +149,7 @@ def test_disabled_invoke_endpoint_costs_r4() -> None:
         ),
         contract=ContractInfo("orders"),
     )
-    report = evaluate_cloud_service_profile(definition, mesh_feeds=True, trace_propagation=True)
+    report = evaluate_cloud_service_profile(definition)
     assert report.missing == ["R4"]
 
 
@@ -120,25 +163,29 @@ def test_router_only_definition_is_hostable() -> None:
     assert "R2" not in report.missing  # and serves an application topic
 
 
-def test_r6_needs_the_self_description_too() -> None:
-    # The feeds are declared, but with no ContractInfo there is no document for benzene:spec to serve
-    # or for a registration to carry (cloud-service-profile R6).
+def test_m1_needs_a_contract_document_to_register() -> None:
+    # The feeds are declared, but with no ContractInfo there is no document for a registration to
+    # carry (mesh.md §7.1 M1) — nor for benzene:spec to serve (R5).
     definition = _full_definition()
     definition.contract = None
     report = evaluate_cloud_service_profile(definition, mesh_feeds=True, trace_propagation=True)
-    assert "R6" in report.missing
-    assert "no Contract Document" in report.reason("R6")
+    assert report.mesh_missing == ["M1"]
+    assert "no Contract Document" in report.reason("M1")
+    assert report.missing == ["R5"]
 
 
 def test_profile_rides_on_the_document_without_changing_its_hashes() -> None:
-    plain = registration_document(_full_definition())
-    definition = declare_cloud_service_profile(_full_definition(), mesh_feeds=True)
+    # A relocated prefix gives the self-check something to report (R7).
+    relocated = _full_definition()
+    relocated.standard_paths.prefix = "/_internal"
+    plain = registration_document(relocated)
+    definition = declare_cloud_service_profile(relocated)
     profiled = registration_document(definition)
     # profile is outside both hashes (contract-document §1) ...
     assert plain.registration_hash == profiled.registration_hash
     assert plain.contract_hash == profiled.contract_hash
     # ... but it is on the registered document, and on the one benzene:spec serves.
-    assert profiled.to_payload()["profile"] == {"name": PROFILE_NAME, "missing": ["R8"]}
+    assert profiled.to_payload()["profile"] == {"name": PROFILE_NAME, "missing": ["R7"]}
     served = asyncio.run(
         application_from(definition).handle({"topic": "benzene:spec", "headers": {}, "body": ""})
     )
@@ -153,5 +200,8 @@ def test_declaring_a_profile_without_a_contract_changes_nothing() -> None:
 def test_report_shape_is_complete() -> None:
     report = evaluate_cloud_service_profile(_full_definition())
     assert isinstance(report, CloudServiceProfileReport)
+    assert REQUIREMENT_IDS == ("R1", "R2", "R3", "R4", "R5", "R7")  # R6/R8 retired, not reused
     assert tuple(check.id for check in report.checks) == REQUIREMENT_IDS
-    assert all(check.reason for check in report.checks)  # every verdict explains itself
+    assert tuple(check.id for check in report.mesh) == MESH_REQUIREMENT_IDS == ("M1", "M2")
+    # every verdict explains itself
+    assert all(check.reason for check in (*report.checks, *report.mesh))
