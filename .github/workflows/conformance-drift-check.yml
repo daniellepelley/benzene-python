@@ -1,17 +1,28 @@
 name: conformance-drift-check
 
 # The language-neutral conformance fixtures are OWNED by the cross-language `benzene` repo
-# (docs/specification/conformance/*.json). This repo carries a VENDORED snapshot under
-# conformance/ so the test suite is self-contained with no submodule. This job keeps the
-# snapshot honest: it fetches the canonical fixtures from benzene and fails if they differ.
+# (docs/specification/conformance/). This repo vendors the fixtures and their README:
 #
-# The check runs both ways on purpose. A vendored fixture that has drifted is the obvious half; a
-# canonical fixture MISSING from the snapshot is the half that actually bites, because a runner
-# cannot notice a fixture it was never given.
+#   snapshot  conformance/
+#   pin       conformance/SPEC_VERSION
+#   readme    conformance/README.md
 #
-# What this job does NOT check is that a vendored fixture is ever actually OPENED by a runner —
-# byte-identical and unrun looks exactly like byte-identical and green. That half lives in
-# tests/conformance_runner.py's run_fixture_coverage().
+# The pin names the spec release the snapshot was taken from: a tag such as `spec-0.1.0`, or -
+# while catching up partway through a release - a benzene commit. See "Spec releases and pinning"
+# in benzene's docs/specification/conformance/README.md.
+#
+# Two jobs, deliberately different in weight:
+#
+#   pinned (blocking)        The snapshot must be byte-identical to the fixtures at the pinned
+#                            release. A canonical fixture missing from the snapshot
+#                            fails too: a runner cannot notice a fixture it was
+#                            never given. Nothing done in benzene can turn
+#                            this red: this repo moves its pin when it chooses to.
+#   behind-latest (warning)  Annotates the run when a newer spec-* release exists, so being
+#                            behind is visible rather than silent. It never fails.
+#
+# What this does not check is that a vendored fixture is ever OPENED by a runner -
+# tests/conformance_runner.py's run_fixture_coverage() guards that half.
 
 on:
   push:
@@ -19,66 +30,91 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    - cron: '0 6 * * 1'   # weekly, catches drift introduced on the benzene side
+    - cron: '0 6 * * 1'   # weekly: surfaces a new spec release in the behind-latest job
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  FIXTURES: conformance
+  PIN: conformance/SPEC_VERSION
+  README: conformance/README.md
+  SPEC_REPO: https://github.com/daniellepelley/Benzene.git
+
 jobs:
-  drift:
+  pinned:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch canonical fixtures from benzene
+      - name: Fetch the fixtures at the pinned spec release
         run: |
           set -euo pipefail
-          git clone --depth 1 --filter=blob:none --sparse \
-            https://github.com/daniellepelley/Benzene.git /tmp/benzene
-          git -C /tmp/benzene sparse-checkout set docs/specification/conformance
+          pinned=$(tr -d '[:space:]' < "$PIN")
+          git init -q /tmp/benzene
+          git -C /tmp/benzene remote add origin "$SPEC_REPO"
+          if ! git -C /tmp/benzene fetch -q --depth 1 origin "$pinned"; then
+            echo "::error file=$PIN::'$pinned' is not a tag or commit of the benzene repo"
+            exit 1
+          fi
           mkdir -p /tmp/canonical
-          cp /tmp/benzene/docs/specification/conformance/*.json /tmp/canonical/
-          cp /tmp/benzene/docs/specification/conformance/README.md /tmp/canonical/
+          git -C /tmp/benzene archive FETCH_HEAD docs/specification/conformance \
+            | tar -x -C /tmp/canonical --strip-components=3
+          echo "Pinned to $pinned ($(git -C /tmp/benzene rev-parse 'FETCH_HEAD^{commit}'))"
 
-      - name: Diff vendored snapshot against canonical
+      - name: Diff the snapshot against the pinned release
         run: |
           set -euo pipefail
           fail=0
-          for f in conformance/*.json; do
+          for f in "$FIXTURES"/*.json; do
             name=$(basename "$f")
             if [ ! -f "/tmp/canonical/$name" ]; then
-              echo "::error file=$f::Vendored fixture $name no longer exists in benzene canonical"
+              echo "::error file=$f::$name is not in the pinned spec release"
               fail=1
-              continue
-            fi
-            if ! diff -u "/tmp/canonical/$name" "$f" > /tmp/diff.txt; then
-              echo "::error file=$f::Vendored fixture $name has drifted from benzene canonical"
+            elif ! diff -u "/tmp/canonical/$name" "$f" > /tmp/diff.txt; then
+              echo "::error file=$f::$name differs from the pinned spec release"
               cat /tmp/diff.txt
               fail=1
             fi
           done
           for f in /tmp/canonical/*.json; do
             name=$(basename "$f")
-            if [ ! -f "conformance/$name" ]; then
-              echo "::error::Canonical fixture $name is missing from the vendored snapshot"
+            if [ ! -f "$FIXTURES/$name" ]; then
+              echo "::error::$name is in the pinned spec release but missing from the snapshot"
               fail=1
             fi
           done
-          # The README is vendored too, and is not decoration: it is what says which fixtures are
-          # *conditional* on a capability, which is the authority tests/conformance_runner.py's
-          # UNRUN_FIXTURES cites for each fixture it deliberately does not run. A drifted copy of it
-          # is a stale reason for skipping a check.
-          if ! diff -u /tmp/canonical/README.md conformance/README.md > /tmp/diff.txt; then
-            echo "::error file=conformance/README.md::Vendored conformance README has drifted from benzene canonical"
+          # The README is vendored too, and is not decoration: it says which fixtures are conditional on a
+          # capability - the authority for every fixture a runner deliberately does not run. A stale copy
+          # is a stale reason for a skip.
+          if ! diff -u /tmp/canonical/README.md "$README" > /tmp/diff.txt; then
+            echo "::error file=$README::$README differs from the pinned spec release"
             cat /tmp/diff.txt
             fail=1
           fi
           if [ "$fail" -ne 0 ]; then
             echo ""
-            echo "Conformance fixtures have drifted from the canonical benzene spec."
-            echo "Re-vendor: cp <benzene>/docs/specification/conformance/*.json <benzene>/docs/specification/conformance/README.md conformance/"
-            echo "and update conformance/SPEC_VERSION to the new benzene commit."
+            echo "The snapshot is not the release $PIN names. Re-vendor from that release:"
+            echo "  cp <benzene at that release>/docs/specification/conformance/{*.json,README.md} $FIXTURES/"
             exit 1
           fi
-          echo "vendored fixtures match canonical ($(ls conformance/*.json | wc -l) files)"
+          echo "Snapshot matches the pinned spec release ($(ls "$FIXTURES"/*.json | wc -l) fixtures)."
+
+  behind-latest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Warn when a newer spec release exists
+        run: |
+          set -euo pipefail
+          pinned=$(tr -d '[:space:]' < "$PIN")
+          latest=$(git ls-remote --tags --refs "$SPEC_REPO" 'spec-*' | sed 's#.*refs/tags/##' | sort -V | tail -n 1)
+          if [ -z "$latest" ]; then
+            echo "::warning::No spec-* release exists in benzene yet."
+          elif [ "$pinned" = "$latest" ]; then
+            echo "Pinned to the latest spec release, $latest."
+          else
+            echo "::warning file=$PIN::Pinned to $pinned; the latest spec release is $latest. Moving forward is this repo's call: implement it, re-vendor, and write $latest into $PIN."
+          fi

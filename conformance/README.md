@@ -11,6 +11,27 @@ API shape is explicitly not part of conformance.
 The .NET runner lives at `test/Benzene.Conformance.Test/` and is the reference for how a runner
 consumes these files.
 
+## Spec releases and pinning
+
+The specification is released as git tags of this repository, `spec-<version>`, where `<version>` is
+the content of `docs/specification/VERSION` at that commit. Releasing is one edit — bump `VERSION`;
+the `release-spec` workflow tags the commit, and never moves a tag once published. A release is cut
+whenever the fixtures or a contract change, and only then; the workflow warns while `main`'s fixtures
+differ from the release `VERSION` still names.
+
+Every repository that vendors these fixtures records the release it took them from in a
+`SPEC_VERSION` file beside its snapshot: a tag (`spec-0.1.0`) — or, while catching up mid-release, a
+commit of this repository. Its drift check has two jobs:
+
+- **Pinned (blocking).** The snapshot must be byte-identical, in both directions, to this directory
+  at the pinned ref. A change here can never turn another repository red: it stays green on the
+  release it claims until it chooses to move.
+- **Behind latest (non-blocking).** A warning when a newer `spec-*` release exists, so being behind
+  is visible rather than silent.
+
+To move forward, a port implements the release, copies this directory's `*.json` into its snapshot,
+writes the new tag into `SPEC_VERSION`, and lands all three in one change.
+
 ## Fixture files
 
 | File | Verifies |
@@ -190,7 +211,7 @@ other fixture touches — envelope, status and protocol-mapping cases never look
 A port can therefore rename or misspell the topic attribute, pass every other fixture, and still be
 unable to exchange a single queue message with another port. That is not hypothetical: it is
 exactly how the .NET and Python ports diverged when the key was briefly `benzene-topic`
-(`work/benzene-naming-principle.md` §3c, since reversed).
+(`work/archive/benzene-naming-principle.md` §3c, since reversed).
 
 The EventBridge embedded-headers key (`_benzeneHeaders`, wire-contracts §2, tier D) is deliberately
 **not** pinned here: it is scheduled to be renamed to `benzene-headers`

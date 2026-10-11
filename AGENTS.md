@@ -58,13 +58,14 @@ transport and validation tests, which otherwise skip.
 ## The conformance fixtures are not ours to edit
 
 `conformance/*.json` is a **vendored snapshot** of the canonical fixtures in the `Benzene` repo, and
-`conformance/SPEC_VERSION` pins the commit it came from.
+`conformance/SPEC_VERSION` pins the spec release it came from (a `spec-x.y.z` tag of that repo).
 
 - **Never edit a fixture to make an implementation pass.** Fix the implementation, or change the
   spec deliberately in the `Benzene` repo and re-vendor here. The fixture is the neutral truth that
   keeps four ports interoperable; editing it locally makes this port pass and the wire wrong.
-- `.github/workflows/conformance-drift-check.yml` diffs the snapshot against canonical **both ways**
-  and fails on any difference, including a canonical fixture missing from the snapshot.
+- `.github/workflows/conformance-drift-check.yml` diffs the snapshot against the pinned release
+  **both ways** and fails on any difference, including a canonical fixture missing from the snapshot;
+  a second, non-blocking job warns when a newer release exists.
 - `tests/conformance_runner.py` fails if any vendored fixture is never opened by a runner. A fixture
   this port genuinely should not run goes in `UNRUN_FIXTURES` **with its reason in writing** — not
   because it is failing, but because `conformance/README.md` marks it conditional on a capability
