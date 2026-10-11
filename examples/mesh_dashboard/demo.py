@@ -210,9 +210,9 @@ def build_demo_mesh(collector: MeshCollector | None = None) -> DashboardMesh:
     # what fills manifest.json (status), topics.json (schemas + version), and services/{name}.json
     # (spec + per-check health) before a single request is served.
     health_checks = {
-        "orders": {"database": {"status": "healthy"}, "inventory-api": {"status": "healthy"}},
-        "inventory": {"database": {"status": "healthy"}, "warehouse-feed": {"status": "healthy"}},
-        "notifications": {"smtp": {"status": "healthy"}},
+        "orders": {"database": {"status": "ok"}, "inventory-api": {"status": "ok"}},
+        "inventory": {"database": {"status": "ok"}, "warehouse-feed": {"status": "ok"}},
+        "notifications": {"smtp": {"status": "ok"}},
     }
     # What each service calls (mesh.md §2.3) — this alone is what puts provider edges in the graph.
     outbound: dict[str, OutboundRegistry] = {
