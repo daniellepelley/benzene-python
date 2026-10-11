@@ -49,8 +49,9 @@ class BenzeneError:
     """One structured error on a failed Result (wire-contracts.md section 1.3).
 
     ``message`` is the only required member and is what a plain-string failure carries. ``field`` is
-    the producer's own property path and ``code`` its machine-readable rule identifier; the framework
-    emits both verbatim and never normalizes or rewords them.
+    a JSON Pointer to the offending value in the request as sent (``/items/0/sku``, wire-contracts
+    1.3 — absent for a rule with no single location) and ``code`` the producer's machine-readable
+    rule identifier; the framework emits both verbatim and never normalizes or rewords them.
 
     A validator that knows a message, the field it came from and the rule that rejected it can say
     all three, and they travel to the caller's problem document intact. Without them a consumer gets

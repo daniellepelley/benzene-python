@@ -32,13 +32,29 @@ async def place(order: PlaceOrder) -> Result:
 ```
 
 - **Valid** — the handler receives a validated `PlaceOrder` instance (defaults applied, types coerced).
-- **Invalid** — a `pydantic.ValidationError` becomes a `validation-error` `Result` that names each bad
-  field; the handler is never called and the pipeline never crashes:
+- **Invalid** — a `pydantic.ValidationError` becomes a `validation-error` `Result` carrying one
+  structured error per bad field; the handler is never called and the pipeline never crashes:
 
   ```python
-  # body {"quantity": "x"} -> statusCode "validation-error",
-  #   detail "sku: Field required, quantity: Input should be a valid integer, ..."
+  # body {"quantity": "x"} -> statusCode "validation-error", body errors:
+  #   [{"message": "Field required", "field": "/sku", "code": "missing"},
+  #    {"message": "Input should be a valid integer, ...", "field": "/quantity", "code": "int_parsing"}]
   ```
+
+### `field` is a JSON Pointer
+
+Each error's `field` is an [RFC 6901](https://www.rfc-editor.org/rfc/rfc6901) JSON Pointer to the
+offending value **in the request as it was sent** (wire-contracts §1.3) — `/name`, `/items/0/sku` — so
+a caller in any language can resolve it against its own body. pydantic reports a location as a tuple
+(`("items", 0, "sku")`); the adapter converts it, using the names the model **serializes** under
+(`model_dump(by_alias=True)`: an `alias_generator`, a field's `alias` or `serialization_alias`), since
+that is the JSON on the wire. Union-member tags pydantic adds to a location (`("extra", "Line",
+"skuCode")`) are not part of the JSON and are dropped. A rule with no single location — a
+`@model_validator`, a cross-field rule — omits `field` rather than inventing one. `pydantic`'s error
+`type` travels as `code`, verbatim.
+
+`validation_errors(exc, model)` and `field_pointer(loc, model)` are the conversion on its own, for a
+handler that validates by hand.
 
 ## Responses
 
@@ -60,7 +76,7 @@ class Receipt(BaseModel):
 
 ## Exports
 
-`validated`, `format_validation_errors`.
+`validated`, `validation_errors`, `field_pointer`, `format_validation_errors`.
 
 ## See also
 

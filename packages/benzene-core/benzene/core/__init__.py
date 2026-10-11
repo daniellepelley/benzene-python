@@ -85,6 +85,7 @@ from .outbound import (
     with_retry,
 )
 from .pipeline import Middleware, MiddlewarePipeline, Next
+from .pointer import dotted_to_pointer, json_pointer, pointer_segments, pointer_to_dotted
 from .registry import (
     DuplicateHandlerError,
     NoDefaultHandlerWarning,
@@ -136,6 +137,10 @@ from .worker import (
 )
 
 __all__ = [
+    "dotted_to_pointer",
+    "json_pointer",
+    "pointer_segments",
+    "pointer_to_dotted",
     "AT_LEAST_ONCE",
     "NOT_APPLICABLE",
     "ONE_SHOT",

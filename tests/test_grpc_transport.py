@@ -125,8 +125,8 @@ needs_details = pytest.mark.skipif(
 async def submit(request: dict) -> Result:
     # Two errors that differ in the one thing a flattened detail string cannot carry: the field.
     return Result.validation_error(
-        BenzeneError("sku is required", field="sku", code="missing"),
-        BenzeneError("quantity must be positive", field="quantity", code="greater_than"),
+        BenzeneError("sku is required", field="/sku", code="missing"),
+        BenzeneError("quantity must be positive", field="/lines/0/quantity", code="greater_than"),
     )
 
 
@@ -157,9 +157,10 @@ def test_structured_errors_survive_the_grpc_hop_with_their_fields() -> None:
     with _serving(_details_app()) as channel:
         result = asyncio.run(GrpcMessageSender(channel).send_message("orders:submit", {}))
     assert result.status == "validation-error"
+    # The §1.3 pointer crosses as FieldViolation's dotted path and is read back as a pointer.
     assert [(error.message, error.field) for error in result.errors] == [
-        ("sku is required", "sku"),
-        ("quantity must be positive", "quantity"),
+        ("sku is required", "/sku"),
+        ("quantity must be positive", "/lines/0/quantity"),
     ]
     # `code` is deliberately not carried: section 4.2 does not say where it goes, and three ports
     # each inventing a home for it is the divergence the spec exists to prevent.
@@ -184,9 +185,11 @@ def test_the_details_trailer_is_a_conformant_google_rpc_status() -> None:
     assert status.message == "sku is required, quantity must be positive"
     bad_request = error_details_pb2.BadRequest()
     assert status.details[0].Unpack(bad_request)
+    # FieldViolation.field is a dotted path: the pointer's segments joined with '.', a digits-only
+    # segment written [n] (wire-contracts §4.2).
     assert [(v.field, v.description) for v in bad_request.field_violations] == [
         ("sku", "sku is required"),
-        ("quantity", "quantity must be positive"),
+        ("lines[0].quantity", "quantity must be positive"),
     ]
 
 

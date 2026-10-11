@@ -56,7 +56,7 @@ the problem's information onto gRPC's own error model instead. `benzene-status` 
 | `BenzeneError` | `google.rpc.BadRequest.FieldViolation` |
 | --- | --- |
 | `message` | `description` |
-| `field` | `field` (left unset when the error isn't scoped to a field) |
+| `field` | `field`, as a dotted path: the JSON Pointer's segments unescaped and joined with `.`, a digits-only segment written `[n]` (`/items/0/sku` → `items[0].sku`); empty when the error has no field. Read back, the dotted path becomes a pointer again |
 | `code` | *not carried* — §4.2 doesn't say where it goes, so no port invents a home for it |
 
 The `google.rpc.Status` itself carries the numeric gRPC code and the same detail string the call sets,
@@ -65,7 +65,7 @@ which is what lets a non-Benzene peer read it with the stock `grpc_status.rpc_st
 ```python
 result = await sender.send_message("orders:submit", {})
 result.status                                    # -> "validation-error"
-[(e.message, e.field) for e in result.errors]    # -> [("sku is required", "sku"), ...]
+[(e.message, e.field) for e in result.errors]    # -> [("sku is required", "/sku"), ...]
 ```
 
 The server attaches the trailer whenever the outcome is non-OK; the `BadRequest` goes in whenever the

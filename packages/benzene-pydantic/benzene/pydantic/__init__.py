@@ -4,7 +4,8 @@ An optional adapter (distribution ``benzene-pydantic``) for the Python ecosystem
 validation library. The :func:`validated` decorator lets a handler take a pydantic ``BaseModel`` as
 its request: the decoded body is validated into the model before the handler runs, and a
 ``ValidationError`` becomes a ``validation-error`` :class:`~benzene.results.Result` naming each bad
-field — so a malformed request never reaches your handler and never crashes the pipeline.
+field by a JSON Pointer into the request as sent (``/items/0/sku``, wire-contracts §1.3) — so a
+malformed request never reaches your handler and never crashes the pipeline.
 
     pip install benzene-pydantic
 
@@ -15,6 +16,6 @@ lives, so a service opts in only where it wants pydantic validation.
 
 from __future__ import annotations
 
-from .validation import format_validation_errors, validated
+from .validation import field_pointer, format_validation_errors, validated, validation_errors
 
-__all__ = ["format_validation_errors", "validated"]
+__all__ = ["field_pointer", "format_validation_errors", "validated", "validation_errors"]

@@ -75,8 +75,12 @@ Result.ok({"id": 1})
 Result.created({"id": 2})
 Result.not_found("no such order")
 Result.failure("conflict", "already exists")   # any status by name
-Result.validation_error(BenzeneError("Name must not be empty", field="name", code="NotEmpty"))
+Result.validation_error(BenzeneError("Name must not be empty", field="/name", code="NotEmpty"))
 ```
+
+A `BenzeneError`'s `field` is a JSON Pointer into the request as sent (`/name`, `/items/0/sku` —
+wire-contracts §1.3); `benzene.core.json_pointer(["items", 0, "sku"])` builds one. Omit it for a rule
+that has no single location.
 
 ### `Result.set` — an application-defined status
 

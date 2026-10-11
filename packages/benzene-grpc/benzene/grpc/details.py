@@ -13,7 +13,10 @@ added to prevent.
 The mapping is pinned across the ports, so all four agree on the wire:
 
 * ``BenzeneError.message`` → ``FieldViolation.description``
-* ``BenzeneError.field``   → ``FieldViolation.field`` (left **unset**, not empty, when absent)
+* ``BenzeneError.field``   → ``FieldViolation.field``, converted from the §1.3 JSON Pointer to the
+  dotted path gRPC uses: segments unescaped, joined with ``.``, a digits-only segment written ``[n]``
+  (``/items/0/sku`` → ``items[0].sku``); left unset — empty — when absent. Reading, a dotted path is
+  converted back to a pointer, so a result's ``field`` is a pointer whichever transport it crossed.
 * ``BenzeneError.code``    → nowhere. The spec does not say where it goes, and a port inventing a
   home for it is a divergence dressed up as a feature. (``FieldViolation`` does have a ``reason``
   member that reads like the natural candidate — deciding that is a spec change, not a port's call.)
@@ -29,6 +32,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from benzene.core import dotted_to_pointer, pointer_to_dotted
 from benzene.results import BenzeneError
 
 #: The gRPC-defined binary trailer carrying a serialized ``google.rpc.Status``. The ``-bin`` suffix
@@ -90,7 +94,7 @@ def details_trailer(
             # Set only when the error is actually scoped to a field: proto3 has no "absent" for a
             # string, so an empty one would read as "the field named ''" to the far side.
             if error.field:
-                violation.field = error.field
+                violation.field = pointer_to_dotted(error.field)
             bad_request.field_violations.append(violation)
         packed = _PROTOS.any.Any()
         packed.Pack(bad_request)
@@ -131,7 +135,10 @@ def _violations(rich_status: Any) -> tuple[BenzeneError, ...]:
         bad_request = _PROTOS.errors.BadRequest()
         detail.Unpack(bad_request)
         errors.extend(
-            BenzeneError(message=violation.description, field=violation.field or None)
+            BenzeneError(
+                message=violation.description,
+                field=dotted_to_pointer(violation.field) or None,
+            )
             for violation in bad_request.field_violations
         )
     return tuple(errors)

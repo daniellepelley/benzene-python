@@ -16,9 +16,20 @@ pytest.importorskip("pydantic")
 from typing import Any
 
 from benzene.core import BenzeneMessageApplication, Registry, message  # noqa: E402
-from benzene.pydantic import format_validation_errors, validated  # noqa: E402
+from benzene.pydantic import (  # noqa: E402
+    field_pointer,
+    format_validation_errors,
+    validated,
+    validation_errors,
+)
 from benzene.results import Result  # noqa: E402
-from pydantic import BaseModel, ConfigDict  # noqa: E402
+from pydantic import (  # noqa: E402
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel  # noqa: E402
 
 
@@ -58,7 +69,7 @@ def test_invalid_request_becomes_validation_error_naming_the_fields() -> None:
     # (the same rule .NET's FluentValidation adapter follows: the validator's message verbatim, its
     # property name and error code beside it, never reworded into one string).
     errors = json.loads(response["body"])["errors"]
-    assert [error["field"] for error in errors] == ["sku", "quantity"]
+    assert [error["field"] for error in errors] == ["/sku", "/quantity"]  # JSON Pointers (§1.3)
     assert [error["code"] for error in errors] == ["missing", "int_parsing"]
     assert all(error["message"] for error in errors)
 
@@ -75,8 +86,8 @@ def test_structured_validation_errors_survive_a_round_trip() -> None:
 
     assert result.status == "validation-error"
     assert [(error.field, error.code) for error in result.errors] == [
-        ("sku", "missing"),
-        ("quantity", "int_parsing"),
+        ("/sku", "missing"),
+        ("/quantity", "int_parsing"),
     ]
 
 
@@ -140,4 +151,81 @@ def test_format_validation_errors_is_readable() -> None:
     except ValidationError as exc:
         messages = format_validation_errors(exc)
         assert len(messages) == 1
-        assert messages[0].startswith("n: ")
+        assert messages[0].startswith("/n: ")
+
+
+# --- errors[].field is a JSON Pointer into the request as serialized (wire-contracts §1.3, D8) ----
+
+
+class Line(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    sku_code: str = Field(min_length=1)
+
+
+class Gift(BaseModel):
+    note: str
+
+
+class Basket(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    customer_name: str = Field(min_length=1)
+    lines: list[Line]
+    extra: Line | Gift | None = None
+    renamed: str = Field("x", alias="Re-Named", serialization_alias="re/named")
+
+    @model_validator(mode="after")
+    def no_anonymous_gifts(self) -> Basket:
+        if self.customer_name == "anonymous" and self.extra is not None:
+            raise ValueError("an anonymous basket cannot carry an extra")
+        return self
+
+
+def _fields(body: dict[str, Any]) -> list[str | None]:
+    try:
+        Basket.model_validate(body)
+    except ValidationError as exc:
+        return [error.field for error in validation_errors(exc, Basket)]
+    raise AssertionError("expected a ValidationError")
+
+
+def test_pointers_use_the_serialized_names_and_array_indexes() -> None:
+    # The alias generator's camelCase is the JSON the caller sent, so it is the pointer's spelling.
+    assert _fields({"customerName": "", "lines": [{"skuCode": "a"}, {}]}) == [
+        "/customerName",
+        "/lines/1/skuCode",
+    ]
+
+
+def test_a_serialization_alias_wins_and_is_escaped() -> None:
+    assert _fields({"customerName": "c", "lines": [], "Re-Named": 5}) == ["/re~1named"]
+
+
+def test_union_member_tags_are_not_pointer_segments() -> None:
+    # pydantic reports ('extra', 'Line', 'skuCode') - the member tag is not part of the JSON.
+    fields = _fields({"customerName": "c", "lines": [], "extra": {"skuCode": ""}})
+    assert fields == ["/extra/skuCode", "/extra/note"]
+
+
+def test_a_rule_on_the_whole_request_omits_field() -> None:
+    assert _fields({"customerName": "anonymous", "lines": [], "extra": {"note": "hi"}}) == [None]
+
+
+def test_the_validated_decorator_emits_pointers_on_the_wire() -> None:
+    @message("baskets:submit")
+    @validated(Basket)
+    async def submit(basket: Basket) -> Result:
+        return Result.ok()
+
+    app = BenzeneMessageApplication(Registry().add(submit))
+    response = asyncio.run(
+        app.handle({"topic": "baskets:submit", "headers": {}, "body": '{"customerName": "", "lines": [{}]}'})
+    )
+    assert [e["field"] for e in json.loads(response["body"])["errors"]] == [
+        "/customerName",
+        "/lines/0/skuCode",
+    ]
+
+
+def test_field_pointer_without_a_model_uses_the_location_as_reported() -> None:
+    assert field_pointer(("items", 0, "sku")) == "/items/0/sku"
+    assert field_pointer(()) is None
