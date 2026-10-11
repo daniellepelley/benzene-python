@@ -48,6 +48,7 @@ port ships). Conflating the two is how a document like this loses your trust, so
 | **Validation** | Pydantic request validation as an optional adapter (`validated(Model)` decorator, structured `bad-request` errors) — `benzene-pydantic` (`validation.py`). See [pydantic](reference/pydantic.md). | Make pydantic a core dependency — validation is an adoption choice, so the core never imports it | Or validate by hand in the handler; a plain dict request is always allowed |
 | **Resilience** | Outbound: `with_retry` (status-aware, pluggable backoff) + correlation/trace decorators over the one `MessageSender` seam — `benzene-core` (`outbound.py`). Inbound: circuit breaker, bulkhead, rate limiting as middleware — `benzene-resilience`. See [resilience](reference/resilience.md). | Re-implement a policy toolkit (the Polly analogue) or hide one behind its own abstraction — policies are small composable decorators/middleware you can read in one screen | Compose the decorators (`with_retry(with_circuit_breaker(sender))`) or write your own middleware |
 | **Idempotency** | Dedupe middleware keyed on an idempotency header, replaying the first result; pluggable `IdempotencyStore` port + in-memory store (single-process) — `benzene-resilience` (`idempotency.py`) | Cross-instance de-duplication — independent processes (separate Lambda invocations, containers) can't coordinate at runtime; shared state can relocate the race, not remove it | Implement `IdempotencyStore` over a store with an **atomic conditional write** (DynamoDB conditional put, Redis `SET NX`), and design handlers to be naturally idempotent |
+| **Settlement of a returned failure result** | Per binding, verified from source — see the [per-binding breakdown](#returned-failure-result-settlement--the-per-binding-breakdown). A missing result (`unexpected-error`, `encode_response`), an unmatched topic (`not-found`) and a handler exception (`service-unavailable`, `message_router`) all reach the binding as ordinary failure results — `benzene-core` (`envelope.py`, `router.py`). Every Lambda, Functions and Pub/Sub trigger hands them back for redelivery by default, per record via `batchItemFailures` (SQS, DynamoDB Streams, Kinesis) or by raising `MessageHandlingError` (the rest; the Timer has nothing to redeliver) — `benzene-aws` (`app.py`), `benzene-azure` (`app.py`), `benzene-gcp` (`functions.py`); the self-hosted SQS and RabbitMQ loops leave or nack them for redelivery — `benzene-aws` (`sqs_consumer.py`), `benzene-rabbitmq` (`consumer.py`) | A cross-transport reliability abstraction — settlement stays transport-native. **Not implemented** (unbuilt, not declined): an at-most-once / raise-on-failure option on any trigger; an option to treat an unmatched topic as `ignored`; a stop-on-failure mode for the self-hosted Kafka loop, which withholds the commit but moves on, so the next commit on that partition passes the failed offset (in effect skip-and-continue). The self-hosted loops also classify by status text rather than `isSuccessful` — a defect, see the breakdown | Make retried handlers idempotent (Idempotency row). To accept a message without retry, return a success such as `Result.ignored()`; for topics you don't handle, a middleware ahead of the router that checks `Registry.find` and sets `Result.ignored()`. Self-hosted loops: `delete=False` / `commit=False` / `ack=False` plus `on_result`, or `requeue=False` (RabbitMQ); for Kafka at-least-once, raise from `on_result` on a failure so the loop stops before the next commit |
 | **Sagas / workflows** | In-process compensation-based saga with reverse-order rollback, `Result`-speaking — `benzene-resilience` (`saga.py`) | Durable crash-resume — the saga is in-memory callables; nothing persists across a crash | For crash-durable or long-running workflows use a real orchestrator (Step Functions, Durable Functions, Temporal) started from a handler |
 | **AuthN / AuthZ** | **Partial.** Basic auth (`basic.py`); bearer middleware + `JwtValidator` over PyJWT — verification against a **configured static key** (HMAC secret or RSA/EC public key) with algorithm/audience/issuer constraints (`bearer.py`); API Gateway custom-authorizer adapter (`authorizer.py`) — `benzene-auth`. See [auth](reference/auth.md). | **Not implemented:** JWKS fetch / OIDC discovery — there is no key-rotation-aware validation against an IdP's metadata (the .NET and Go ports ship this; not a design decision here, simply unbuilt) | `validate` is a plain callable: supply one that resolves signing keys from your IdP's JWKS (e.g. PyJWT's `PyJWKClient`) and pass it to `bearer_token_interception` |
 | **Outbox (produce-side durability)** | **Not implemented.** The .NET port ships `Benzene.Outbox`; here the only trace is a seam note — `ResponseEventSink` (`benzene-otel`, `response_events.py`) can *feed* an outbox you build, but no store-and-forward, staging, or transactional write exists | — (nothing deliberate here; this is unbuilt, not declined) | Treat every send as at-least-once and pair the consumer with the Idempotency row; or implement store-and-forward as middleware over your own durable store |
@@ -56,11 +57,103 @@ port ships). Conflating the two is how a document like this loses your trust, so
 | **Database / state access** | *(nothing — by design)* | Any database or state-store abstraction — a database is not a transport; wrapping one would hide its capabilities (the core anti-pattern) | Your handler uses `boto3`/`azure-sdk`/an ORM directly; Benzene delivers the event in, persistence is yours |
 | **Testing** | In-memory test host + test doubles — `benzene-testing`; per-transport builders/hosts (e.g. `AwsLambdaTestHost`, `SqsConsumerTestHost` in `benzene-aws/testing.py`). See [testing](reference/testing.md). | Require cloud SDKs or emulators to test a handler — bindings are duck-typed/injectable precisely so tests run SDK-free | Use the builders; integration against real infrastructure is your CI's choice |
 
+## Returned-failure-result settlement — the per-binding breakdown
+
+Audited from source on 2026-10-11 (commit `9901bb7`). "Failure result" means the invocation's
+response envelope says `isSuccessful: false` — the handler *returned* a failure; nothing crashed.
+
+- Every binding below runs `BenzeneMessageApplication.handle` (`benzene-core`, `envelope.py`). It
+  turns **no result** into `unexpected-error` (`encode_response`) and a malformed JSON body into
+  `bad-request`; the terminal `message_router` (`router.py`) turns an **unmatched topic** into
+  `not-found`, an empty topic into `validation-error`, and a **handler exception** into
+  `service-unavailable`. All of them reach the binding as ordinary failure results, and **no binding
+  special-cases any of them** — so the "no result" and "unmatched topic" columns repeat the
+  "failure result" column by construction.
+- The **uncaught exception** column is therefore an exception that escapes the pipeline: one raised
+  by a middleware, or by the binding's own decode step.
+- On the envelope-less sources (S3, DynamoDB, Kinesis, Blob, Cosmos DB, Timer; EventBridge without
+  a `detail-type`; plain-text Queue Storage) the topic is a configured convention, so with no handler
+  for it *every* delivery is an unmatched topic.
+- A success result — `ignored` included (`benzene-results`, `status.py`) — is acknowledged everywhere.
+
+| Binding | Package / module | Failure result | No result | Unmatched topic | Uncaught exception | Override knob | Unit of settlement |
+|---|---|---|---|---|---|---|---|
+| AWS Lambda SQS | `benzene-aws` · `app.py` `AwsLambdaApp._handle_sqs` | redeliver (`batchItemFailures`) | redeliver | redeliver | redeliver — the whole batch (invocation fails; later records don't run) | none | per message — every record runs, failures reported by `messageId`; needs *ReportBatchItemFailures* on the event source mapping ([getting started](getting-started-aws.md)) |
+| AWS Lambda SNS | `benzene-aws` · `app.py` `_handle_sns` → `_dispatch_or_raise` | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | none | whole invocation; stops at the first failing record |
+| AWS Lambda S3 | `benzene-aws` · `app.py` `_handle_s3` → `_dispatch_or_raise` | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | none | whole invocation; stops at the first failing record |
+| AWS Lambda EventBridge | `benzene-aws` · `app.py` `_handle_eventbridge` → `_dispatch_or_raise` | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | none | per event (one per invocation) |
+| AWS Lambda Kafka / MSK | `benzene-aws` · `app.py` `_handle_kafka` → `_dispatch_or_raise` | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | none | whole invocation, across every topic-partition in the event; stops at the first failing record |
+| AWS Lambda DynamoDB Streams | `benzene-aws` · `app.py` `_handle_dynamodb` | redeliver (`batchItemFailures`) | redeliver | redeliver | redeliver — the whole batch (invocation fails) | none | per record, reported by `SequenceNumber`; every record runs (no stop at the first failure) |
+| AWS Lambda Kinesis | `benzene-aws` · `app.py` `_handle_kinesis` | redeliver (`batchItemFailures`) | redeliver | redeliver | redeliver — the whole batch (invocation fails) | none | per record, reported by `sequenceNumber`; every record runs (no stop at the first failure) |
+| AWS SQS, self-hosted | `benzene-aws` · `sqs_consumer.py` `run_sqs_consumer_loop`, `SqsConsumerApp` | redeliver — not deleted² | redeliver | redeliver | redeliver — the loop raises and exits; this and the rest of the received batch stay undeleted | `delete=False` + `on_result` (you delete) | per message (`delete_message` on success) |
+| Kafka, self-hosted | `benzene-kafka` · `consumer.py` `run_consumer_loop`, `KafkaConsumerApp` | skip-and-continue² — the offset is not committed, but the loop moves on and the next successful record on that partition commits past it; redelivered only if the consumer restarts or rebalances first | skip-and-continue | skip-and-continue | redeliver — the loop raises; a restart resumes at the last committed offset (a non-UTF-8 value raises in `decode_kafka_message`, so it halts the worker each time) | `commit=False` + `on_result` (you commit); auto-commit via `build_kafka_consumer(**{"enable.auto.commit": True})` | per record offset, cumulative per partition |
+| RabbitMQ, self-hosted | `benzene-rabbitmq` · `consumer.py` `run_consumer_loop`, `RabbitMqConsumerApp` | redeliver² — `basic_nack(requeue=True)`, immediate requeue | redeliver | redeliver | redeliver — the loop raises; the delivery stays unacked and the broker requeues it when the channel closes (a non-UTF-8 body raises in `decode_rabbitmq_message`) | `requeue=False` (nack to the dead-letter exchange, or dropped if none); `ack=False` + `on_result` (you ack) | per delivery |
+| Azure Functions Service Bus | `benzene-azure` · `app.py` `AzureFunctionsApp.handle_service_bus` → `_run_or_raise` | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | none | per message |
+| Azure Functions Event Hub | `benzene-azure` · `app.py` `handle_event_hub` → `_run_or_raise` | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | none | whole invocation; stops at the first failing event |
+| Azure Functions Queue Storage | `benzene-azure` · `app.py` `handle_queue_storage` → `_run_or_raise` | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | none | per message |
+| Azure Functions Blob Storage | `benzene-azure` · `app.py` `handle_blob` → `_run_or_raise` | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | none | per blob notification |
+| Azure Functions Cosmos DB change feed | `benzene-azure` · `app.py` `handle_cosmos` → `_run_or_raise` | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | none | whole invocation; stops at the first failing document |
+| Azure Functions Event Grid | `benzene-azure` · `app.py` `handle_event_grid` → `_run_or_raise` | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | none | whole invocation; stops at the first failing event of a batch |
+| Azure Functions Timer | `benzene-azure` · `app.py` `handle_timer` → `_run_or_raise` | n/a — raises, so the invocation is recorded as failed; there is no message to redeliver | n/a — raises | n/a — raises | n/a — raises | none | per tick |
+| GCP Cloud Functions Pub/Sub | `benzene-gcp` · `functions.py` `GcpFunctionsApp.handle_pubsub` | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | redeliver (raises¹) | none | per message |
+
+¹ **raises** — the binding raises `MessageHandlingError` (`benzene-core`, `errors.py`), or lets the
+exception propagate, out of the trigger function. Whether and how often the platform then redelivers
+— Lambda's async retries and on-failure destinations, the Functions host's retry, poison-queue and
+dead-letter handling, a Cloud Function's retry-on-failure setting — is trigger configuration Benzene
+does not set and this audit cannot verify from source. For the checkpointing Functions triggers
+(Event Hub, Cosmos DB) and Pub/Sub-triggered functions in particular, confirm retries are enabled.
+
+² The self-hosted loops classify by **status text**: each `handle_message` returns
+`Result(response["statusCode"])`, dropping the envelope's `isSuccessful`, so an application-defined
+status the handler marked successful (`Result.set(..., successful=True)`) counts as a failure there.
+The trigger bindings read `successful_from` and don't have this defect.
+
+**No binding, so nothing to settle (not implemented):** a self-hosted Azure Service Bus, Event Hub or
+Cosmos DB worker; an Azure Functions Kafka trigger; a self-hosted Pub/Sub subscriber. **Out of scope
+(request/response — the result goes back to the caller):** API Gateway and direct invoke on
+`AwsLambdaApp`, `benzene-http`, `benzene-grpc`, and the Azure and GCP HTTP triggers.
+
+**Pinned by tests:** the Lambda triggers (`tests/test_aws_host.py`, `tests/test_aws_parity.py`), the
+three self-hosted loops (`tests/test_aws_sqs_consumer.py`, `tests/test_kafka.py`,
+`tests/test_rabbitmq.py`), and the unmatched-topic raise on Service Bus and Pub/Sub
+(`examples/azure_orders/`, `examples/gcp_orders/`). The other Azure triggers' raise paths have no
+test asserting them.
+
+### Divergences from the .NET 1.0 settlement contract
+
+- **No override knob on any trigger.** `AwsLambdaApp`, `AzureFunctionsApp` and `GcpFunctionsApp` take
+  no settlement option; .NET has `RaiseOnFailureStatus` / `BatchFailureMode` / `AckMode` on the same
+  bindings. The defaults agree with .NET for a failure result; the at-most-once opt-out is not
+  implemented.
+- **Unmatched topic and no result on the stream-shaped triggers are redelivered — no carve-out.**
+  .NET accepts an unrouted/null outcome on Lambda Kafka and the Azure Event Hub trigger so it cannot
+  replay a partition or batch forever; here both are failures and raise, so an unhandled topic
+  re-fails the invocation on every retry.
+- **Lambda Kafka / MSK fails the whole invocation.** It raises at the first failing record; .NET
+  defaults to per-partition partial-batch reporting (`PartialBatchFailure`).
+- **Lambda DynamoDB Streams does not stop at the first failure.** Every record runs and every
+  failure is reported; .NET stops at the first failed record.
+- **Lambda Kinesis and the Azure Cosmos DB trigger route per record.** .NET treats both as fan-in
+  streams with no per-record result (n/a); here each record or document is routed under a convention
+  topic and its result settles it.
+- **Self-hosted Kafka: in effect skip-and-continue, but documented as at-least-once.** .NET defaults to
+  skip-and-continue deliberately (`CommitOnlyOnSuccess = false`) and offers a halting at-least-once
+  mode. Here `commit=True` is described as at-least-once (`consumer.py`, `reference/kafka.md`), yet a
+  later commit on the partition passes the failed offset; there is no halting mode. Its unmatched
+  topic is likewise skipped, matching .NET's carve-out in effect.
+- **Self-hosted SQS, Kafka and RabbitMQ read status text, not `isSuccessful`** (footnote ²) — a
+  wire-contracts §1.2 defect, not a design decision.
+- **Idempotency treats a missing result as success.** `idempotency()` (`benzene-resilience`,
+  `idempotency.py`) remembers a missing result as `Result.ok()`, so that delivery is redelivered
+  once and the redelivery replays `ok` and is acknowledged. .NET's `IdempotencyMiddleware` treats a
+  missing result as not-success and releases the claim.
+
 ## Why "we don't do that" is a feature
 
 Every deliberate "no" above buys you something: you keep the full power of the tool you chose,
 you're never blocked by a leaky abstraction, and the surface you depend on stays small. The three
-*not implemented* rows (outbox, claim check, schema registry) and the auth partial are stated
+*not implemented* rows (outbox, claim check, schema registry) and the auth and settlement partials are stated
 plainly because they are gaps, not philosophy — a port that does less, said honestly, is still
 aligned with Benzene; a port that claims more than it does is not. When you need something this
 port doesn't ship, a custom middleware or a `MessageSender` decorator is the supported, documented
