@@ -16,8 +16,9 @@ pip install benzene-codegen-client
 
 This is a **code generator**, not a library your service imports at runtime. The code it *emits*
 depends on nothing but `benzene.core.clients.MessageSender` and `benzene.results.Result` — the
-generator package itself (its OpenAPI-schema walking, its `rfc8785` dependency) never ships inside
-a generated client or a deployed service.
+generator package itself (its OpenAPI-schema walking) never ships inside a generated client or a
+deployed service. The contract hash it embeds is computed by `benzene-core`'s `contract_hash` — the
+same function a service uses for the `contractHash` it serves.
 
 ## Quick start
 
@@ -58,23 +59,26 @@ schemas a topic-client narrows down to, and the embedded contract hash are **not
 choice to make differently from any other language's generator. Method naming and file layout *are*
 this port's choice (§5.5) — see [Naming](#naming) below.
 
+## Reading the document
+
+The generator reads a Contract Document whose `schemaDialect` is `"openapi-3.0"` and **rejects any
+other** — including a document with no `schemaDialect`, the `openapi`/`info` shape producers wrote
+before spec-0.3.0 (contract-document §1). It ignores any `benzene:` entry (a producer must not list
+one), reads `requests`, `events` and `sends`, and treats an absent `response` as "no payload": the
+generated method returns `Result[None]`. A nullable wrapper `{"type", "nullable": true, "allOf":
+[{"$ref": T}]}` types as `T | None`.
+
 ## Topic scoping
 
-By default, `service` covers a service's **domain** topics only — reserved Benzene utility topics
-(`benzene:spec`, `benzene:healthcheck`, `benzene:mesh`, …) are excluded, whether marked with
-`"reserved": true` or merely prefixed `benzene:` (contract-document.md §5.1: a generated client is
-for a service's business surface; not every consumer wants to register an outbound route for
-framework plumbing it never asked for).
+By default, `service` covers every `requests[]` topic in the document.
 
-- `--topics a,b,c` — an explicit include-list. Only these topics are in scope, and naming a reserved
-  topic here admits it regardless of any other setting.
-- `--include-reserved` — include every reserved topic in the *default* scope (ignored once
-  `--topics` is given — an explicit ask always wins).
+- `--topics a,b,c` — an explicit include-list (§5.2). Only these topics are in scope; `events`,
+  `sends` and `components` pass through unnarrowed.
 - Naming a topic that isn't in the document is a **fail-loud** error (non-zero exit), listing both
   the topic(s) that weren't found and the document's actual topics.
 
-`benzene-codegen topic --topic <t>` always admits `<t>` even if it's reserved — naming one topic
-explicitly is itself an include-list of one.
+`benzene-codegen topic --topic <t>` generates the topic-scoped client of §5.3: that one entry, no
+events or sends, and the component closure its request and response reach.
 
 ## Types
 
@@ -129,10 +133,11 @@ Every generated module exports two module-level constants:
   route reads this constant itself in its own composition root. Imperatively-wired ports failing
   loud at construction, rather than at a reflective startup scan, is the accepted answer here.
 - `CONTRACT_HASH` — the spec-pinned `contractHash` (contract-document.md §6): `"sha256:" +
-  lowercase-hex(sha256(canonicalJSON(normalize(document))))`, canonicalized per RFC 8785 (JCS) via
-  the `rfc8785` PyPI package. Comparable **only** against an identically-scoped hash — a
-  service-level client's hash against another service-level hash of the same include-list; a
-  topic-client's hash against that same topic's topic-scoped hash. Never compare across scopes (§6.4).
+  lowercase-hex(sha256(JCS(P)))` over the projection `P` of the client's own scope (`requests` and
+  `events`, dereferenced, annotations stripped, sorted), recomputed by `benzene-core`'s
+  `contract_hash` rather than copied. A default service-level client's hash **equals the served
+  `contractHash`** — that is the drift check. An include-list client's or a topic client's hash is
+  comparable **only** with the same projection recomputed over the provider's current document (§6.4).
 
 ## Registration (no DI container to hook into)
 

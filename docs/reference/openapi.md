@@ -12,10 +12,10 @@ pip install benzene-openapi
 
 Benzene is message-topic-based, not REST, so there is nothing to hand a Swagger UI or a client
 generator out of the box. `openapi_document` closes that gap: it projects the *same* registry the
-`/benzene/spec` document and the mesh `ServiceDescriptor` read into a standard OpenAPI document,
+Contract Document and the mesh `ServiceDescriptor` read into a standard OpenAPI document,
 reusing `benzene.core.json_schema` for every payload schema — never re-deriving one.
 
-Like `ServiceSpec` it is a **pure, deterministic** registry projection with no third-party runtime
+Like the Contract Document it is a **pure, deterministic** registry projection with no third-party runtime
 dependencies: one `POST` operation per registered `(topic, version)` under the profile's
 `/benzene/invoke` base, with every request and response schema reused verbatim from `json_schema` and
 every failure status mapped to its HTTP code through the port's own `benzene.http.to_http` table.
@@ -108,7 +108,7 @@ precisely because that member name collided with RFC 9457's own.
 
 ### Deterministic output
 
-As with `ServiceSpec`, the document is built in a stable order — topics sorted by `(id, version)`,
+As with the Contract Document, the document is built in a stable order — topics sorted by `(id, version)`,
 paths and component-schema keys sorted lexicographically, responses ordered by HTTP code — so the same
 registry always yields an identical, diff-friendly dict.
 
@@ -201,8 +201,8 @@ byte-stable regardless of separator collisions.
 
 ## See also
 
-- [`benzene.core`](core.md) — the `Registry` and `json_schema` this projects; the derived `ServiceSpec`
-  it is a sibling of.
+- [`benzene.core`](core.md) — the `Registry` and `json_schema` this projects; the Contract Document it
+  is a sibling of.
 - [`benzene.http`](http.md) — `StandardPaths` (the invoke base) and `to_http` (the failure-status → HTTP
   code mapping) this reuses.
 - [`benzene.mesh`](mesh.md) — the mesh `ServiceDescriptor`, the third projection of the same registry.

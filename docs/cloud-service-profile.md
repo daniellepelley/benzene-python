@@ -11,7 +11,7 @@ Python API that satisfies it and the test that proves it.
 | **R2** | Topics served through the handler registry | `Registry` is the single source of truth; every host builds its app from it | `tests/test_core.py` |
 | **R3** | Health checks + HTTP `/benzene/health` | `HealthChecks` + `health_interception` (reserved `benzene:healthcheck`, answering `ok` with the verdict in `isHealthy`); the HTTP surface returns the `{isHealthy, healthChecks}` report, `200`/`503` by `isHealthy` | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
 | **R4** | Wire-envelope invocability + HTTP `/benzene/invoke` | `BenzeneMessageApplication.handle` is the envelope entry point; `StandardPaths` exposes `POST /benzene/invoke` (200 for every processed envelope, 400 only for a malformed one; `invoke_topics` restricts it) | `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
-| **R5** | Registry-derived spec at `/benzene/spec` | `StandardPaths` exposes `GET /benzene/spec`, answering the cross-language **Contract Document** (`ContractDocument.derive`/`from_spec`, contract-document.md) with the native `ServiceSpec` payload at `?type=native`; `spec_interception` answers the reserved `benzene:spec` topic with the same document (`not-implemented` for a type or format it does not render) | `tests/test_contract_document.py`, `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py` |
+| **R5** | Registry-derived spec at `/benzene/spec` | The cross-language **Contract Document** (contract-document.md), derived once at the composition root from `AppDefinition(contract=ContractInfo(...), outbound=...)`; the reserved `benzene:spec` topic answers with it (`spec_interception`, installed by `application_from`) and `GET /benzene/spec` runs that topic through the pipeline (`not-implemented`/501 for a type or format it does not render) | `tests/test_contract_document.py`, `tests/test_wellknown.py`, `tests/test_cloud_wellknown.py`, `contract-document-cases.json` |
 | **R6** | Mesh service-side feeds | `ServiceDescriptor` (reserved `benzene:mesh`), `MeshFeedSender` (register / heartbeat / traces), `trace_middleware` (one `TraceEvent` per invocation) | `tests/test_mesh.py`, `mesh-*` conformance fixtures |
 | **R7** | Default `/benzene/` standard paths, configurable | `StandardPaths(prefix="/benzene", ...)` — one config object, relocatable prefix; threaded into every HTTP-capable host | `tests/test_wellknown.py::test_prefix_is_configurable_and_relocates_every_surface` |
 | **R8** | Join + propagate W3C trace context | `trace_middleware` joins an inbound `traceparent`; `with_trace_propagation` forwards the current span to outbound calls | `tests/test_mesh.py` (outbound trace propagation), `mesh-trace-cases` |
@@ -22,16 +22,17 @@ A service claims the profile by hosting its handlers behind a transport (R1/R2 �
 the operational surfaces. Over HTTP that is one `StandardPaths` plus the mesh feeds:
 
 ```python
-from benzene.core import HealthChecks, ServiceSpec
+from benzene.core import AppDefinition, ContractInfo, HealthChecks
 from benzene.http import BenzeneHttpApp, StandardPaths
 
 health = HealthChecks().add("db", check_db)
-spec = ServiceSpec.derive(registry, service="orders")
 
-app = BenzeneHttpApp(
-    router,
-    application=application,
-    standard_paths=StandardPaths(health=health, spec=spec),   # R3 + R4 + R5 + R7
+app = BenzeneHttpApp.from_definition(
+    AppDefinition(
+        router=router,
+        standard_paths=StandardPaths(health=health),   # R3 + R4 + R5's route + R7
+        contract=ContractInfo("orders"),               # R5's document
+    )
 )
 ```
 
@@ -46,27 +47,28 @@ test harness pick them up from that one declaration:
 ```python
 class OrdersStartUp(BenzeneStartUp):
     def configure(self, services, config) -> AppDefinition:
-        router, registry = ...   # built here, so the spec derives from the registry in hand
+        router, outbound = ...   # the handlers, and the events and sends this service declares
         return AppDefinition(
             router=router,
-            standard_paths=StandardPaths(health=health, spec=ServiceSpec.derive(registry, service="orders")),
+            outbound=outbound,
+            standard_paths=StandardPaths(health=health),
+            contract=ContractInfo("orders", service_version="1.4.2", version_scheme="semver"),
         )
 ```
 
-## The documents: contract, spec, descriptor
+## The documents: contract and descriptor
 
-R5's spec document and R6's mesh `ServiceDescriptor` are both **derived from the registry** and share
-one schema derivation (`benzene.core.json_schema`), but serve different audiences:
+R5's Contract Document and R6's mesh `ServiceDescriptor` are both **derived from the registrations**,
+but serve different audiences:
 
-- **`ContractDocument`** (`/benzene/spec`, and the reserved `benzene:spec` topic) — R5's own document and the cross-language one
-  (contract-document.md): `{openapi, info, messageEndpoint, transports?, requests[], events[],
-  components}`, the single input every language's client generator parses. Depends only on
+- **`ContractDocument`** (`/benzene/spec`, and the reserved `benzene:spec` topic) — R5's document and
+  the cross-language one (contract-document.md): `{schemaDialect, service, serviceVersion?,
+  versionScheme?, description?, messageEndpoint?, transports?, contractHash, registrationHash,
+  requests[], events[], sends[], components}`, the single input every language's client generator
+  parses. Its schemas are OpenAPI 3.0 Schema Objects with named components. Depends only on
   `benzene-core`.
-- **`ServiceSpec`** (`/benzene/spec?type=native`, and `benzene:spec` with `{"type": "native"}`) — this port's
-  own minimal "what I serve": `{service, topics}` with request/response schemas. It is what the
-  Contract Document is projected from when you wire `spec=` alone.
 - **`ServiceDescriptor`** (`benzene:mesh`) — the richer mesh view: adds service identity, placement, and
   a content `descriptorHash` for drift detection. Lives in `benzene-mesh`.
 
-A service can expose any or all of them; they never disagree about the topics, because they all read
-the one registry.
+A service can expose either or both; they never disagree about the topics, because they read the one
+registry and the one outbound registry.

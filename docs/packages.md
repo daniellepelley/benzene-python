@@ -11,7 +11,7 @@ Python equivalent.
 | Install | Import | What it gives you | Depends on |
 |---|---|---|---|
 | [`benzene-results`](https://pypi.org/project/benzene-results/) | `benzene.results` | `Result` and the status vocabulary — the return type of every handler | nothing |
-| [`benzene-core`](https://pypi.org/project/benzene-core/) | `benzene.core` | handler registry + `@message`, the middleware pipeline, per-invocation DI, and the transport-neutral `BenzeneMessage` envelope | `benzene-results` |
+| [`benzene-core`](https://pypi.org/project/benzene-core/) | `benzene.core` | handler registry + `@message`, the middleware pipeline, per-invocation DI, the transport-neutral `BenzeneMessage` envelope, and the Contract Document (self-description + its hashes) | `benzene-results`, `rfc8785` |
 | [`benzene-http`](https://pypi.org/project/benzene-http/) | `benzene.http` | the inbound HTTP (ASGI) binding and the Benzene↔HTTP status mapping | `benzene-core` |
 | [`benzene-grpc`](https://pypi.org/project/benzene-grpc/) | `benzene.grpc` | the Benzene↔gRPC status mapping + `benzene-status` trailer rule, and the gRPC server/client transport, including structured errors on `grpc-status-details-bin` (the `[transport]` extra adds `grpcio` + `grpcio-status`) | `benzene-core` |
 | [`benzene-gcp`](https://pypi.org/project/benzene-gcp/) | `benzene.gcp` | the Google Cloud Functions host (HTTP + Pub/Sub bindings, Pub/Sub outbound client) | `benzene-core`, `benzene-http` |
@@ -125,7 +125,8 @@ concern appears (e.g. a bring-your-own-container adapter, or a validation adapte
 
 `benzene-codegen-client` is exactly that kind of genuinely optional concern: a service that never
 consumes another Benzene service's Contract Document has no reason to install an OpenAPI-schema
-walker, an RFC 8785 canonicalizer, or the `benzene-codegen` CLI. It mirrors .NET's
+walker or the `benzene-codegen` CLI. (The RFC 8785 canonicalizer is not part of that: a service
+hashes the document it serves, so the hash — and `rfc8785` — live in `benzene-core`.) It mirrors .NET's
 `Benzene.CodeGen.Client` as its own leaf package rather than folding into `benzene-core`, and — the
 one place it differs from every other row in the table above — nothing in this port depends *on* it:
 it's a build-time/CLI tool that depends down on `benzene-core`, not a layer other packages build on.

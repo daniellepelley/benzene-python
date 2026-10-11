@@ -20,8 +20,10 @@ layers they use. The dependency direction is strict and one-way:
 - **`benzene-results`** — `Result`, `BenzeneError`, `ProblemDetails`, the status vocabulary. Zero
   dependencies; everything else sits on it.
 - **`benzene-core`** — registry + `@message`, the middleware pipeline, per-invocation DI, the
-  composition root (`BenzeneStartUp` / `AppDefinition`), and the transport-neutral `BenzeneMessage`
-  envelope. Depends on `benzene-results` only, and stays transport-free.
+  composition root (`BenzeneStartUp` / `AppDefinition`), the transport-neutral `BenzeneMessage`
+  envelope, and the Contract Document (derivation + hashes). Depends on `benzene-results` and
+  `rfc8785` (the RFC 8785 canonicaliser the hashes need — a ruled exception), and stays
+  transport-free.
 - **Transport bindings** — `benzene-http` (ASGI), `benzene-grpc`, `benzene-gcp`, `benzene-aws`,
   `benzene-azure`, `benzene-kafka`, `benzene-rabbitmq`.
 - **Cross-cutting middleware** — `benzene-resilience`, `benzene-auth`, `benzene-cache`,
@@ -52,7 +54,7 @@ PYTHONPATH=$(python -c "import tomllib;print(':'.join(tomllib.load(open('pyproje
   python -m tests.conformance_runner
 ```
 
-Only `rfc8785` is required (by `benzene-codegen-client`); `grpcio` and `pydantic` unlock the gRPC
+Only `rfc8785` is required (by `benzene-core`, for the Contract Document hashes); `grpcio` and `pydantic` unlock the gRPC
 transport and validation tests, which otherwise skip.
 
 ## The conformance fixtures are not ours to edit

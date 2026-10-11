@@ -36,8 +36,10 @@ def build_descriptor(registry) -> ServiceDescriptor:
 The derived descriptor carries one topic entry per registered topic — for the order domain that is
 `orders:place`, `orders:get`, and `orders:created` — each with the request/response JSON Schema taken
 from the handler's declared types, and a `descriptorHash` over the contract. If this service also
-*calls* another topic (e.g. `payments:capture`), declare that too — pass an `OutboundRegistry` as
-`derive`'s third argument (`ServiceDescriptor.derive(registry, info, outbound)`) — so the mesh's
+*calls* another topic (e.g. `payments:capture`), declare that too — an `OutboundRegistry` with
+`register_send("payments:capture", CapturePayment)` (or `register_event` for a topic it publishes and
+defines) as `derive`'s third argument (`ServiceDescriptor.derive(registry, info, outbound)`), and the
+same registry as `AppDefinition(outbound=...)` so the Contract Document lists it too — so the mesh's
 provider edge exists the moment this service registers, with zero traffic
 ([reference](../reference/mesh.md#outboundregistry)):
 
@@ -132,7 +134,7 @@ from benzene.mesh import (InMemoryTraceExporter, MESH_TOPIC, ServiceDescriptor, 
                           TraceExporter, mesh_interception, trace_middleware)
 from benzene.results import Result
 
-async def _spec(_request):                # /benzene/spec is answered by mesh_interception
+async def _spec(_request):                # benzene:mesh is answered by mesh_interception
     return Result.not_found("benzene:mesh is handled by mesh_interception")
 
 class MeshOrdersStartUp(OrdersStartUp):
@@ -144,7 +146,8 @@ class MeshOrdersStartUp(OrdersStartUp):
         base = super().configure(services, config)          # the real registry + HTTP router
         descriptor = ServiceDescriptor.derive(base.registry, ServiceInfo(service="orders",
                                               service_version="1.4.2", placement={"cloud": "aws"}))
-        base.router.register("GET", "/benzene/spec", MESH_TOPIC, _spec)   # a URL for the descriptor
+        base.router.register("GET", "/benzene/mesh", MESH_TOPIC, _spec)   # a URL for the descriptor
+        # (/benzene/spec is the Contract Document: declare AppDefinition(contract=ContractInfo(...)))
         exporter = services.get_service(TraceExporter)
         return AppDefinition(
             registry=base.registry,
@@ -165,7 +168,7 @@ host = (create_test_host(MeshOrdersStartUp)
         .with_services(lambda s: s.add_instance(MessageSender, fake))
         .build_aws())                                        # or .build_gcp() / .build_azure()
 
-spec = host.send_http("GET", "/benzene/spec")                # the descriptor, over HTTP
+spec = host.send_http("GET", "/benzene/mesh")                # the descriptor, over HTTP
 assert spec.status_code == 200 and json.loads(spec.body)["service"] == "orders"
 
 host.send_sqs("orders:place", {"sku": "ABC"}, headers={"x-correlation-id": "c1"})

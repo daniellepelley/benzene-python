@@ -103,17 +103,18 @@ a configurable `/benzene/` prefix (transport-bindings §1; profile R3/R4/R5/R7).
 of ordinary routing and never shadow your routes.
 
 ```python
-from benzene.core import HealthChecks, ServiceSpec
+from benzene.core import AppDefinition, ContractInfo
 from benzene.http import BenzeneHttpApp, StandardPaths
 
-app = BenzeneHttpApp(
-    router,
-    application=application,
-    standard_paths=StandardPaths(
-        health=health_checks,                              # enables GET /benzene/health
-        spec=ServiceSpec.derive(registry, service="orders"),  # enables GET /benzene/spec
-        # invoke is on by default -> POST /benzene/invoke
-    ),
+app = BenzeneHttpApp.from_definition(
+    AppDefinition(
+        router=router,
+        standard_paths=StandardPaths(
+            health=health_checks,           # enables GET /benzene/health
+            # invoke and spec are on by default -> POST /benzene/invoke, GET /benzene/spec
+        ),
+        contract=ContractInfo("orders"),    # the self-description GET /benzene/spec answers with
+    )
 )
 ```
 
@@ -136,44 +137,28 @@ app = BenzeneHttpApp(
   an HTTP binding maps a payload field rather than the result's status — so a load balancer that
   reads only the status line drains an unhealthy instance. A `warning` check is reported and stays
   `200`. The body is the report (`application/json`), never a problem document.
-- **`GET /benzene/spec`** (R5) — the derived **[Contract Document](core.md#contract-document)**:
-  `{openapi, info, messageEndpoint, transports?, requests[], events[], components}`, projected from the
-  registry (never hand-written). This is the format `contract-document.md` specifies and every
-  language's client generator parses, so a .NET/Go/TypeScript generator pointed here reads a Python
-  service the same way it reads its own. Enabled by passing `spec` (a `ServiceSpec` or a callable) or
-  `contract` (a `ContractDocument` or a callable) — see the `?type=` switch below.
+- **`GET /benzene/spec`** (R5) — the service's **[Contract Document](core.md#self-description-the-contract-document)**
+  (contract-document.md): `{schemaDialect, service, …, contractHash, registrationHash, requests[],
+  events[], sends[], components}`, derived at the composition root. The route **runs the
+  `benzene:spec` topic through the pipeline** — the same authentication middleware as every other
+  topic guards it — so it answers exactly what the topic answers, and `404` when the app declares no
+  `ContractInfo` (no `benzene:spec` handler). Every language's client generator parses this document,
+  so a .NET/Go/TypeScript generator pointed here reads a Python service the same way it reads its own.
+  `StandardPaths(spec=False)` turns the route off.
 - **Prefix** (R7) — `prefix` defaults to `/benzene` and is configurable; relocating it moves every
   surface together (the prefix is the steer, not a cage), so tell your clients the new base.
 
 ### `?type=` and `?format=` on `/benzene/spec`
 
-The route is the HTTP binding's default mapping for the reserved `benzene:spec` topic, and its query
-is that topic's request (wire-contracts §7). R5 names the Contract Document as
-`/benzene/spec?type=benzene&format=json`, and that is what the surface answers **by default** — a
-generator that follows the profile's documented path and asks for nothing must get the document the
-profile names, not a shape only this port can read.
+The route copies its `type` and `format` query parameters onto the `benzene:spec` request
+(contract-document §7). Absent, empty, `type=benzene` and `format=json` (case-insensitive) mean the
+Contract Document; any other type (`openapi`, `asyncapi`, …) or format is the topic's
+`not-implemented`, mapped to `501` — never a different document under a name that does not describe
+it. (For an OpenAPI document, use [`benzene-openapi`](openapi.md) and serve it where you like.)
 
-| `?type=` | Document |
-| --- | --- |
-| absent, empty, or `benzene` | the Contract Document (contract-document.md) |
-| `native` | this port's own [`ServiceSpec`](core.md#service-spec) payload, `{service, topics[, produces]}` — a port-extension type |
-| anything else (`openapi`, `asyncapi`, …) | `501 not-implemented` — never a different document under a name that does not describe it |
-
-`format` may be absent or `json`; any other format is `501 not-implemented`. Values compare
-case-insensitively. (For an OpenAPI document, use [`benzene-openapi`](openapi.md) and serve it where
-you like.)
-
-Left to itself the served document is projected from the `ServiceSpec`, with schemas written inline
-and this host's own knowledge folded in — `messageEndpoint` (`/benzene/invoke`), each topic's
-`httpMappings` from the router, and any `StandardPaths(transports=...)` you declared. Pass
-`contract=ContractDocument.derive(registry, ...)` to serve an authored document instead: that
-projection sees the handlers' declared types, so it can **name** each payload in
-`components.schemas` rather than inlining it.
-
-The reserved topic **`benzene:spec`** is answered on *any* transport by `spec_interception` (the same
-pattern as health and mesh interception), with the same request semantics as this route — the
-Contract Document by default, `{"type": "native"}` for the `ServiceSpec`, `not-implemented` otherwise
-(see [the service spec](core.md#service-spec)).
+The document carries this host's own knowledge — `messageEndpoint` (the envelope endpoint, absent when
+`invoke=False`) and each topic's `httpMappings` from the router — alongside the `ContractInfo`'s
+`transports`, because `application_from` derives it from the whole `AppDefinition`.
 
 The three cloud hosts drive their HTTP trigger through this same `BenzeneHttpApp`, so passing
 `standard_paths=` to `GcpFunctionsApp` / `AwsLambdaApp` / `AzureFunctionsApp` exposes the identical

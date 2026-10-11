@@ -43,7 +43,7 @@ so `pip install benzene-http` gives you `benzene.http` alongside the `benzene.co
 | Install | Import | You get | Depends on | .NET analog |
 |---|---|---|---|---|
 | `benzene-results` | `benzene.results` | `Result` + status vocabulary — the return type of a handler | — (zero deps) | `Benzene.Results` |
-| `benzene-core` | `benzene.core` | pipeline, registry, `@message`, DI, versioning, health checks, the `BenzeneMessage` envelope, in-process transport | `benzene-results` | `Benzene.Core*` + `Benzene.Dependencies` |
+| `benzene-core` | `benzene.core` | pipeline, registry, `@message`, DI, versioning, health checks, the `BenzeneMessage` envelope, in-process transport, the Contract Document | `benzene-results`, `rfc8785` | `Benzene.Core*` + `Benzene.Dependencies` |
 | `benzene-http` | `benzene.http` | inbound HTTP (ASGI) binding + status mapping | `benzene-core` | `Benzene.Http` |
 | `benzene-grpc` | `benzene.grpc` | Benzene↔gRPC status mapping + trailer rule + server/client transport (`[transport]`) | `benzene-core` (+ `grpcio`) | `Benzene.Grpc` |
 | `benzene-gcp` | `benzene.gcp` | Google Cloud Functions host (HTTP + Pub/Sub + egress) | `benzene-core`, `benzene-http` | `Benzene.GoogleCloud.Functions.*` |
@@ -338,12 +338,11 @@ running .NET Benzene service) is what "conformant" means — see the spec's
 13. **(done)** The Cloud Service Profile's well-known HTTP surfaces (transport-bindings §1; profile
     R3/R4/R5/R7) — `BenzeneHttpApp(standard_paths=StandardPaths(...))` exposes `/benzene/invoke` (the
     wire-envelope endpoint), `/benzene/health` (the `{isHealthy, healthChecks}` aggregate, 200/503), and
-    `/benzene/spec` (the registry-derived **Contract Document** — the cross-language format
-    `contract-document.md` specifies and every port's client generator parses — with this port's native
-    `ServiceSpec` payload still reachable at `?type=native`) under a configurable `/benzene/` prefix.
-    The schema derivation moved into `benzene.core` (shared by the spec doc and the mesh descriptor),
-    and the reserved `benzene:spec` topic is answered on any transport by `spec_interception` (the
-    Contract Document by default, `{"type": "native"}` for the native payload).
+    `/benzene/spec` (the **Contract Document** — the cross-language format `contract-document.md`
+    specifies and every port's client generator parses, derived once at the composition root from the
+    registry and the event/send declarations, with both cross-port hashes) under a configurable
+    `/benzene/` prefix. The reserved `benzene:spec` topic is answered on any transport by
+    `spec_interception`, and `GET /benzene/spec` runs that topic through the pipeline.
 14. **(done)** PyPI packaging — every package carries complete metadata (PEP 639 `license = "MIT"` with
     a bundled `LICENSE`, classifiers, pinned inter-package deps) and builds a clean sdist + wheel that
     passes `twine check`. A [`release`](.github/workflows/release.yml) workflow builds all nineteen

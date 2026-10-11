@@ -43,7 +43,7 @@ terminology (Kafka/SQS/SNS/EventBridge: the receiver is the "consumer").
 from benzene.core import Registry
 from benzene.mesh import OutboundRegistry, ServiceDescriptor, ServiceInfo
 
-outbound = OutboundRegistry().register("payments:capture", request_type=CapturePayment)
+outbound = OutboundRegistry().register_send("payments:capture", CapturePayment)
 
 descriptor = ServiceDescriptor.derive(
     registry,                                    # a benzene.core Registry — what this service consumes
@@ -100,22 +100,28 @@ ServiceInfo(
 
 ### `OutboundRegistry`
 
-Declares which topics a service **may send** (mesh.md §2.3) — the outbound counterpart to
-`benzene.core.Registry`'s inbound handler discovery: an explicit `(topic, version, request_type,
-response_type)` record, with no handler, since nothing here receives. This is what makes
-`ServiceDescriptor.produces` a **hard-coded contract** rather than an inference — a port must not
-attempt to derive it by scanning call sites or any other form of static analysis.
+Declares what a service puts on the wire — now in `benzene.core` (contract-document §3.3), re-exported
+here — as explicit records with no handler, since nothing here receives. Two kinds, split by who owns
+the contract: `register_event(topic, message_type)` for a topic this service publishes and defines,
+`register_send(topic, request_type, response_type=None)` for a message to a topic another party
+defines (leave `response_type` off for one-way). The Contract Document lists them as `events[]` and
+`sends[]`; the descriptor still folds both into its one `produces` list. A port must not infer them
+from call sites or any other static analysis.
 
 ```python
-from benzene.mesh import OutboundRegistry
+from benzene.core import OutboundRegistry
 
-outbound = OutboundRegistry()
-outbound.register("payments:capture", request_type=CapturePaymentRequest)
+outbound = (
+    OutboundRegistry()
+    .register_event("order:placed", OrderPlaced)
+    .register_send("payments:capture", CapturePaymentRequest)
+)
 ```
 
-Registering the same `(topic, version)` pair twice raises `DuplicateOutboundRegistrationError` — the
-same strictness inbound registration already has. No destination address, queue name, or topic ARN is
-needed: that's transport/deployment configuration, orthogonal to the contract this registers.
+Declaring one `(topic, version)` twice — as the same kind or as both — raises
+`DuplicateOutboundRegistrationError` at start-up; there is no kind-less `register`. No destination
+address, queue name, or topic ARN is needed: that's deployment configuration, orthogonal to the
+contract.
 
 ### `TopicDescriptor`
 
@@ -582,30 +588,30 @@ collector.query_fleet({})
 - `poll_once()` sweeps all sources concurrently and returns a `PollResult` per source; a down service is
   a failed result, never a broken sweep. A polled spec's produced topics fold into the collector exactly
   like its consumed ones, so the pull path draws provider edges as well as consumer edges (mesh.md §4).
-- **Either spec shape is read.** `{prefix}/spec` answers R5's
-  [Contract Document](http.md) (`requests[]` consumed, `events[]` produced) by default and this port's
-  native `{service, topics, produces}` payload at `?type=native`; `benzene.mesh.specdoc` reads both, so
-  a polled .NET, Go, or TypeScript service folds into the collector exactly like a Python one — where
-  reading only the native shape used to ingest it as an empty catalogue. Reserved `benzene:` topics are
-  dropped from either shape, so a service does not look different depending on which it served, and a
-  Contract Document's `$ref`s are resolved against its `components.schemas` on the way in (a reference
-  into a catalogue the collector never sees would compare as "the schema changed" on a class rename).
-  A `CallableServiceSource` whose `spec` callable returns a full `ServiceDescriptor.to_payload()` (as
-  the AWS Lambda mesh example's `benzene:mesh`-topic source does) is read the same way. Traces still
-  feed invocation/error stats, never graph membership, and every source composes with a push feed in
-  one collector.
+- **The Contract Document is read.** `{prefix}/spec` answers R5's
+  [Contract Document](http.md) in every port; `benzene.mesh.specdoc` reads it (`requests[]` consumed,
+  `events[]` ∪ `sends[]` produced), so a polled .NET, Go, or TypeScript service folds into the collector
+  exactly like a Python one. A document without `schemaDialect: "openapi-3.0"` is not one
+  (contract-document §1). `benzene:` entries are ignored, and `$ref`s are resolved against
+  `components.schemas` on the way in, a cycle cut with `{}` (a reference into a catalogue the
+  collector never sees would compare as "the schema changed" on a class rename). The drift signal is
+  the **served `registrationHash`**, carried on the register and the heartbeat — the poller computes no
+  hash of its own. A `CallableServiceSource` whose `spec` callable invokes the `benzene:spec` topic (as
+  the AWS Lambda mesh example's direct-invoke source does) is read the same way. Traces still feed
+  invocation/error stats, never graph membership, and every source composes with a push feed in one
+  collector.
 
 ## Exports
 
 `ServiceInfo`, `ServiceDescriptor`, `TopicDescriptor`, `OutboundRegistry`, `OutboundDefinition`,
-`DuplicateOutboundRegistrationError`, `MESH_TOPIC`, `Schema`, `json_schema`,
+`EventDeclaration`, `SendDeclaration`, `DuplicateOutboundRegistrationError`, `MESH_TOPIC`, `Schema`, `json_schema`,
 `MeshPoller`, `HttpServiceSource`, `CallableServiceSource`, `ServiceSource`, `PollResult`, `PollError`,
 `mesh_interception`, `DescriptorSource`, `trace_middleware`, `TraceEvent`, `TraceExporter`,
 `InMemoryTraceExporter`, `QueueTraceExporter`, `parse_traceparent`, `new_trace_id`, `new_span_id`,
 `current_traceparent`, `with_trace_propagation`, `TracePropagatingMessageSender`,
 `MeshFeedSender`, `Heartbeat`, `Issue`, `IssueBatch`, `IssueAggregator`, `classify`,
-`issue_fingerprint`, `CLASSIFICATIONS`, `is_spec_document`, `is_contract_document`,
-`is_native_document`, `spec_service`, `spec_topics`, `spec_produces`,
+`issue_fingerprint`, `CLASSIFICATIONS`, `is_contract_document`, `spec_service`, `spec_topics`,
+`spec_produces`, `spec_registration_hash`,
 `MeshCollector`, `collector_registry`, `CollectorError`,
 `CollectorBadRequest`, `CollectorNotFound`, `REGISTER_TOPIC`, `HEARTBEAT_TOPIC`, `TRACES_TOPIC`,
 `ISSUES_TOPIC`, `QUERY_FLEET_TOPIC`, `QUERY_SERVICE_TOPIC`, `QUERY_TOPIC_TOPIC`, `QUERY_TRACE_TOPIC`,

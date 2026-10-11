@@ -356,83 +356,84 @@ successful health query — and the verdict is the report's `isHealthy` (wire-co
 is exactly the shape the mesh [`Heartbeat`](mesh.md) reports, so a service runs its checks once and
 feeds both the health endpoint and the heartbeat: `report = await checks.run()`.
 
-## Service spec
+## Self-description: the Contract Document
 
-A `ServiceSpec` is a service's **derived** specification — `{service, topics}` with each topic's
-version and request/response JSON schema — projected from the registry, so it is always the truth of
-what the service serves (never hand-maintained). It is the transport-neutral core of the profile's
-`/benzene/spec` surface (Cloud Service Profile R5).
+A service describes itself with **one** document — the `ContractDocument` that `contract-document.md`
+specifies, the Cloud Service Profile's R5 document, and the one input every language's client
+generator parses. It is **derived** from the registrations, never hand-maintained, and derived
+**once, at the composition root**: declare a `ContractInfo` on the `AppDefinition` and
+`application_from` derives it and installs the `benzene:spec` answer.
 
 ```python
-from benzene.core import ServiceSpec, spec_interception, SPEC_TOPIC, MiddlewarePipeline
+from benzene.core import AppDefinition, ContractInfo, NoPayload, OutboundRegistry, schema_name
 
-spec = ServiceSpec.derive(registry, service="orders")
-spec.to_payload()   # {"service": "orders", "topics": [{"id": ..., "requestSchema": {...}, ...}]}
-
-# Answer the reserved benzene:spec topic on any transport (same pattern as health/mesh interception):
-pipeline = MiddlewarePipeline().use(spec_interception(spec))
+outbound = (
+    OutboundRegistry()
+    .register_event("order:placed", OrderPlaced)              # a topic this service defines
+    .register_send("payment:take", TakePayment)               # someone else's topic, one-way
+    .register_send("inventory:reserve", Reserve, Reservation, version="v2")  # ...with a reply
+)
+AppDefinition(
+    registry=registry,
+    router=router,                                # contributes each topic's httpMappings
+    standard_paths=StandardPaths(),               # contributes messageEndpoint, GET /benzene/spec
+    outbound=outbound,
+    contract=ContractInfo("orders", service_version="1.4.2", version_scheme="semver",
+                          description="Order intake", transports=("http", "sqs")),
+)
 ```
 
-`spec_interception(spec)` short-circuits the reserved `benzene:spec` topic (version ignored), so a
-service serves its spec over gRPC or a cloud queue too. The topic's request is the optional
-`{"type", "format"}` of wire-contracts §7: an absent, empty or `null` body, or `{}`, answers the
-**Contract Document** below (projected from `spec`, or exactly the `contract=` document you pass — give
-it the same source as `StandardPaths(contract=...)` and the topic and the HTTP route answer the
-identical document); `{"type": "native"}` answers this `ServiceSpec` payload, a port-extension type;
-and any other type, or a format other than `json`, answers `not-implemented` — never a different
-document. `select_spec_document(type, format)` is that decision, shared with the HTTP
-[`/benzene/spec`](http.md) route. Pass a callable to `spec_interception` / `StandardPaths(spec=...)` to
-re-derive per request (e.g. to reflect a degraded subsystem).
+```json
+{"schemaDialect": "openapi-3.0", "service": "orders", "serviceVersion": "1.4.2",
+ "versionScheme": "semver", "description": "Order intake", "messageEndpoint": "/benzene/invoke",
+ "transports": ["http", "sqs"], "contractHash": "sha256:…", "registrationHash": "sha256:…",
+ "requests": [{"topic": "orders:place", "httpMappings": [{"method": "POST", "path": "/orders"}],
+               "request": {"$ref": "#/components/schemas/PlaceOrder"},
+               "response": {"$ref": "#/components/schemas/OrderDto"}}],
+ "events": [{"topic": "order:placed", "message": {"$ref": "#/components/schemas/OrderPlaced"}}],
+ "sends": [{"topic": "payment:take", "request": {"$ref": "#/components/schemas/TakePayment"}}],
+ "components": {"schemas": {"PlaceOrder": {"type": "object",
+     "properties": {"sku": {"type": "string"}, "quantity": {"type": "integer"}}, "required": ["sku"]}}}}
+```
+
+- **Events and sends** are split by *who owns the contract*: an event is a topic this service
+  publishes and defines (`register_event`, in `contractHash`); a send is a message to a topic another
+  party defines (`register_send`, only in `registrationHash`). One `(topic, version)` declared as both
+  is a start-up error, and there is no kind-less `register`. `OutboundRegistry` lives in `benzene.core`
+  (`benzene.mesh` re-exports it).
+- **Responses.** A handler declared `response_type=NoPayload` has no `response` (no payload); an
+  undeclared `response_type` is `{}` (a payload of any shape). A send with no `response_type` is
+  one-way.
+- **Schemas** are OpenAPI 3.0 Schema Objects derived from the dataclasses (`contract_schema.py`):
+  `T | None` is `nullable: true`, or the `{"type", "nullable": true, "allOf": [{"$ref"}]}` wrapper for
+  a named type; every dataclass and `str`/`int` enum is hoisted into `components.schemas`; `format`
+  where it is known (`date-time`, `double`, `byte`); a field is `required` iff it has no default. A
+  pydantic model derives to `{}` (a recorded gap).
+- **Names** are the type's `__name__`, or the name declared with `@schema_name("…")`; a generic
+  instance puts its arguments first (`Page[Order]` → `OrderPage`). Two different types claiming one
+  name fail derivation — so building the app — with `ComponentNameCollisionError`, naming both types,
+  the topics that use them and the remedy. No suffixing, no first-wins.
+- **No `benzene:` topic** is ever listed, and no example is synthesized.
+- **Both hashes** (`contract_hash` / `registration_hash`, `contract_hash.py`, RFC 8785 + SHA-256 over
+  the dereferenced projection of §6) are always in the document; a generated client embeds the
+  `contractHash` and a drift check compares it with the served one.
+
+`ContractDocument.derive(registry, service=..., outbound=..., message_endpoint=..., transports=...,
+http_mappings=...)` is the same derivation for a host that does not use an `AppDefinition`.
+
+### The `benzene:spec` topic
+
+`spec_interception(document)` answers the reserved `benzene:spec` topic (version ignored) on any
+transport. Its request is the optional `{"type", "format"}` of contract-document §7: an absent, empty
+or `null` body, or `{}`, means `benzene`/`json` and answers the document; any other type or format
+answers `not-implemented` — never a different document. Install it after any authentication
+middleware so the topic runs the same pipeline as every other topic; `application_from` does exactly
+that. `GET /benzene/spec` reaches it through the pipeline too ([http](http.md)).
 
 The reserved reachability probe **`benzene:ping`** (`PING_TOPIC`) needs no wiring: the message router
 answers it `ok` with no payload on every transport, so a queue or function health check that sends it
-is never a `not-found` the transport redelivers. The mesh [`ServiceDescriptor`](mesh.md) is a richer projection of the same registry
-(adding identity, placement, and a contract hash); `ServiceSpec` is the minimal profile document and
-needs only `benzene.core`. Both share one schema derivation, `json_schema`.
-
-## Contract document
-
-A `ContractDocument` is the **cross-language** projection of the same registry — the shape
-`contract-document.md` specifies, which the Cloud Service Profile's R5 requires a service to serve at
-`/benzene/spec` and which every language's client generator parses:
-
-```json
-{"openapi": "3.0.1", "info": {"title": "orders", "description": "", "version": "1.0.0"},
- "messageEndpoint": "/benzene/invoke", "transports": ["http", "sqs"],
- "requests": [{"topic": "orders:place", "httpMappings": [{"method": "POST", "path": "/orders"}],
-               "request": {"$ref": "#/components/schemas/PlaceOrder"}, "response": {"$ref": "..."}}],
- "events": [{"topic": "order:placed", "message": {"$ref": "..."}}],
- "components": {"schemas": {"PlaceOrder": {"type": "object", "properties": {"sku": {"type": "string"}}}}}}
-```
-
-```python
-from benzene.core import ContractDocument, HttpMapping
-
-document = ContractDocument.derive(
-    registry,
-    service="orders",
-    version="1.0.0",
-    produces=outbound,                       # -> events[], same three forms ServiceSpec.derive takes
-    message_endpoint="/benzene/invoke",
-    transports=("http", "sqs"),
-    http_mappings={("orders:place", ""): [HttpMapping("POST", "/orders")]},
-)
-document.to_payload()
-```
-
-- **`derive(registry, ...)`** sees the handlers' declared Python types, so each dataclass payload is
-  named once in `components.schemas` and referenced by `$ref` — that is what lets a generator emit one
-  named type per payload instead of one anonymous type per topic. An untyped (`dict`) handler has no
-  name worth publishing, so its schema is written inline, which §2 allows.
-- **`from_spec(spec, ...)`** projects an already-derived `ServiceSpec`. The types are gone by then, so
-  every schema is inline and the catalogue is empty. This is what `/benzene/spec` serves when you wired
-  only `spec=`; it costs a generator the payload *names*, not any of the contract.
-
-Emission follows §1's presence column rather than whatever is convenient: `transports` is **omitted**
-when empty (never `[]`), `info` writes empty strings rather than going missing, `messageEndpoint` is
-absent when the service exposes none (consumers feature-detect send capability on it), and
-`requests`/`events`/`components` are always present even when empty. A `version` is omitted rather than
-written as `""`, and `reserved` is written only when true.
+is never a `not-found` the transport redelivers. The mesh [`ServiceDescriptor`](mesh.md) is a separate,
+older projection of the same registry, kept until it is retired; it uses `json_schema`.
 
 ## Transport metadata
 
@@ -598,13 +599,16 @@ make a blocking SDK call safe: sharing one event loop works because the consumer
 `resolve_version`, `read_message_metadata`, `MetadataKeys`, `DEFAULT_METADATA_KEYS`,
 `DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `MessageSender`, `with_retry`, `with_correlation_id`,
 `RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `SchemaCasters`,
-`casting_handler`, `Cast`, `NoCastPathError`, `ServiceSpec`, `TopicSpec`, `spec_interception`,
-`select_spec_document`, `resolve_spec`, `SPEC_TYPE_BENZENE`, `SPEC_TYPE_NATIVE`, `SPEC_FORMAT_JSON`,
+`casting_handler`, `Cast`, `NoCastPathError`, `spec_interception`,
+`select_spec_document`, `SPEC_TYPE_BENZENE`, `SPEC_FORMAT_JSON`,
 `PING_TOPIC`, `Settlement`, `SettlementDefaults`, `OneWayOutcome`, `dispatch_one_way`, `redelivers`,
 `AT_LEAST_ONCE`, `QUEUE`, `ONE_SHOT`, `STREAM`, `REQUEST_RESPONSE`, `REDELIVER`, `SKIP_AND_CONTINUE`,
 `NOT_APPLICABLE`, `DEFAULT_HEADERS_KEY`,
-`ContractDocument`, `ContractRequest`, `ContractEvent`, `ContractSource`, `HttpMapping`,
-`CONTRACT_OPENAPI`, `is_reserved_topic`, `resolve_contract`,
+`ContractDocument`, `ContractRequest`, `ContractEvent`, `ContractSend`, `ContractInfo`, `HttpMapping`,
+`SCHEMA_DIALECT`, `VERSION_SCHEMES`, `NoPayload`, `derive_contract`, `is_reserved_topic`,
+`SupportsHttpMappings`, `SupportsMessageEndpoint`, `contract_hash`, `registration_hash`,
+`schema_name`, `declared_schema_name`, `ComponentNameCollisionError`, `OutboundRegistry`,
+`EventDeclaration`, `SendDeclaration`, `OutboundDefinition`, `DuplicateOutboundRegistrationError`,
 `SPEC_TOPIC`, `json_schema`, `Schema`, `to_jsonable`, `to_request`, `Pipelines`,
 `InProcessMessageSender`, `InProcessFanOutSender`, `DuplicatePipelineError`, `PipelineNotFoundError`,
 `use_instance`, `WorkerHost`, `StopSignal`, `Worker`, `background_worker`, `NoWorkersError`,

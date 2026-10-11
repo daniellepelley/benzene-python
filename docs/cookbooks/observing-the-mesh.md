@@ -40,12 +40,12 @@ page every Benzene port vendors) fetches by relative path and renders. No UI con
 
 `MeshPoller` folds each source's spec + health into the collector. `HttpServiceSource` GET-polls
 `{prefix}/spec` and `{prefix}/health` (default prefix `/benzene`); a source that is down is a failed
-`PollResult`, never a broken sweep. `MeshPoller` forwards a polled spec's `produces` into the collector
-exactly like `topics` — but the default `/benzene/spec` surface (`benzene.core.ServiceSpec`, the Cloud
-Service Profile document) has no `produces` field, so a plain HTTP-polled fleet gets consumer edges from
-the pull and no provider edges from it. A source whose spec instead serves a full
-`ServiceDescriptor.to_payload()` (e.g. a `CallableServiceSource` wrapping a reserved-topic invoke, as
-the AWS Lambda mesh example does) gives the pull provider edges too.
+`PollResult`, never a broken sweep. `/benzene/spec` is every port's Contract Document: its `requests`
+are what a service consumes and its `events` and `sends` what it produces, so a polled fleet gets
+provider edges as well as consumer edges from the pull — for every topic the services declare with
+`register_event`/`register_send`. The poller carries each document's served `registrationHash` as the
+drift signal. A `CallableServiceSource` can reach the same document over any transport by invoking
+the `benzene:spec` topic (as the AWS Lambda mesh example does).
 
 ```python
 # poll.py
@@ -215,9 +215,9 @@ to feed that graph's invocation/error stats — and the **query** read models ar
   inspect `poll_once()`'s results for the `error`. Check each `baseUrl` actually serves
   `/benzene/spec` + `/benzene/health` (the `prefix` is configurable per source).
 - **Topology edges are missing.** The call graph is **declared**, not derived from a trace — an edge
-  needs the calling service to register with `produces` naming the topic (via `ServiceDescriptor.derive(
-  ..., produces=outbound_registry)` on push, or a polled spec that carries `produces`). Confirm the
-  calling service actually declares that outbound registration; `errorRate` on an edge that does exist
+  needs the calling service to declare the topic on its `OutboundRegistry` (`register_send` or
+  `register_event`), read by `ServiceDescriptor.derive(..., outbound)` on push and by the Contract
+  Document's `events`/`sends` on a pull. Confirm the calling service actually declares it; `errorRate` on an edge that does exist
   still needs `trace_middleware` enabled and `traceparent` propagated (`with_trace_propagation`) so the
   matching traces reach the collector.
 - **Latency / rate numbers are blank.** Expected: those need a metrics feed the pull + trace catalog
