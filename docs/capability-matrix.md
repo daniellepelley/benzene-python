@@ -103,7 +103,7 @@ the acknowledgement and the transport's own retry/redrive configuration decides 
 | Azure Functions Event Hub | `benzene-azure` · `handle_event_hub` | `eventhub` · stream (redeliver) | redeliver (raises¹) | redeliver (raises¹) | the delivered batch; stops at the first failing event, and the batch is redelivered from its checkpoint |
 | Azure Functions Cosmos DB change feed | `benzene-azure` · `handle_cosmos` | `cosmosdb-changefeed` · stream (redeliver) | redeliver (raises¹) | redeliver (raises¹) | the delivered batch; stops at the first failing document |
 | Azure Functions Event Grid | `benzene-azure` · `handle_event_grid` | `event-grid` · one-shot | redeliver (raises¹) | redeliver (raises¹) | the invocation's event (a batch stops at the first failing event) |
-| Azure Functions Blob Storage | `benzene-azure` · `handle_blob` | *not named by the fixture*² · one-shot | redeliver (raises¹) | redeliver (raises¹) | the notification |
+| Azure Functions Blob Storage | `benzene-azure` · `handle_blob` | `blob-storage` · one-shot | redeliver (raises¹) | redeliver (raises¹) | the notification |
 | Azure Functions Timer | `benzene-azure` · `handle_timer` | `timer` · one-shot | raises¹ — the run is recorded as failed for the host's retry policy; there is no message | raises¹ | the tick |
 | GCP Cloud Functions Pub/Sub | `benzene-gcp` · `GcpFunctionsApp.handle_pubsub` | `pubsub` · queue | redeliver (raises¹) | redeliver (raises¹) | the message |
 
@@ -119,9 +119,6 @@ retry-on-failure setting — is trigger configuration Benzene does not set and t
 from source. For the checkpointing Functions triggers (Event Hub, Cosmos DB) and Pub/Sub-triggered
 functions in particular, confirm retries are enabled.
 
-² The Blob Storage trigger is a binding this port ships that `settlementDefaults` does not list; the
-conformance runner records it in `UNNAMED_SETTLEMENT_BINDINGS` (with the reason) rather than editing
-the fixture, and it is reported upstream for the fixture.
 
 **No binding, so nothing to settle (not implemented):** a self-hosted Azure Service Bus, Event Hub or
 Cosmos DB worker; an Azure Functions Kafka trigger; a self-hosted Pub/Sub subscriber.
