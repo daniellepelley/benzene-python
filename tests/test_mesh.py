@@ -37,6 +37,7 @@ from benzene.mesh import (
     TraceEvent,
     classify,
     current_traceparent,
+    current_tracestate,
     issue_fingerprint,
     parse_traceparent,
     registration_document,
@@ -380,6 +381,86 @@ def test_outbound_call_forwards_the_current_traceparent() -> None:
     # same trace id as the inbound header (this service joined it), a fresh span for this hop
     assert captured["traceparent"].split("-")[1] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert current_traceparent() is None  # the contextvar is reset after the invocation
+
+
+def test_outbound_call_carries_the_inbound_tracestate_forward_unchanged() -> None:
+    # M2 (mesh.md §7.1): traceparent *and* tracestate (wire-contracts §2) on every outbound message.
+    captured: dict = {}
+
+    class _FakeSender:
+        async def send_message(self, topic, message, headers=None):
+            captured.update(headers or {})
+            return Result.ok()
+
+    outbound = with_trace_propagation(_FakeSender())
+
+    async def handler(_request: dict) -> Result:
+        await outbound.send_message("downstream:topic", {})
+        return Result.ok()
+
+    pipeline = MiddlewarePipeline().use(trace_middleware(InMemoryTraceExporter(), service="svc"))
+    app = BenzeneMessageApplication(Registry().register("do:thing", handler), pipeline)
+    inbound = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "tracestate": "vendor=abc,other=1",
+    }
+    asyncio.run(app.handle({"topic": "do:thing", "headers": inbound, "body": "{}"}))
+    assert captured["tracestate"] == "vendor=abc,other=1"
+    assert current_tracestate() is None  # reset after the invocation
+
+    # An invalid traceparent starts a fresh trace, and its tracestate is discarded with it (W3C).
+    captured.clear()
+    inbound["traceparent"] = "00-not-a-valid-header-01"
+    asyncio.run(app.handle({"topic": "do:thing", "headers": inbound, "body": "{}"}))
+    assert "traceparent" in captured
+    assert "tracestate" not in captured
+
+
+def test_a_published_event_carries_the_trace_context_to_every_subscriber() -> None:
+    # M2 covers published events, not only sends: in this port an event publisher is a MessageSender
+    # too, so the same with_trace_propagation wrapper forwards the context on a publish. Here a
+    # fan-out (the in-process SNS equivalent) delivers one event to two subscriber pipelines.
+    from benzene.core import InProcessFanOutSender, Pipelines
+
+    seen: dict[str, dict] = {}
+
+    def _subscriber(name: str) -> BenzeneMessageApplication:
+        async def capture(context, next) -> None:  # noqa: A002 - spec name
+            seen[name] = dict(context.headers)
+            await next()
+
+        async def on_placed(_event: dict) -> Result:
+            return Result.ok()
+
+        return BenzeneMessageApplication(
+            Registry().register("order:placed", on_placed), MiddlewarePipeline().use(capture)
+        )
+
+    pipelines = Pipelines().add("billing", _subscriber("billing")).add("shipping", _subscriber("shipping"))
+    publisher = with_trace_propagation(InProcessFanOutSender(pipelines, "billing", "shipping"))
+
+    async def place(_request: dict) -> Result:
+        await publisher.send_message("order:placed", {"id": "o-1"})  # a declared event, published
+        return Result.ok()
+
+    exporter = InMemoryTraceExporter()
+    orders = BenzeneMessageApplication(
+        Registry().register("order:place", place),
+        MiddlewarePipeline().use(trace_middleware(exporter, service="orders")),
+    )
+    inbound = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "tracestate": "vendor=abc",
+    }
+    asyncio.run(orders.handle({"topic": "order:place", "headers": inbound, "body": "{}"}))
+
+    (publishing_span,) = exporter
+    for name in ("billing", "shipping"):
+        headers = seen[name]
+        _, trace_id, parent_id, _ = headers["traceparent"].split("-")
+        assert trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"  # the subscriber joins the trace...
+        assert parent_id == publishing_span.span_id  # ...as a child of the publishing invocation
+        assert headers["tracestate"] == "vendor=abc"
 
 
 def test_composed_outbound_stack_shares_one_correlation_id_across_retries() -> None:

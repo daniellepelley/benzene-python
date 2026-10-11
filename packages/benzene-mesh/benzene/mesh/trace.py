@@ -31,6 +31,13 @@ _CURRENT_TRACE: contextvars.ContextVar[tuple[str, str] | None] = contextvars.Con
     "benzene_current_trace", default=None
 )
 
+# The inbound W3C ``tracestate`` of the trace the current invocation joined, carried forward unchanged
+# on outbound messages (wire-contracts §2; mesh.md §7.1 M2). ``None`` when there was none, or when the
+# inbound ``traceparent`` was invalid (a fresh trace has no vendor state to carry).
+_CURRENT_TRACESTATE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "benzene_current_tracestate", default=None
+)
+
 
 def current_traceparent() -> str | None:
     """The W3C ``traceparent`` for the invocation currently running, or ``None`` outside a trace."""
@@ -39,6 +46,13 @@ def current_traceparent() -> str | None:
         return None
     trace_id, span_id = trace
     return f"00-{trace_id}-{span_id}-01"
+
+
+def current_tracestate() -> str | None:
+    """The W3C ``tracestate`` the running invocation's trace carries forward, or ``None``."""
+    if _CURRENT_TRACE.get() is None:
+        return None
+    return _CURRENT_TRACESTATE.get()
 
 _HEX = re.compile(r"[0-9a-f]+")
 _ALL_ZERO = re.compile(r"0+")
@@ -187,9 +201,15 @@ def trace_middleware(
         start = time.perf_counter()
 
         token = _CURRENT_TRACE.set((trace_id, span_id))  # so outbound calls can forward this span
+        # tracestate is carried forward unchanged — only for a joined trace (W3C: an invalid
+        # traceparent discards the accompanying tracestate).
+        state_token = _CURRENT_TRACESTATE.set(
+            (context.headers.get("tracestate") or None) if parsed else None
+        )
         try:
             await next()
         finally:
+            _CURRENT_TRACESTATE.reset(state_token)
             _CURRENT_TRACE.reset(token)
             status = context.result.status if context.result is not None else Status.UNEXPECTED_ERROR
             event = TraceEvent(
@@ -213,26 +233,39 @@ def trace_middleware(
 
 
 class TracePropagatingMessageSender:
-    """Wraps a :class:`~benzene.core.MessageSender`, forwarding the current ``traceparent`` (mesh.md §3).
+    """Wraps a :class:`~benzene.core.MessageSender`, forwarding the current trace context (mesh.md §3, M2).
 
-    When a handler running under :func:`trace_middleware` publishes a message, this injects
-    ``traceparent: 00-<traceId>-<spanId>-01`` for the invocation's span, so the downstream service joins
-    the same trace and the collector can derive the consumer edge. A ``traceparent`` the caller already
-    set is left untouched; outside a trace, nothing is added.
+    When a handler running under :func:`trace_middleware` sends a message — a send, one-way or with a
+    reply, or a published event: in this port both go through the one ``MessageSender`` port, so wrap
+    the event publisher as well as the send client — this injects ``traceparent:
+    00-<traceId>-<spanId>-01`` for the invocation's span, plus the joined trace's ``tracestate``
+    unchanged, so the downstream service joins the same trace and the collector can observe the
+    declared edge being exercised (mesh.md §4.2). A ``traceparent`` the caller already set is left
+    untouched (and then no ``tracestate`` is added to it); outside a trace, nothing is added.
     """
 
-    def __init__(self, inner: Any, *, header: str = "traceparent") -> None:
+    def __init__(
+        self, inner: Any, *, header: str = "traceparent", state_header: str = "tracestate"
+    ) -> None:
         self._inner = inner
         self._header = header
+        self._state_header = state_header
 
     async def send_message(
         self, topic: str, message: Any, headers: dict[str, str] | None = None
     ) -> Result:
         out = dict(headers or {})
         traceparent = current_traceparent()
-        if traceparent and not any(key.lower() == self._header.lower() for key in out):
+        if traceparent and not _has_header(out, self._header):
             out[self._header] = traceparent
+            tracestate = current_tracestate()
+            if tracestate and not _has_header(out, self._state_header):
+                out[self._state_header] = tracestate
         return await self._inner.send_message(topic, message, out)
+
+
+def _has_header(headers: dict[str, str], name: str) -> bool:
+    return any(key.lower() == name.lower() for key in headers)
 
 
 def with_trace_propagation(inner: Any, **options: Any) -> TracePropagatingMessageSender:
