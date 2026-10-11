@@ -3,13 +3,16 @@
 A service projects its handler registry and its outbound declarations into one document::
 
     {"schemaDialect": "openapi-3.0", "service": "orders", "serviceVersion": "1.4.2",
-     "versionScheme": "semver", "description": "...", "messageEndpoint": "/benzene/invoke",
+     "versionScheme": "semver", "description": "...", "runtime": "python",
+     "placement": {"cloud": "aws"}, "messageEndpoint": "/benzene/invoke",
      "transports": ["http", "sqs"], "contractHash": "sha256:...", "registrationHash": "sha256:...",
      "requests": [...], "events": [...], "sends": [...], "components": {"schemas": {...}}}
 
 It is what the reserved ``benzene:spec`` topic answers with (:func:`spec_interception`), what
-``GET /benzene/spec`` serves (through the same pipeline), the profile's R5 document, and the one
-input every language's client generator reads. The schemas are OpenAPI 3.0 Schema Objects
+``GET /benzene/spec`` serves (through the same pipeline), the profile's R5 document, the body a
+mesh-enabled service registers with a collector (mesh.md §2), and the one input every language's
+client generator reads. The deployment-side fields — ``runtime``, ``placement``, ``profile`` and
+``degraded`` — sit outside both hashes, so identity and placement never change them. The schemas are OpenAPI 3.0 Schema Objects
 (:mod:`benzene.core.contract_schema`); the document itself is not an OpenAPI document.
 
 ``requests[]`` is one entry per registered handler; ``events[]`` and ``sends[]`` come from an
@@ -57,6 +60,12 @@ NoPayload: type = type(None)
 #: The service-version comparison schemes (service-versions.md §2).
 VERSION_SCHEMES = frozenset({"integer", "semver", "lexicographic"})
 
+#: This port's ``runtime`` value (contract-document.md §1).
+RUNTIME = "python"
+
+#: The members a producer may name in ``degraded`` — the ones it could not determine (§1).
+DEGRADABLE_MEMBERS = ("requests", "events", "sends")
+
 
 @dataclass(frozen=True)
 class HttpMapping:
@@ -92,6 +101,14 @@ class ContractInfo:
     the self-description on: the document is derived at the composition root and ``benzene:spec``
     answers with it. ``transports`` lists every transport this service receives messages over —
     declared, not detected, because no one host sees all of them.
+
+    ``placement`` is where the service runs — ``{"cloud": "aws" | "azure" | "gcp" | "self-hosted"}``,
+    plus ``region`` only where the platform documents how to know it (never guessed). ``runtime`` is
+    the implementing port. ``profile`` is a conformance-profile self-check
+    (``{"name": "cloud-service", "missing"?: [...]}`` — ``benzene.mesh`` evaluates one), and
+    ``degraded`` names the members (``requests``, ``events``, ``sends``) this service could not
+    determine. All four ride on the document outside its hashes (contract-document §1), so the
+    document ``benzene:spec`` serves and the one a mesh registration carries are the same.
     """
 
     service: str
@@ -99,6 +116,10 @@ class ContractInfo:
     version_scheme: str = ""
     description: str = ""
     transports: tuple[str, ...] = ()
+    placement: Mapping[str, str] | None = None
+    runtime: str = RUNTIME
+    profile: Mapping[str, Any] | None = None
+    degraded: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -165,7 +186,12 @@ class ContractSend:
 
 @dataclass(frozen=True)
 class ContractDocument:
-    """A service's Contract Document. Build it with :meth:`derive`; serve :meth:`to_payload`."""
+    """A service's Contract Document. Build it with :meth:`derive`; serve :meth:`to_payload`.
+
+    ``runtime``, ``placement``, ``profile`` and ``degraded`` are the deployment-side fields
+    (contract-document §1), declared on :class:`ContractInfo`: outside both hashes, and carried
+    alike by the served document and the mesh register body (mesh.md §2).
+    """
 
     service: str
     service_version: str = ""
@@ -177,6 +203,18 @@ class ContractDocument:
     schemas: Mapping[str, Schema] = field(default_factory=dict)
     message_endpoint: str | None = None
     transports: tuple[str, ...] = ()
+    runtime: str = ""
+    placement: Mapping[str, str] | None = None
+    profile: Mapping[str, Any] | None = None
+    degraded: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        unknown = [member for member in self.degraded if member not in DEGRADABLE_MEMBERS]
+        if unknown:
+            raise ValueError(
+                f"degraded names {unknown}; only {list(DEGRADABLE_MEMBERS)} can be undetermined "
+                "(contract-document §1)"
+            )
 
     @classmethod
     def derive(
@@ -191,6 +229,10 @@ class ContractDocument:
         message_endpoint: str | None = None,
         transports: Sequence[str] = (),
         http_mappings: Mapping[tuple[str, str], Sequence[HttpMapping]] | None = None,
+        runtime: str = "",
+        placement: Mapping[str, str] | None = None,
+        profile: Mapping[str, Any] | None = None,
+        degraded: Sequence[str] = (),
     ) -> ContractDocument:
         """Project a handler registry and outbound declarations into a Contract Document.
 
@@ -288,6 +330,10 @@ class ContractDocument:
             schemas=schemas,
             message_endpoint=message_endpoint,
             transports=tuple(transports),
+            runtime=runtime,
+            placement=dict(placement) if placement else None,
+            profile=dict(profile) if profile else None,
+            degraded=tuple(dict.fromkeys(degraded)),
         )
 
     @cached_property
@@ -309,6 +355,14 @@ class ContractDocument:
             payload["versionScheme"] = self.version_scheme
         if self.description:
             payload["description"] = self.description
+        if self.runtime:
+            payload["runtime"] = self.runtime
+        if self.placement:
+            payload["placement"] = dict(self.placement)
+        if self.profile:
+            payload["profile"] = dict(self.profile)
+        if self.degraded:  # omitted when empty
+            payload["degraded"] = list(self.degraded)
         # Absent when there is no envelope endpoint: a consumer feature-detects send capability on
         # its presence and never assumes a default path.
         if self.message_endpoint is not None:
@@ -414,6 +468,10 @@ def derive_contract(
         ),
         transports=info.transports,
         http_mappings=router.http_mappings() if isinstance(router, SupportsHttpMappings) else None,
+        runtime=info.runtime,
+        placement=info.placement,
+        profile=info.profile,
+        degraded=info.degraded,
     )
 
 

@@ -22,6 +22,8 @@ from .casting import Cast, NoCastPathError, SchemaCasters, casting_handler
 from .clients import MessageSender
 from .context import Context
 from .contract import (
+    DEGRADABLE_MEMBERS,
+    RUNTIME,
     SCHEMA_DIALECT,
     SPEC_FORMAT_JSON,
     SPEC_TOPIC,
@@ -203,6 +205,8 @@ __all__ = [
     "SCHEMA_DIALECT",
     "SPEC_FORMAT_JSON",
     "SPEC_TOPIC",
+    "DEGRADABLE_MEMBERS",
+    "RUNTIME",
     "SPEC_TYPE_BENZENE",
     "VERSION_SCHEMES",
     "ComponentNameCollisionError",
