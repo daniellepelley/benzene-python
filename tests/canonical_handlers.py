@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from benzene.core import Registry, message
+from benzene.core import Handler, Registry, message
 from benzene.mesh import OutboundRegistry
 from benzene.results import BenzeneError, ProblemDetails, Result, Status, is_successful
 
@@ -81,6 +81,50 @@ async def problem_handler(request: ProblemRequest) -> Result:
     return Result.validation_error(error)
 
 
+@message("conformance:versioned", version="v1", default=True)
+async def versioned_v1(_request: dict) -> Result:
+    """``conformance:versioned`` at ``v1``, the topic's declared default handler (conformance/README)."""
+    return Result.ok({"version": "v1"})
+
+
+@message("conformance:versioned", version="v2")
+async def versioned_v2(_request: dict) -> Result:
+    """``conformance:versioned`` at ``v2`` — reached only by ``benzene-version: v2``."""
+    return Result.ok({"version": "v2"})
+
+
+def validate_handler() -> Handler | None:
+    """``conformance:validate``, validated through this port's own integration — the Pydantic
+    adapter — or ``None`` when pydantic is not installed (its cases are then ``requires``-skipped).
+
+    Rules (conformance/README.md): ``name`` non-empty, and every ``items[].sku`` present and
+    non-empty. The handler body does no checking of its own: that is the integration's job.
+    """
+    try:
+        from benzene.pydantic import validated
+        from pydantic import BaseModel, Field
+    except ImportError:
+        return None
+
+    class ValidateItem(BaseModel):
+        sku: str = Field(min_length=1)
+
+    class ValidateRequest(BaseModel):
+        name: str = Field(min_length=1)
+        items: list[ValidateItem] = Field(default_factory=list)
+
+    @message("conformance:validate")
+    @validated(ValidateRequest)
+    async def validate(_request: ValidateRequest) -> Result:
+        return Result.ok()
+
+    return validate
+
+
+#: Whether this environment can run the ``"requires": "validation"`` cases.
+VALIDATION_AVAILABLE = validate_handler() is not None
+
+
 @message("conformance:panic")
 async def panic(request: dict) -> Result:
     """Throws unconditionally — pins that a handler panic is traced as ``service-unavailable``."""
@@ -111,6 +155,16 @@ def register_canonical_with_problem(registry: Registry) -> Registry:
     the registry the descriptor is derived from. The same split .NET's runner makes.
     """
     return register_canonical(registry).add(problem_handler)
+
+
+def register_all_canonical(registry: Registry) -> Registry:
+    """Every canonical handler the envelope and problem-details cases run against (README): greet,
+    status, problem, versioned (v1 default + v2), and validate when the integration is installed."""
+    register_canonical_with_problem(registry).add(versioned_v1).add(versioned_v2)
+    validate = validate_handler()
+    if validate is not None:
+        registry.add(validate)
+    return registry
 
 
 def register_with_panic(registry: Registry) -> Registry:

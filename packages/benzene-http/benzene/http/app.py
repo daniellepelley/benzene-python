@@ -23,19 +23,22 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import parse_qsl
 
 from benzene.core import (
+    REQUEST_RESPONSE,
     AppDefinition,
     BenzeneMessageApplication,
     Container,
     HttpMapping,
     MiddlewarePipeline,
     Registry,
+    SettlementDefaults,
     application_from,
     encode_response,
     error_payload,
+    redelivers,
     resolve_version,
     select_spec_document,
 )
@@ -61,6 +64,13 @@ class BenzeneHttpApp:
     Call :meth:`handle` for a mapped :class:`HttpResponse` (convenient in tests), or mount the
     instance itself as an ASGI app under uvicorn/hypercorn.
     """
+
+    #: Request/response bindings settle by responding (transport-bindings §1): the routes, and the
+    #: envelope endpoint. The constants the conformance runner checks against ``settlementDefaults``.
+    SETTLEMENT_DEFAULTS: ClassVar[tuple[SettlementDefaults, ...]] = (
+        redelivers("http", REQUEST_RESPONSE),
+        redelivers("envelope", REQUEST_RESPONSE),
+    )
 
     def __init__(
         self,

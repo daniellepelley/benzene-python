@@ -202,8 +202,8 @@ nothing needs building — the layers resolve straight off `sys.path`:
 # run the tests (pytest picks up the packages/ paths from pyproject.toml)
 pytest
 
-# run the conformance runner without pytest
-PYTHONPATH=packages/benzene-results:packages/benzene-core:packages/benzene-http:packages/benzene-mesh \
+# run the conformance runner without pytest (it reads the same paths pytest does)
+PYTHONPATH=$(python -c "import tomllib;print(':'.join(tomllib.load(open('pyproject.toml','rb'))['tool']['pytest']['ini_options']['pythonpath']))") \
   python -m tests.conformance_runner
 ```
 
@@ -248,8 +248,11 @@ API. None touch the wire envelope, status vocabulary, or HTTP mapping (the inter
 The language-neutral fixtures from the spec live in [`conformance/`](conformance/) and run two ways
 — the dependency-free `python -m tests.conformance_runner`, and granular pytest cases. **Every
 fixture that applies to this port is green**: status vocabulary, HTTP + gRPC status mappings, the
-envelope, problem details, transport metadata, the contract document and its hash, and four of the
-six mesh fixtures (descriptor, trace, collector, issues). The other two —
+envelope (version selection included), problem details (with the envelope endpoint, the health
+routes and validation pointers), transport metadata (with every shipped binding's settlement shape),
+the contract document and its hash, and four of the six mesh fixtures (descriptor, trace, collector,
+issues). The `"requires": "validation"` case runs through the Pydantic adapter, so the runner reports
+it skipped when pydantic is not installed. The other two —
 `mesh-service-version-cases.json` and `mesh-version-order-cases.json` — are conditional fixtures the
 canonical `conformance/README.md` requires only of a collector claiming service-version identity
 (mesh §2.4) or a port that orders service versions (§2.5); this port implements neither, and says so

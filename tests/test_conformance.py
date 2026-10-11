@@ -12,17 +12,19 @@ import json
 import pytest
 from benzene.core import BenzeneMessageApplication, Registry
 
-from .canonical_handlers import register_canonical
+from .canonical_handlers import register_all_canonical
 from .conformance_runner import (
     CONFORMANCE_DIR,
     envelope_case_failures,
     run_contract_document_cases,
     run_contract_hash_cases,
+    run_envelope_cases,
     run_fixture_coverage,
     run_grpc_status_mapping,
     run_http_mapping,
     run_problem_details,
     run_status_vocabulary,
+    run_transport_metadata,
 )
 
 
@@ -62,6 +64,16 @@ def test_every_vendored_fixture_is_claimed_by_a_runner() -> None:
     assert run_fixture_coverage() == []
 
 
+def test_envelope_cases_conform() -> None:
+    assert run_envelope_cases() == []
+
+
+def test_transport_metadata_and_settlement_defaults_conform() -> None:
+    """transport-metadata-cases.json, including the default key names (benzene-headers among them)
+    and every shipped binding's settlement shape and defaults against ``settlementDefaults``."""
+    assert run_transport_metadata() == []
+
+
 def test_contract_document_cases_conform() -> None:
     assert run_contract_document_cases() == []
 
@@ -83,7 +95,7 @@ def test_envelope_case(case: dict) -> None:
     checked ``isSuccessful`` or ``bodyExclude``. Delegating means a case format the runner learns is
     a case format this sees too.
     """
-    app = BenzeneMessageApplication(register_canonical(Registry()))
+    app = BenzeneMessageApplication(register_all_canonical(Registry()))
     response = asyncio.run(app.handle(case["request"]))
 
     assert envelope_case_failures(response, case["expected"], case["name"]) == []

@@ -12,9 +12,13 @@ import ast
 import asyncio
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from benzene.aws import AwsLambdaApp, SqsConsumerApp
+from benzene.aws.events import EMBEDDED_HEADERS_KEY
+from benzene.azure import AzureFunctionsApp
 from benzene.codegen_client import contract_hash as codegen_contract_hash
 from benzene.codegen_client.document import parse_document
 from benzene.codegen_client.schema_closure import reachable_names
@@ -24,17 +28,25 @@ from benzene.codegen_client.topic_scope import (
     apply_topic_scope,
 )
 from benzene.core import (
+    DEFAULT_TOPIC_KEY,
+    DEFAULT_VERSION_KEY,
     BenzeneMessageApplication,
+    HealthCheckResult,
+    HealthChecks,
     MetadataKeys,
     MiddlewarePipeline,
     Registry,
+    SettlementDefaults,
     read_message_metadata,
     resolve_version,
 )
 from benzene.core.envelope import encode_response
+from benzene.gcp import GcpFunctionsApp
+from benzene.grpc import SETTLEMENT_DEFAULTS as GRPC_SETTLEMENT_DEFAULTS
 from benzene.grpc.status import BENZENE_STATUS_TRAILER, from_grpc, to_grpc
-from benzene.http import from_http, to_http
+from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths, from_http, to_http
 from benzene.http.app import _to_http_response, http_problem_response
+from benzene.kafka import KafkaConsumerApp
 from benzene.mesh import (
     InMemoryTraceExporter,
     MeshCollector,
@@ -45,13 +57,15 @@ from benzene.mesh import (
     parse_traceparent,
     trace_middleware,
 )
+from benzene.rabbitmq import RabbitMqConsumerApp
 from benzene.results import Result, is_successful
 from benzene.results.problems import problem_http_status, problem_title, problem_type
 
 from .canonical_handlers import (
+    VALIDATION_AVAILABLE,
+    register_all_canonical,
     register_canonical,
     register_canonical_outbound,
-    register_canonical_with_problem,
     register_with_panic,
 )
 
@@ -86,6 +100,56 @@ UNRUN_FIXTURES: dict[str, str] = {
 }
 
 
+#: Bindings this port ships that ``transport-metadata-cases.json``'s ``settlementDefaults`` does not
+#: name yet, each with the reason. The fixture README says such a binding "is added here before the
+#: port claims it" - so it is reported, in writing, rather than the fixture edited locally.
+UNNAMED_SETTLEMENT_BINDINGS: dict[str, str] = {
+    "blob-storage": (
+        "the Azure Functions Blob Storage trigger (AzureFunctionsApp.handle_blob): one-shot, a "
+        "failure raises for the host's retry - shipped by this port, not yet listed by the fixture"
+    ),
+}
+
+#: Every host class's declared settlement constants, the source of truth the fixture is checked
+#: against. One-way hosts settle (tests/test_settlement.py keeps these true); request/response ones
+#: answer.
+SETTLEMENT_SOURCES: tuple[tuple[str, tuple[SettlementDefaults, ...]], ...] = (
+    ("AwsLambdaApp", AwsLambdaApp.SETTLEMENT_DEFAULTS),
+    ("SqsConsumerApp", SqsConsumerApp.SETTLEMENT_DEFAULTS),
+    ("AzureFunctionsApp", AzureFunctionsApp.SETTLEMENT_DEFAULTS),
+    ("GcpFunctionsApp", GcpFunctionsApp.SETTLEMENT_DEFAULTS),
+    ("KafkaConsumerApp", KafkaConsumerApp.SETTLEMENT_DEFAULTS),
+    ("RabbitMqConsumerApp", RabbitMqConsumerApp.SETTLEMENT_DEFAULTS),
+    ("BenzeneHttpApp", BenzeneHttpApp.SETTLEMENT_DEFAULTS),
+    ("benzene.grpc", GRPC_SETTLEMENT_DEFAULTS),
+)
+
+#: Capabilities a fixture case may require (``"requires": ...``) and whether this environment has
+#: them. The port implements all of them; ``validation`` needs pydantic installed to run.
+CAPABILITIES: dict[str, bool] = {"validation": VALIDATION_AVAILABLE}
+
+#: Cases a ``requires`` skipped in this run, for the summary line - never silently.
+SKIPPED: list[str] = []
+
+
+def _requirement_unmet(case: dict, fixture: str, failures: list[str]) -> bool:
+    """Whether ``case`` needs a capability this run lacks (recorded in SKIPPED), or one this runner
+    has never heard of (a drift failure)."""
+    required = case.get("requires")
+    if required is None:
+        return False
+    if required not in CAPABILITIES:
+        failures.append(
+            f"{fixture}[{case.get('name')}]: requires {required!r}, a capability the runner does not "
+            "know - the runner and the fixture have drifted"
+        )
+        return True
+    if not CAPABILITIES[required]:
+        SKIPPED.append(f"{fixture}[{case.get('name')}] (requires {required})")
+        return True
+    return False
+
+
 def _load(name: str) -> Any:
     return json.loads((CONFORMANCE_DIR / name).read_text())
 
@@ -100,7 +164,8 @@ def _is_subset(expected: Any, actual: Any) -> bool:
 
 
 def _app() -> BenzeneMessageApplication:
-    return BenzeneMessageApplication(register_canonical(Registry()))
+    """The application envelope cases run against: every canonical handler (conformance/README)."""
+    return BenzeneMessageApplication(register_all_canonical(Registry()))
 
 
 def _cases(data: dict, key: str, fixture: str, failures: list[str]) -> list:
@@ -201,6 +266,19 @@ def envelope_case_failures(response: dict, expected: dict, name: str) -> list[st
             if member in actual_body:
                 failures.append(f"envelope[{name}]: body must not contain {member!r}: {actual_body}")
 
+    if "errorFields" in expected:
+        # A set: every error carries a field, and the set of them equals the list. Order, messages
+        # and codes are the validation library's own (conformance/README).
+        actual_errors = (json.loads(response["body"]) if response["body"] else {}).get("errors") or []
+        fields = [error.get("field") for error in actual_errors]
+        if None in fields:
+            failures.append(f"envelope[{name}]: an error carries no field: {actual_errors}")
+        if set(fields) != set(expected["errorFields"]):
+            failures.append(
+                f"envelope[{name}]: error fields {sorted(map(str, fields))}, "
+                f"expected {sorted(expected['errorFields'])}"
+            )
+
     return failures
 
 
@@ -209,6 +287,8 @@ def run_envelope_cases() -> list[str]:
     app = _app()
     data = _load("envelope-cases.json")
     for case in _cases(data, "cases", "envelope-cases", failures):
+        if _requirement_unmet(case, "envelope-cases", failures):
+            continue
         response = asyncio.run(app.handle(case["request"]))
         failures += envelope_case_failures(response, case["expected"], case["name"])
     return failures
@@ -394,9 +474,73 @@ def run_transport_metadata() -> list[str]:
             failures.append(f"metadata[{name}]: version {resolve_version(headers)!r}, expected {expected['version']!r}")
 
     for case in _cases(data, "metadataCases", "transport-metadata", failures):
+        if _requirement_unmet(case, "transport-metadata", failures):
+            continue
         check(case, MetadataKeys())
     for case in _cases(data, "overrideCases", "transport-metadata", failures):
         check(case, MetadataKeys(topic=case["metadataKeys"]["topic"]))
+
+    # The default reserved names themselves - the interop baseline - asserted as constants.
+    defaults = data.get("defaultMetadataKeys")
+    if defaults is None:
+        failures.append("transport-metadata: fixture has no 'defaultMetadataKeys' - the runner and the fixture have drifted")
+    else:
+        ours = {
+            "topic": DEFAULT_TOPIC_KEY,
+            "version": DEFAULT_VERSION_KEY,
+            "headers": EMBEDDED_HEADERS_KEY,  # this port has an EventBridge binding (benzene.aws)
+        }
+        for key, value in defaults.items():
+            if key not in ours:
+                failures.append(f"transport-metadata: default key {key!r} unknown to the runner - drift")
+            elif ours[key] != value:
+                failures.append(f"transport-metadata: default {key} key is {ours[key]!r}, expected {value!r}")
+
+    return failures + run_settlement_defaults(data)
+
+
+def run_settlement_defaults(data: dict) -> list[str]:
+    """settlementDefaults: every binding this port ships has the fixture's shape and an allowed default.
+
+    Constants, compared without sending a message (the fixture README) - the host classes declare
+    them, and tests/test_settlement.py proves the code does what they say.
+    """
+    failures: list[str] = []
+    if "settlementDefaults" not in data:
+        return ["transport-metadata: fixture has no 'settlementDefaults' - the runner and the fixture have drifted"]
+    section = data["settlementDefaults"]
+    shapes = section.get("shapes", {})
+    named = {entry["binding"]: entry["shape"] for entry in _cases(section, "bindings", "settlementDefaults", failures)}
+    seen: set[str] = set()
+    for source, declared in SETTLEMENT_SOURCES:
+        for entry in declared:
+            seen.add(entry.binding)
+            where = f"settlementDefaults[{source} {entry.binding}]"
+            if entry.binding not in named:
+                if entry.binding not in UNNAMED_SETTLEMENT_BINDINGS:
+                    failures.append(
+                        f"{where}: the fixture does not name this binding - add it to "
+                        "UNNAMED_SETTLEMENT_BINDINGS with the reason, and report it upstream"
+                    )
+                continue
+            if entry.shape != named[entry.binding]:
+                failures.append(f"{where}: shape {entry.shape!r}, expected {named[entry.binding]!r}")
+                continue
+            allowed = shapes.get(entry.shape)
+            if allowed is None:
+                failures.append(f"{where}: the fixture has no shape {entry.shape!r} - drift")
+                continue
+            if entry.on_failure not in allowed["onFailure"]:
+                failures.append(f"{where}: onFailure {entry.on_failure!r} not in {allowed['onFailure']}")
+            if entry.unmatched_topic not in allowed["unmatchedTopic"]:
+                failures.append(
+                    f"{where}: unmatchedTopic {entry.unmatched_topic!r} not in {allowed['unmatchedTopic']}"
+                )
+    for name in UNNAMED_SETTLEMENT_BINDINGS:
+        if name in named:
+            failures.append(f"settlementDefaults: {name!r} is now named by the fixture - drop it from UNNAMED_SETTLEMENT_BINDINGS")
+        elif name not in seen:
+            failures.append(f"settlementDefaults: {name!r} is in UNNAMED_SETTLEMENT_BINDINGS but no host declares it")
     return failures
 
 
@@ -552,8 +696,10 @@ def run_problem_details() -> list[str]:
         )
 
     # --- envelopeCases: exactly the envelope case format, so exactly the same checker ------------
-    app = BenzeneMessageApplication(register_canonical_with_problem(Registry()))
+    app = _app()
     for case in _cases(data, "envelopeCases", "problem-details", failures):
+        if _requirement_unmet(case, "problem-details", failures):
+            continue
         response = asyncio.run(app.handle(case["request"]))
         failures += envelope_case_failures(response, case["expected"], case["name"])
 
@@ -613,6 +759,71 @@ def run_problem_details() -> list[str]:
                     f"member, found {member!r}"
                 )
 
+    failures += _run_envelope_endpoint(rules)
+    failures += _run_health_endpoint(rules)
+    return failures
+
+
+def _run_envelope_endpoint(rules: dict) -> list[str]:
+    """httpRules.envelopeEndpoint: POST each case to the envelope endpoint (transport-bindings §1).
+
+    Every processed envelope is HTTP 200 whatever its status, with the response envelope as the body
+    (checked as an envelope case); only a carrier failure - a malformed envelope - is not.
+    """
+    failures: list[str] = []
+    if "envelopeEndpoint" not in rules:
+        return ["problem-details: fixture has no 'httpRules.envelopeEndpoint' - the runner and the fixture have drifted"]
+    endpoint = rules["envelopeEndpoint"]
+    app = BenzeneHttpApp(HttpRouter(), application=_app(), standard_paths=StandardPaths())
+    for case in _cases(endpoint, "cases", "problem-details.envelopeEndpoint", failures):
+        name = f"envelopeEndpoint {case['name']}"
+        body = case["rawBody"] if "rawBody" in case else json.dumps(case["request"])
+        response = asyncio.run(app.handle("POST", endpoint["path"], body=body))
+        expected = case["expected"]
+        if response.status_code != expected["httpStatus"]:
+            failures.append(
+                f"problem-details[{name}]: HTTP {response.status_code}, expected {expected['httpStatus']}"
+            )
+            continue
+        if "envelope" in expected:
+            failures += envelope_case_failures(json.loads(response.body), expected["envelope"], name)
+    return failures
+
+
+def _reporting(outcome: HealthCheckResult) -> Callable[[], HealthCheckResult]:
+    """A canonical health check that reports ``outcome`` (conformance/README)."""
+    return lambda: outcome
+
+
+def _run_health_endpoint(rules: dict) -> list[str]:
+    """httpRules.healthEndpoint: register exactly the case's checks, GET the health route.
+
+    The status line carries the verdict - 503 when isHealthy is false, 200 otherwise (a warning
+    included) - and the body is the health response either way (wire-contracts §5).
+    """
+    failures: list[str] = []
+    if "healthEndpoint" not in rules:
+        return ["problem-details: fixture has no 'httpRules.healthEndpoint' - the runner and the fixture have drifted"]
+    endpoint = rules["healthEndpoint"]
+    for case in _cases(endpoint, "cases", "problem-details.healthEndpoint", failures):
+        name = f"healthEndpoint {case['name']}"
+        checks = HealthChecks()
+        for check in case["checks"]:
+            checks.add(check["name"], _reporting(HealthCheckResult(check["status"])))
+        app = BenzeneHttpApp(
+            HttpRouter(),
+            application=BenzeneMessageApplication(Registry()),
+            standard_paths=StandardPaths(health=checks),
+        )
+        response = asyncio.run(app.handle("GET", endpoint["path"]))
+        expected = case["expected"]
+        if response.status_code != expected["httpStatus"]:
+            failures.append(
+                f"problem-details[{name}]: HTTP {response.status_code}, expected {expected['httpStatus']}"
+            )
+        body = json.loads(response.body) if response.body else {}
+        if not _is_subset(expected.get("body", {}), body):
+            failures.append(f"problem-details[{name}]: body {body} !⊇ {expected['body']}")
     return failures
 
 
@@ -743,8 +954,12 @@ if __name__ == "__main__":
             print("  -", f)
         sys.exit(1)
     print(
-        "CONFORMANCE PASSED — status vocabulary, HTTP mapping, problem details, envelope, "
-        "transport metadata, gRPC status mapping, mesh (descriptor + trace + collector + issues), "
+        "CONFORMANCE PASSED — status vocabulary, HTTP mapping, problem details (+ envelope endpoint "
+        "and health routes), envelope (+ version selection), transport metadata (+ settlement "
+        "defaults), gRPC status mapping, mesh (descriptor + trace + collector + issues), "
         "contract-document, and contract-hash cases all green; "
-        f"every vendored fixture claimed ({len(UNRUN_FIXTURES)} explicitly unrun)."
+        f"every vendored fixture claimed ({len(UNRUN_FIXTURES)} explicitly unrun); "
+        f"{len(UNNAMED_SETTLEMENT_BINDINGS)} shipped binding not yet named by settlementDefaults."
     )
+    if SKIPPED:
+        print(f"  skipped for a missing optional dependency ({len(SKIPPED)}): " + ", ".join(SKIPPED))

@@ -22,8 +22,14 @@ namespace. Mirrors .NET's ``Benzene.Grpc``.
 
 from __future__ import annotations
 
+from benzene.core import REQUEST_RESPONSE, SettlementDefaults, redelivers
+
 from .details import GRPC_DETAILS_TRAILER
 from .status import BENZENE_STATUS_TRAILER, from_grpc, to_grpc
+
+#: gRPC unary is request/response: it settles by responding (transport-bindings §1). The constant the
+#: conformance runner checks against ``settlementDefaults``; dependency-free, like the mapping.
+SETTLEMENT_DEFAULTS: tuple[SettlementDefaults, ...] = (redelivers("grpc", REQUEST_RESPONSE),)
 
 # The server/client transport needs grpcio (the [transport] extra); the mapping above never does.
 # Guard on grpcio specifically so a real import error *inside* the transport modules surfaces as
@@ -51,6 +57,7 @@ else:
     topic_for = _needs_grpc  # type: ignore[assignment]
 
 __all__ = [
+    "SETTLEMENT_DEFAULTS",
     "BENZENE_STATUS_TRAILER",
     "GRPC_DETAILS_TRAILER",
     "BenzeneGrpcHandler",

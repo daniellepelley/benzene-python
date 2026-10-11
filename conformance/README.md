@@ -39,9 +39,9 @@ writes the new tag into `SPEC_VERSION`, and lands all three in one change.
 | `status-vocabulary.json` | The status vocabulary strings and their success/failure classification (wire-contracts §3) |
 | `http-status-mapping.json` | Benzene→HTTP and HTTP→Benzene status tables (wire-contracts §4.1) |
 | `grpc-status-mapping.json` | Benzene→gRPC and gRPC→Benzene status tables (wire-contracts §4.2) |
-| `envelope-cases.json` | End-to-end message envelope handling: request in, pipeline + canonical handler, response envelope out (wire-contracts §1, core-concepts §4–6) |
-| `problem-details-cases.json` | The problem-type registry, the canonical `conformance:problem` handler's envelope behavior, and the HTTP-binding-only signalling rules (wire-contracts §1.3, §3.1, §4.1) |
-| `transport-metadata-cases.json` | Topic resolution and header mapping on transports carrying Benzene metadata natively — the reserved metadata key names (wire-contracts §2, transport-bindings §1) — required for ports binding any such transport |
+| `envelope-cases.json` | End-to-end message envelope handling: request in, pipeline + canonical handler, response envelope out, including version selection (wire-contracts §1, core-concepts §2, §4–6) |
+| `problem-details-cases.json` | The problem-type registry, the canonical `conformance:problem` and `conformance:validate` handlers' envelope behavior, and the HTTP-binding-only rules: failure signalling, the envelope endpoint and the health routes (wire-contracts §1.3, §3.1, §4.1, §5; transport-bindings §1) |
+| `transport-metadata-cases.json` | Topic resolution and header mapping on transports carrying Benzene metadata natively — the reserved metadata key names (wire-contracts §2, transport-bindings §1) — required for ports binding any such transport; plus each one-way binding's settlement shape and allowed defaults (transport-bindings §1, obligation 8) |
 | `mesh-descriptor-cases.json` | ServiceDescriptor derivation from the canonical handlers and the canonical outbound registration, including payload schemas, `produces`, and descriptorHash properties (mesh §2) — required for ports that implement mesh |
 | `mesh-trace-cases.json` | TraceEvent behavior: traceparent join/reject rules and the invocation→semantic-status mapping (mesh §3) — required for ports that implement mesh |
 | `mesh-collector-cases.json` | Collector ingest, validation, derivation, and degradation behavior (mesh §4–6) — required for ports that implement a collector |
@@ -56,8 +56,8 @@ Which fixtures a given conformance claim requires
 
 | Claim | Required fixtures |
 |---|---|
-| Benzene Core | `status-vocabulary.json`, the mapping tables for each protocol the port binds, `envelope-cases.json`, `transport-metadata-cases.json` for each metadata-carrying transport the port binds, and `problem-details-cases.json`'s `registry` and `envelopeCases` groups |
-| HTTP binding conformance | additionally `problem-details-cases.json`'s `httpRules` group — required only for each HTTP binding a port ships (the same conditional shape as `transport-metadata-cases.json` above); a port with no HTTP binding is unaffected |
+| Benzene Core | `status-vocabulary.json`, the mapping tables for each protocol the port binds, `envelope-cases.json`, `transport-metadata-cases.json` for each metadata-carrying transport the port binds and its `settlementDefaults` for every one-way binding the port ships, and `problem-details-cases.json`'s `registry` and `envelopeCases` groups |
+| HTTP binding conformance | additionally `problem-details-cases.json`'s `httpRules` group — required only for each HTTP binding a port ships (the same conditional shape as `transport-metadata-cases.json` above); a port with no HTTP binding is unaffected. Within it, `envelopeEndpoint` applies to a port that serves the envelope over HTTP, and `healthEndpoint` to a port that also ships health checks |
 | Cloud Service Profile support | Core, plus `mesh-descriptor-cases.json` and `mesh-trace-cases.json` |
 | Collector implementations | additionally `mesh-collector-cases.json` (collector-only; not part of the profile) |
 | Issue-feed collectors | additionally `mesh-issue-cases.json` (optional feed, mesh §4.1; a collector without it stays collector-conformant) |
@@ -78,9 +78,15 @@ with exactly these topics and behaviors:
 | `conformance:greet` | `{ "name": string }` | Returns `ok` with payload `{ "greeting": "Hello <name>" }` |
 | `conformance:status` | `{ "status": string, "errors": string[]? }` | Returns the given status verbatim. For a success-class status, the payload is `{ "applied": "<status>" }`; for a failure-class status, the result carries the given `errors` (each string projected to a message-only structured error) and no payload. |
 | `conformance:problem` | `{ "message": string, "field"?: string, "code"?: string, "appType"?: string }` | Returns a `validation-error` result carrying exactly one structured error (`message`/`field`/`code` from the request). When `appType` is given, the emitted problem document's `type` member is `appType` verbatim instead of the registry URI — the application-authored-problem case (wire-contracts §1.3); `benzeneStatus` is still `validation-error` and `errors` still carries the one structured error. |
+| `conformance:versioned` | none (`{}`) | Registered **twice**: at version `v1`, declared as the topic's default handler, and at version `v2`. Each returns `ok` with payload `{ "version": "<its version>" }`. Exercises version selection (core-concepts §2): an exact match, an absent version going to the default, and an unknown version as `not-found`. |
+| `conformance:validate` | `{ "name": string, "items": [{ "sku": string }] }` | Validated through the port's **own** validation integration (not hand-written in the handler), with two rules: `name` non-empty, and every `items[].sku` present and non-empty. Returns `ok` when valid. Only cases marked `"requires": "validation"` use it, so a port without a validation integration skips them. |
 
 No handler is registered for any other topic — cases targeting unregistered or empty topics
 verify the router's `not-found` / `validation-error` behavior.
+
+**The canonical health check.** `problem-details-cases.json`'s `httpRules.healthEndpoint` cases
+each list the checks to register — a name and the status (`ok`, `warning` or `failed`) the check
+reports — in place of any the runner would otherwise register.
 
 ## Canonical outbound registration
 
@@ -136,6 +142,11 @@ its own row regardless) and MUST be omitted there.
   (wire-contracts §1.3) leaks onto a transport with no HTTP response, e.g. the raw envelope; a
   member absent from `expected.body` is otherwise unconstrained (subset matching alone would
   permit it either way), so `bodyExclude` is the only way to pin genuine absence.
+- `expected.errorFields`, when present, lists the `field` values the problem document's `errors`
+  must carry, compared as a **set**: every error carries a `field`, and the set of them equals the
+  list. Order, messages and codes are not asserted — they are the validation library's own.
+- A case with `"requires": "<capability>"` applies only to ports implementing it (`validation`:
+  a validation integration that can run `conformance:validate`).
 - Human-readable message wording (e.g. the `detail`/`title` text of router-generated or registry
   problem documents) is intentionally not asserted.
 
@@ -151,15 +162,26 @@ its own row regardless) and MUST be omitted there.
   run against the canonical `conformance:problem` handler (see Canonical handlers). They pin
   structured `errors` round-tripping through the problem document, application-defined `type`
   passthrough via `appType`, and (via `bodyExclude`) that framework-produced problem documents
-  carry no `instance` and no numeric `status` off an HTTP transport.
+  carry no `instance`, and no numeric `status` anywhere but a route-mapped HTTP response — not
+  inside an envelope, whatever carries it.
 - **`httpRules`** — required only for ports that ship an HTTP binding (see the fixture-claims
   table above; the same conditional shape as `transport-metadata-cases.json`). `failureCases`
-  lists, per Benzene status, the `httpStatus` an HTTP-bound failure response for that status MUST
+  lists, per Benzene status, the `httpStatus` that the response of a **route-mapped** topic (not
+  the envelope endpoint, which answers 200) MUST
   carry both as its response line and as the problem document's `status` member — the two MUST
   come from the same mapping (wire-contracts §4.1) so they can never disagree. The response's
   `content-type` MUST be `application/problem+json` for a JSON-negotiated failure response.
   `successCase` pins that success responses are unaffected: no problem document, ordinary content
   type. Title/detail wording is never asserted, per the envelope case format rule above.
+  - `envelopeEndpoint` — `POST` each case's `request` (or its `rawBody`, verbatim, when present) to
+    `path`. `expected.httpStatus` is the response line; `expected.envelope`, when present, is an
+    [envelope case](#envelope-case-format) expectation applied to the response body. Every
+    processed envelope is 200, whatever its status; only a carrier failure (a malformed envelope)
+    is not (transport-bindings §1).
+  - `healthEndpoint` — register exactly the case's `checks` (see Canonical handlers), then `GET`
+    `path`. `expected.httpStatus` is the response line — 503 when the report's `isHealthy` is
+    false — and `expected.body` is subset-matched against the health response
+    (wire-contracts §5).
 
 ## Transport metadata case format
 
@@ -188,8 +210,8 @@ case to its own native message before decoding it.
 - `expected.headersExclude` lists keys that must **not** appear as headers — a metadata key the
   binding consumed as routing information must not also leak into the header dictionary.
 - `expected.version`, where present, is the resolved payload version.
-- A case with `"requires": "versioning"` applies only to ports implementing payload versioning
-  (`benzene-version` is tier C).
+- `benzene-version` is the one version header (wire-contracts §2, tier A): every port resolves it,
+  so the version cases here run unconditionally.
 
 `defaultMetadataKeys` names the keys themselves, and `topicSources` records where each binding
 gets its topic. Both are directly assertable: a port can compare its own constant against
@@ -204,7 +226,20 @@ hard-codes a name passes the first group and fails the second.
 
 Bindings whose `source` is not `metadata` are listed deliberately: EventBridge routes on
 `detail-type` and DynamoDB Streams derives `{tableName}:{eventName}`, so those bindings MUST NOT
-require a `topic` attribute, and the metadata cases do not apply to them.
+require a `topic` attribute (transport-bindings §1), and the metadata cases do not apply to them.
+
+`defaultMetadataKeys.headers` is the EventBridge embedded-headers key, `benzene-headers`
+(wire-contracts §2, tier D); only a port with an EventBridge binding asserts it.
+
+**Settlement defaults.** `settlementDefaults.bindings` records each one-way binding's **shape** —
+`queue`, `one-shot` (a single delivery with no per-message ack, such as an asynchronous function
+invocation), `stream` or `request-response` — and `settlementDefaults.shapes` the defaults each
+shape allows: `onFailure` for a failed, result-less or erroring invocation, and `unmatchedTopic`
+for a topic no handler serves. A port asserts, for each binding it ships, that its shape matches and
+its default is in the allowed list; a stream binding that defaults to `skip-and-continue` must also
+say so in its documentation (transport-bindings §1, obligation 8). These are constants, compared
+without sending a message — the same cheap check as `defaultMetadataKeys`. A binding a port ships
+that the list does not name is added here before the port claims it.
 
 **Why this fixture exists.** The metadata key names are the one part of the wire contract that no
 other fixture touches — envelope, status and protocol-mapping cases never look at native metadata.
@@ -213,11 +248,6 @@ unable to exchange a single queue message with another port. That is not hypothe
 exactly how the .NET and Python ports diverged when the key was briefly `benzene-topic`
 (`work/archive/benzene-naming-principle.md` §3c, since reversed).
 
-The EventBridge embedded-headers key (`_benzeneHeaders`, wire-contracts §2, tier D) is deliberately
-**not** pinned here: it is scheduled to be renamed to `benzene-headers`
-(`work/benzene-headers-plan.md`), and a fixture asserting the current spelling would have to change
-with it.
-
 ## Mesh fixture formats
 
 Subset matching is as for envelope cases, with one addition needed by these fixtures:
@@ -225,7 +255,8 @@ Subset matching is as for envelope cases, with one addition needed by these fixt
 array (`[]`) matches an actual array that is empty *or absent* (writers may omit empty
 collections).
 
-- `mesh-descriptor-cases.json` — the runner registers the two canonical envelope handlers and the
+- `mesh-descriptor-cases.json` — the runner registers two canonical envelope handlers,
+  `conformance:greet` and `conformance:status` (and no others), and the
   one canonical outbound registration (both above) natively, builds the service descriptor with
   the fixture's `serviceInfo`, and subset-compares `expectedDescriptor` (`topics` from the
   handlers, `produces` from the outbound registration). `runtime` and the hash value are per-port
@@ -257,7 +288,12 @@ collections).
   fails here), that re-registering one version leaves the other's topics intact, and that a
   descriptor omitting `serviceVersion` keys exactly as it did before the rule existed. That last
   case is why this fixture is separate: it is the compatibility guarantee that lets an existing
-  collector keep passing `mesh-collector-cases.json` untouched.
+  collector keep passing `mesh-collector-cases.json` untouched. The entries are observed through
+  the **service** query, whose `versions` array lists the live versions; in this fixture it is
+  compared as a **set keyed by `serviceVersion`** (same length, and each expected element
+  subset-matches the actual element with its `serviceVersion`), because no order is pinned. The
+  fleet query keeps one row per service (graph membership is by service, mesh §4); which version
+  the row headlines is not pinned.
 
 ## Contract Document and contract hash case formats
 
