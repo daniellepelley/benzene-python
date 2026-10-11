@@ -49,9 +49,7 @@ from benzene.core import (
     application_from,
     contract_hash,
     derive_contract,
-    read_message_metadata,
     registration_hash,
-    resolve_version,
     schema_name,
 )
 from benzene.core.contract_hash import SCHEMA_REF_PREFIX, normalize_schema
@@ -73,6 +71,7 @@ from benzene.rabbitmq import RabbitMqConsumerApp
 from benzene.results import Result, is_successful
 from benzene.results.problems import problem_http_status, problem_title, problem_type
 
+from . import conformance_bindings as bindings
 from .canonical_handlers import (
     CANONICAL_PAYLOAD_TYPES,
     VALIDATION_AVAILABLE,
@@ -375,32 +374,165 @@ def run_mesh_collector() -> list[str]:
     )
 
 
+#: ``topicSources`` binding ids this port does not ship, each with the reason. Empty: every binding
+#: the fixture names has a host here, so every one of them is checked.
+UNSHIPPED_TOPIC_SOURCES: dict[str, str] = {}
+
+#: The binding ids this port ships for each non-metadata ``topicSources`` source - the checks below.
+NON_METADATA_SOURCES = {
+    "eventbridge": "native",
+    "dynamodb-streams": "derived",
+    "http": "route",
+    "grpc": "method",
+}
+
+
+def _metadata_expectation_failures(where: str, seen: bindings.Seen, case: dict) -> list[str]:
+    """``expected`` (topic, headers, headersExclude, version) against what one delivery produced."""
+    failures: list[str] = []
+    expected = case["expected"]
+    if "topic" in expected and seen.topic != expected["topic"]:
+        failures.append(f"{where}: topic {seen.topic!r}, expected {expected['topic']!r}")
+    for key, value in expected.get("headers", {}).items():
+        if seen.headers.get(key) != value:
+            failures.append(f"{where}: header {key}={seen.headers.get(key)!r}, expected {value!r}")
+    for key in expected.get("headersExclude", []):
+        if key.lower() in seen.headers:
+            failures.append(f"{where}: header {key!r} should be excluded")
+    if "version" in expected and seen.version != expected["version"]:
+        failures.append(f"{where}: version {seen.version!r}, expected {expected['version']!r}")
+    return failures
+
+
+def _metadata_case_failures(binding: str, case: dict, keys: MetadataKeys) -> list[str]:
+    """One metadata/override case through every host and every outbound client of ``binding``."""
+    failures: list[str] = []
+    name = case["name"]
+    for host, deliver in bindings.METADATA_HOSTS[binding].items():
+        where = f"metadata[{binding} {host}][{name}]"
+        try:
+            seen = deliver(case["metadata"], keys)
+        except Exception as error:  # a binding that raises on a case fails it, never the run
+            failures.append(f"{where}: raised {type(error).__name__}: {error}")
+            continue
+        failures.extend(_metadata_expectation_failures(where, seen, case))
+
+    # Outbound: a client given the same keys writes exactly this metadata for the topic the case
+    # resolves (wire-contracts §2: an override applies to both directions). Only where the case's
+    # metadata carries the topic key - a client always writes one.
+    topic_key = keys.topic.lower()
+    metadata = {key.lower(): value for key, value in case["metadata"].items()}
+    if topic_key not in metadata:
+        return failures
+    headers = {key: value for key, value in metadata.items() if key != topic_key}
+    for client, write in bindings.METADATA_CLIENTS[binding].items():
+        where = f"metadata[{binding} {client}][{name}]"
+        try:
+            written = write(metadata[topic_key], headers, keys)
+        except Exception as error:
+            failures.append(f"{where}: raised {type(error).__name__}: {error}")
+            continue
+        if written is None:
+            SKIPPED.append(f"{where} (requires the client's SDK)")
+            continue
+        lowered = {key.lower(): value for key, value in written.items()}
+        if lowered != metadata:
+            failures.append(
+                f"{where}: wrote {bindings.describe(lowered)}, expected {bindings.describe(metadata)}"
+            )
+    return failures
+
+
+def _topic_source_failures(entry: dict, cases: list[dict]) -> list[str]:
+    """One ``topicSources`` entry: the binding takes its topic from where the fixture says."""
+    try:
+        return _topic_source_checks(entry, cases)
+    except Exception as error:  # a binding that raises fails its entry, never the whole run
+        return [f"topicSources[{entry.get('binding')}]: raised {type(error).__name__}: {error}"]
+
+
+def _topic_source_checks(entry: dict, cases: list[dict]) -> list[str]:
+    binding, source = str(entry.get("binding")), entry.get("source")
+    where = f"topicSources[{binding}]"
+    keys = MetadataKeys()
+    if binding in UNSHIPPED_TOPIC_SOURCES:
+        return []
+    if source == "metadata":
+        if binding not in bindings.METADATA_HOSTS:
+            return [f"{where}: no host here - add it to METADATA_HOSTS, or to UNSHIPPED_TOPIC_SOURCES with the reason"]
+        failures = [f for case in cases for f in _metadata_case_failures(binding, case, keys)]
+        if binding == "rabbitmq":
+            # The one fallback the fixture names: the AMQP routing key, for a non-Benzene producer.
+            fallback = bindings.rabbitmq_delivery({"tenant": "acme"}, keys, routing_key=bindings.TOPIC)
+            if fallback.topic != bindings.TOPIC:
+                failures.append(f"{where}: no topic header, routing key {bindings.TOPIC!r} resolved {fallback.topic!r}")
+            header_wins = bindings.rabbitmq_delivery({"topic": bindings.TOPIC}, keys, routing_key="a.queue")
+            if header_wins.topic != bindings.TOPIC:
+                failures.append(f"{where}: the topic header lost to the routing key ({header_wins.topic!r})")
+        elif "fallback" in entry:
+            failures.append(f"{where}: the fixture names a fallback the runner does not check - drift")
+        return failures
+    if NON_METADATA_SOURCES.get(binding) != source:
+        return [f"{where}: source {source!r} unknown to the runner for this binding - drift"]
+    if source == "native":  # EventBridge: detail-type, and no topic attribute required
+        seen = bindings.eventbridge_event(bindings.TOPIC, keys)
+        return [] if seen.topic == bindings.TOPIC else [f"{where}: detail-type resolved {seen.topic!r}"]
+    if source == "derived":  # DynamoDB Streams: the fixture's pattern, filled from the change event
+        table, event_name = "conformance", "INSERT"
+        want = entry["pattern"].replace("{tableName}", table).replace("{eventName}", event_name)
+        seen = bindings.dynamodb_record(table, event_name, keys)
+        return [] if seen.topic == want else [f"{where}: derived {seen.topic!r}, expected {want!r}"]
+    if source == "route":
+        seen = bindings.http_route(bindings.TOPIC, keys)
+        return [] if seen.topic == bindings.TOPIC else [f"{where}: route resolved {seen.topic!r}"]
+    method = bindings.grpc_method(bindings.TOPIC, keys)
+    if method is None:
+        SKIPPED.append(f"{where} (requires grpcio)")
+        return []
+    return [] if method.topic == bindings.TOPIC else [f"{where}: method resolved {method.topic!r}"]
+
+
 def run_transport_metadata() -> list[str]:
-    """Topic + header resolution from native metadata (wire-contracts §2)."""
+    """Topic sources, metadata and overrides through every binding this port ships (wire-contracts §2,
+    transport-bindings §1 obligations 2-3).
+
+    Each ``metadataCases`` case runs through every host of every metadata-sourced binding with the
+    default keys, and each ``overrideCases`` case with its override configured on the application
+    (``MetadataKeys``) - so a binding that ignores the configured names fails here. Every outbound
+    client of those bindings, given the same keys, must write the case's metadata back. The
+    non-metadata sources are checked from their native shape (``tests/conformance_bindings.py``).
+    """
     failures: list[str] = []
     data = _load("transport-metadata-cases.json")
 
-    def check(case: dict, keys: MetadataKeys) -> None:
-        topic, headers = read_message_metadata(case["metadata"], keys)
-        expected = case["expected"]
-        name = case["name"]
-        if "topic" in expected and topic != expected["topic"]:
-            failures.append(f"metadata[{name}]: topic {topic!r}, expected {expected['topic']!r}")
-        for key, value in expected.get("headers", {}).items():
-            if headers.get(key) != value:
-                failures.append(f"metadata[{name}]: header {key}={headers.get(key)!r}, expected {value!r}")
-        for key in expected.get("headersExclude", []):
-            if key.lower() in headers:
-                failures.append(f"metadata[{name}]: header {key!r} should be excluded")
-        if "version" in expected and resolve_version(headers) != expected["version"]:
-            failures.append(f"metadata[{name}]: version {resolve_version(headers)!r}, expected {expected['version']!r}")
+    cases = [
+        case
+        for case in _cases(data, "metadataCases", "transport-metadata", failures)
+        if not _requirement_unmet(case, "transport-metadata", failures)
+    ]
+    sources = _cases(data, "topicSources", "transport-metadata", failures)
+    for entry in sources:
+        failures.extend(_topic_source_failures(entry, cases))
 
-    for case in _cases(data, "metadataCases", "transport-metadata", failures):
-        if _requirement_unmet(case, "transport-metadata", failures):
-            continue
-        check(case, MetadataKeys())
+    named = {entry.get("binding") for entry in sources}
+    for binding in sorted({*bindings.METADATA_HOSTS, *NON_METADATA_SOURCES} - named):
+        failures.append(f"topicSources: this port ships {binding!r} but the fixture does not name it - report it upstream")
+    for binding in sorted(set(UNSHIPPED_TOPIC_SOURCES) - named):
+        failures.append(f"topicSources: {binding!r} is in UNSHIPPED_TOPIC_SOURCES but the fixture does not name it")
+
+    metadata_bindings = [
+        entry["binding"]
+        for entry in sources
+        if entry.get("source") == "metadata" and entry.get("binding") in bindings.METADATA_HOSTS
+    ]
     for case in _cases(data, "overrideCases", "transport-metadata", failures):
-        check(case, MetadataKeys(topic=case["metadataKeys"]["topic"]))
+        unknown = set(case["metadataKeys"]) - set(MetadataKeys.__dataclass_fields__)
+        if unknown:
+            failures.append(f"overrideCases[{case['name']}]: overrides {sorted(unknown)}, unknown to MetadataKeys - drift")
+            continue
+        keys = MetadataKeys(**case["metadataKeys"])
+        for binding in metadata_bindings:
+            failures.extend(_metadata_case_failures(binding, case, keys))
 
     # The default reserved names themselves - the interop baseline - asserted as constants.
     defaults = data.get("defaultMetadataKeys")
@@ -1128,7 +1260,8 @@ if __name__ == "__main__":
         sys.exit(1)
     print(
         "CONFORMANCE PASSED — status vocabulary, HTTP mapping, problem details (+ envelope endpoint "
-        "and health routes), envelope (+ version selection), transport metadata (+ settlement "
+        "and health routes), envelope (+ version selection), transport metadata (topic sources, "
+        "metadata and override cases through every shipped binding's hosts and clients, + settlement "
         "defaults), gRPC status mapping, mesh (trace + collector + issues), "
         "contract-document (derivation + naming + benzene:spec + parse/scope/closure), and "
         "contract-hash cases all green; "
