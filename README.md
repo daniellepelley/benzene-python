@@ -323,7 +323,8 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     `contract-document.md` specifies and every port's client generator parses — with this port's native
     `ServiceSpec` payload still reachable at `?type=native`) under a configurable `/benzene/` prefix.
     The schema derivation moved into `benzene.core` (shared by the spec doc and the mesh descriptor),
-    and the reserved `benzene:spec` topic is answered on any transport by `spec_interception`.
+    and the reserved `benzene:spec` topic is answered on any transport by `spec_interception` (the
+    Contract Document by default, `{"type": "native"}` for the native payload).
 14. **(done)** PyPI packaging — every package carries complete metadata (PEP 639 `license = "MIT"` with
     a bundled `LICENSE`, classifiers, pinned inter-package deps) and builds a clean sdist + wheel that
     passes `twine check`. A [`release`](.github/workflows/release.yml) workflow builds all nineteen

@@ -39,13 +39,26 @@ and ``requests``/``events``/``components`` are always present even when empty.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from benzene.results import Result
+
+from .context import Context
+from .pipeline import Middleware, Next
 from .registry import SupportsDefinitions
 from .schema import Schema, json_schema
-from .spec import ProducesSource, ServiceSpec, outbound_items
+from .spec import (
+    SPEC_TOPIC,
+    SPEC_TYPE_NATIVE,
+    ProducesSource,
+    ServiceSpec,
+    SpecSource,
+    outbound_items,
+    resolve_spec,
+    select_spec_document,
+)
 
 #: The ``openapi`` marker every Contract Document carries (contract-document.md §1). A heritage
 #: marker naming the schema-object dialect, not a claim to be an OpenAPI document — §1 is explicit
@@ -273,6 +286,68 @@ def resolve_contract(source: ContractSource | None) -> ContractDocument | None:
     if source is None:
         return None
     return source() if callable(source) else source
+
+
+def spec_interception(
+    spec: SpecSource | None = None,
+    *,
+    contract: ContractSource | None = None,
+    aliases: Iterable[str] = (),
+) -> Middleware:
+    """Middleware that answers ``benzene:spec`` (and any ``aliases``) on any transport.
+
+    The request is the optional ``{"type", "format"}`` of wire-contracts §7, and an absent, empty or
+    ``null`` body, or ``{}``, means ``benzene``/``json``: the **Contract Document**. ``contract`` (a
+    :class:`ContractDocument` or a callable returning one) is served verbatim when given — pass the
+    same source the HTTP surface serves for the identical document; otherwise the document is
+    projected from ``spec`` (:meth:`ContractDocument.from_spec`). ``{"type": "native"}`` answers this
+    port's own :class:`~benzene.core.ServiceSpec` payload, and any other type or format is answered
+    ``not-implemented`` — never a different document. Interception is by topic id, version ignored;
+    install it before the message router, exactly like health and mesh interception.
+    """
+    if spec is None and contract is None:
+        raise ValueError(
+            "spec_interception() needs something to serve: pass a ServiceSpec (or a callable "
+            "returning one) as spec=, or a ContractDocument as contract=."
+        )
+    topics = {SPEC_TOPIC, *aliases}
+
+    async def middleware(context: Context, next: Next) -> None:  # noqa: A002 - spec name
+        if context.topic not in topics:
+            await next()
+            return
+        request = context.request
+        if request is None:
+            request = {}
+        if not isinstance(request, dict):
+            context.result = Result.bad_request(
+                'benzene:spec takes an optional {"type": ..., "format": ...} object'
+            )
+            return
+        kind, unsupported = select_spec_document(request.get("type"), request.get("format"))
+        if unsupported is not None:
+            context.result = Result.not_implemented(unsupported)
+            return
+        if kind == SPEC_TYPE_NATIVE:
+            native = resolve_spec(spec)
+            context.result = (
+                Result.ok(native.to_payload())
+                if native is not None
+                else Result.not_implemented(
+                    "benzene:spec type 'native' needs a ServiceSpec: this service serves only "
+                    "its authored Contract Document"
+                )
+            )
+            return
+        document = resolve_contract(contract)
+        if document is None:
+            derived = resolve_spec(spec)
+            assert derived is not None  # one of the two was required above
+            document = ContractDocument.from_spec(derived)
+        context.result = Result.ok(document.to_payload())
+        # Terminal for the reserved topic: it never reaches the router.
+
+    return middleware
 
 
 def _event_of(item: Any, catalogue: _Catalogue) -> ContractEvent:

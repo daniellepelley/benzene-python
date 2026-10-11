@@ -30,6 +30,7 @@ from .contract import (
     HttpMapping,
     is_reserved_topic,
     resolve_contract,
+    spec_interception,
 )
 from .dependencies import (
     Container,
@@ -92,7 +93,7 @@ from .registry import (
     exact_version,
     highest_version,
 )
-from .router import message_router
+from .router import PING_TOPIC, message_router
 from .schema import Schema, json_schema
 from .spec import (
     SPEC_FORMAT_JSON,
@@ -105,8 +106,8 @@ from .spec import (
     SpecSource,
     SupportsOutboundDefinitions,
     TopicSpec,
+    resolve_spec,
     select_spec_document,
-    spec_interception,
 )
 from .startup import AppDefinition, BenzeneStartUp, application_from, build_application
 from .worker import (
@@ -140,6 +141,7 @@ __all__ = [
     "with_correlation_id",
     "with_retry",
     "HEALTH_TOPIC",
+    "PING_TOPIC",
     "Handler",
     "HandlerDefinition",
     "HealthCheck",
@@ -177,6 +179,7 @@ __all__ = [
     "SpecSource",
     "SupportsOutboundDefinitions",
     "TopicSpec",
+    "resolve_spec",
     "select_spec_document",
     "spec_interception",
     "read_message_metadata",

@@ -10,10 +10,11 @@ contract and not just what it consumes.
 
 This is the transport-neutral core of R5, and this port's **native** shape for it. R5's own document
 is the cross-language Contract Document (:class:`~benzene.core.ContractDocument`,
-``contract-document.md``), which is what ``/benzene/spec`` serves and what every language's client
-generator parses; a ``ServiceSpec`` projects into one, and stays reachable in its own right at
-``/benzene/spec?type=native``. The reserved topic ``benzene:spec`` is answered with this payload by
-:func:`spec_interception` (the same interception pattern as health checks and the mesh endpoint), so a
+``contract-document.md``), which is what ``/benzene/spec`` and the ``benzene:spec`` topic serve and
+what every language's client generator parses; a ``ServiceSpec`` projects into one, and stays
+reachable in its own right as the port-extension type ``native`` (``/benzene/spec?type=native``). The reserved topic ``benzene:spec`` is answered by
+:func:`~benzene.core.spec_interception` (the same interception pattern as health checks and the mesh
+endpoint) with the Contract Document by default and this payload for ``{"type": "native"}``, so a
 service can serve its spec over *any* transport.
 
 The mesh :class:`~benzene.mesh.ServiceDescriptor` is a richer, mesh-facing projection of the same
@@ -28,10 +29,6 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from benzene.results import Result
-
-from .context import Context
-from .pipeline import Middleware, Next
 from .registry import Registry
 from .schema import Schema, json_schema
 
@@ -219,19 +216,8 @@ def _outbound_spec(item: OutboundTopic | str) -> TopicSpec:
 SpecSource = ServiceSpec | Callable[[], ServiceSpec]
 
 
-def spec_interception(spec: SpecSource, *, aliases: Iterable[str] = ()) -> Middleware:
-    """Middleware that answers ``benzene:spec`` (and any ``aliases``) with the derived spec document.
-
-    ``spec`` may be a :class:`ServiceSpec` or a callable returning one. Interception is by topic id,
-    version ignored — install it before the message router, exactly like health/mesh interception.
-    """
-    topics = {SPEC_TOPIC, *aliases}
-
-    async def middleware(context: Context, next: Next) -> None:  # noqa: A002 - spec name
-        if context.topic in topics:
-            resolved = spec() if callable(spec) else spec
-            context.result = Result.ok(resolved.to_payload())
-            return  # short-circuit: the reserved topic never reaches the router
-        await next()
-
-    return middleware
+def resolve_spec(source: SpecSource | None) -> ServiceSpec | None:
+    """The spec a :data:`SpecSource` denotes, calling it when it is a callable."""
+    if source is None:
+        return None
+    return source() if callable(source) else source

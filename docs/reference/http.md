@@ -171,8 +171,9 @@ projection sees the handlers' declared types, so it can **name** each payload in
 `components.schemas` rather than inlining it.
 
 The reserved topic **`benzene:spec`** is answered on *any* transport by `spec_interception` (the same
-pattern as health and mesh interception) and still carries the native `ServiceSpec` payload; the
-`?type=` switch is an HTTP-surface affordance, which is the only place R5 defines one.
+pattern as health and mesh interception), with the same request semantics as this route — the
+Contract Document by default, `{"type": "native"}` for the `ServiceSpec`, `not-implemented` otherwise
+(see [the service spec](core.md#service-spec)).
 
 The three cloud hosts drive their HTTP trigger through this same `BenzeneHttpApp`, so passing
 `standard_paths=` to `GcpFunctionsApp` / `AwsLambdaApp` / `AzureFunctionsApp` exposes the identical

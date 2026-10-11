@@ -4,6 +4,11 @@ Resolves the context's topic to a handler, maps the request, runs the handler, a
 result. Registered last in the pipeline. Empty topic → ``validation-error``; no handler →
 ``not-found`` naming the topic and the version asked for; an uncaught handler exception →
 ``service-unavailable`` (never crashes the adapter).
+
+The router also answers the reserved reachability probe ``benzene:ping`` (wire-contracts §7) with
+``ok`` and no payload, on every transport and without registration: health checks send it into a
+queue or a function to prove the path works, and on a one-way binding an unanswered probe would be a
+``not-found`` failure the transport redelivers until it dead-letters it.
 """
 
 from __future__ import annotations
@@ -16,6 +21,9 @@ from .context import Context
 from .mapping import to_request
 from .pipeline import Middleware, Next
 from .registry import NoDefaultHandlerWarning, Registry, VersionSelector, exact_version
+
+#: The reserved reachability probe (wire-contracts §7): answered ``ok``, no payload, version ignored.
+PING_TOPIC = "benzene:ping"
 
 
 def message_router(
@@ -37,6 +45,9 @@ def message_router(
     async def middleware(context: Context, next: Next) -> None:  # noqa: A002 - spec name
         if not context.topic:
             context.result = Result.validation_error("Topic is required")
+            return
+        if context.topic == PING_TOPIC:
+            context.result = Result.ok()
             return
 
         definition = selector(registry, context.topic, context.version)

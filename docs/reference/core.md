@@ -374,10 +374,19 @@ pipeline = MiddlewarePipeline().use(spec_interception(spec))
 ```
 
 `spec_interception(spec)` short-circuits the reserved `benzene:spec` topic (version ignored), so a
-service serves its spec over gRPC or a cloud queue too; over HTTP the [`/benzene/spec`](http.md) surface
-serves the **Contract Document** below and keeps this payload at `?type=native`. Pass a callable to
-`spec_interception` / `StandardPaths(spec=...)` to re-derive per request (e.g. to reflect a degraded
-subsystem). The mesh [`ServiceDescriptor`](mesh.md) is a richer projection of the same registry
+service serves its spec over gRPC or a cloud queue too. The topic's request is the optional
+`{"type", "format"}` of wire-contracts §7: an absent, empty or `null` body, or `{}`, answers the
+**Contract Document** below (projected from `spec`, or exactly the `contract=` document you pass — give
+it the same source as `StandardPaths(contract=...)` and the topic and the HTTP route answer the
+identical document); `{"type": "native"}` answers this `ServiceSpec` payload, a port-extension type;
+and any other type, or a format other than `json`, answers `not-implemented` — never a different
+document. `select_spec_document(type, format)` is that decision, shared with the HTTP
+[`/benzene/spec`](http.md) route. Pass a callable to `spec_interception` / `StandardPaths(spec=...)` to
+re-derive per request (e.g. to reflect a degraded subsystem).
+
+The reserved reachability probe **`benzene:ping`** (`PING_TOPIC`) needs no wiring: the message router
+answers it `ok` with no payload on every transport, so a queue or function health check that sends it
+is never a `not-found` the transport redelivers. The mesh [`ServiceDescriptor`](mesh.md) is a richer projection of the same registry
 (adding identity, placement, and a contract hash); `ServiceSpec` is the minimal profile document and
 needs only `benzene.core`. Both share one schema derivation, `json_schema`.
 
@@ -562,6 +571,8 @@ make a blocking SDK call safe: sharing one event loop works because the consumer
 `DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `MessageSender`, `with_retry`, `with_correlation_id`,
 `RetryingMessageSender`, `CorrelationIdMessageSender`, `DEFAULT_RETRYABLE`, `SchemaCasters`,
 `casting_handler`, `Cast`, `NoCastPathError`, `ServiceSpec`, `TopicSpec`, `spec_interception`,
+`select_spec_document`, `resolve_spec`, `SPEC_TYPE_BENZENE`, `SPEC_TYPE_NATIVE`, `SPEC_FORMAT_JSON`,
+`PING_TOPIC`,
 `ContractDocument`, `ContractRequest`, `ContractEvent`, `ContractSource`, `HttpMapping`,
 `CONTRACT_OPENAPI`, `is_reserved_topic`, `resolve_contract`,
 `SPEC_TOPIC`, `json_schema`, `Schema`, `to_jsonable`, `to_request`, `Pipelines`,

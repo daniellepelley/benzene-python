@@ -274,12 +274,64 @@ def test_standard_surfaces_do_not_shadow_ordinary_routes() -> None:
 
 # --- the transport-neutral benzene:spec interception (core) --------------------------------------
 
-def test_spec_interception_answers_the_reserved_topic_on_any_transport() -> None:
+def _spec_topic_app(**kwargs) -> BenzeneMessageApplication:
     _, registry = _router_and_registry()
-    spec = ServiceSpec.derive(registry, service="greeter")
-    pipeline = MiddlewarePipeline().use(spec_interception(spec))
-    app = BenzeneMessageApplication(registry, pipeline)
+    pipeline = MiddlewarePipeline().use(spec_interception(**kwargs))
+    return BenzeneMessageApplication(registry, pipeline)
 
-    response = asyncio.run(app.handle({"topic": SPEC_TOPIC, "headers": {}, "body": "{}"}))
+
+def _ask_spec(app: BenzeneMessageApplication, body: str) -> dict:
+    return asyncio.run(app.handle({"topic": SPEC_TOPIC, "headers": {}, "body": body}))
+
+
+@pytest.mark.parametrize("body", ["", "null", "{}", '{"type": "benzene", "format": "json"}'])
+def test_spec_topic_answers_the_contract_document_by_default(body: str) -> None:
+    # wire-contracts §7: absent, empty, null and {} all mean type benzene / format json.
+    _, registry = _router_and_registry()
+    response = _ask_spec(_spec_topic_app(spec=ServiceSpec.derive(registry, service="greeter")), body)
+    assert response["statusCode"] == "ok"
+    document = json.loads(response["body"])
+    assert document["openapi"] == "3.0.1"
+    assert document["info"]["title"] == "greeter"
+    assert [r["topic"] for r in document["requests"]] == ["say:hello"]
+
+
+def test_spec_topic_serves_an_authored_contract_verbatim() -> None:
+    from benzene.core import ContractDocument
+
+    _, registry = _router_and_registry()
+    contract = ContractDocument.derive(registry, service="greeter", message_endpoint="/benzene/invoke")
+    response = _ask_spec(_spec_topic_app(contract=contract), "")
+    assert json.loads(response["body"]) == contract.to_payload()
+
+
+def test_spec_topic_native_is_this_ports_extension_type() -> None:
+    _, registry = _router_and_registry()
+    app = _spec_topic_app(spec=ServiceSpec.derive(registry, service="greeter"))
+    response = _ask_spec(app, '{"type": "Native"}')  # compared case-insensitively
     assert response["statusCode"] == "ok"
     assert json.loads(response["body"])["service"] == "greeter"
+
+
+@pytest.mark.parametrize("body", ['{"type": "asyncapi"}', '{"format": "yaml"}'])
+def test_spec_topic_answers_an_unsupported_type_or_format_not_implemented(body: str) -> None:
+    _, registry = _router_and_registry()
+    response = _ask_spec(_spec_topic_app(spec=ServiceSpec.derive(registry, service="greeter")), body)
+    assert response["statusCode"] == "not-implemented"
+    assert response["isSuccessful"] is False
+
+
+def test_spec_interception_needs_something_to_serve() -> None:
+    with pytest.raises(ValueError, match="needs something to serve"):
+        spec_interception()
+
+
+def test_benzene_ping_is_answered_ok_with_no_payload_without_registration() -> None:
+    from benzene.core import PING_TOPIC
+
+    app = BenzeneMessageApplication(Registry())
+    response = asyncio.run(
+        app.handle({"topic": PING_TOPIC, "headers": {"benzene-version": "v9"}, "body": ""})
+    )
+    assert response["statusCode"] == "ok"  # version ignored: interception is by topic id alone
+    assert response["body"] == ""
