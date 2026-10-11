@@ -58,9 +58,10 @@ in the message registry, and `/v1/orders` and `/v2/orders` reach the `v1` and `v
 router.register("GET", "/{version}/orders/{id}", "order:get", get_order)
 ```
 
-The route segment is authoritative over both the route's static version and a caller's version
-header. Without a `{version}` segment, a caller's version header (any of the fallback names —
-`benzene-version`, `version`, `x-version`) overrides the route's static version.
+The route segment is sugar for the `benzene-version` header (versioning.md §2.1): it is supplied
+exactly as if the caller had sent the header, and is authoritative over both the route's static
+version and a header the caller did send. Without a `{version}` segment, a caller's `benzene-version`
+header overrides the route's static version; an unrelated `version`/`x-version` header does not.
 
 `version` is a **reserved path-parameter name**: a `{version}` segment is consumed for handler
 selection and is never delivered to the handler as a request field, so don't use `{version}` for a

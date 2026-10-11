@@ -187,7 +187,7 @@ def test_response_event_emitted_to_sink_after_the_handler_runs() -> None:
     async def handler(_request) -> Result:
         return Result.created({"id": 7})
 
-    registry = Registry().register("t", handler, version="3")
+    registry = Registry().register("t", handler, version="3", default=True)
     pipeline = MiddlewarePipeline([response_event_interception(sink)]).use(message_router(registry))
     run(pipeline.handle(Context("t", {}, headers={"x-correlation-id": "corr-9"}, version="3")))
 

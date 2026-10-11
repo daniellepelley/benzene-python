@@ -25,6 +25,7 @@ async def create_order(request: OrderRequest) -> Result:
 |---|---|
 | `topic` | the topic id the handler serves |
 | `version` | payload/handler version (default `""`, the unversioned handler) |
+| `default` | keyword-only; `True` declares a versioned handler its topic's default — where a message with no version goes when the topic has no unversioned handler |
 | `request_type` | dataclass/type to build from the decoded body before calling — **inferred** from the handler's first-parameter annotation (`request: OrderRequest`), so you rarely pass it; give it explicitly to override, or when the parameter is unannotated or a subscripted generic (`dict[str, Any]`) |
 | `response_type` | declared response type, for descriptors/tooling (optional) |
 
@@ -52,7 +53,12 @@ registry = (
 registry.find("order:get")           # unversioned handler
 registry.find("order:get", "2")      # exact version match
 registry.find("order:get", "9")      # None — no fuzzy fallback
+registry.default_for("order:get")    # where a message with no version goes
 ```
+
+`register(..., default=True)` (and `@message(..., default=True)`) declares a versioned handler its
+topic's default. A second declared default on one topic is a `DuplicateHandlerError`; beside an
+unversioned handler it has no effect, because the unversioned handler is always the default.
 
 `Registry.from_definitions(*sources)` builds a registry from anything exposing `definitions()` — an
 `HttpRouter`, another `Registry`, or any `SupportsDefinitions` — collapsing the `for d in
@@ -146,9 +152,10 @@ response = await app.handle(
 # {"statusCode": "created", "headers": {"content-type": "application/json"}, "body": "..."}
 ```
 
-The message version is read inbound from the first present header in `VERSION_HEADER_NAMES` —
-`benzene-version` (the canonical `VERSION_HEADER`, written outbound), then `version`, then `x-version`
-(versioning.md §2) — via `resolve_version(headers)`. Helpers `encode_response(result)` and
+The message version is read inbound from the one `benzene-version` header (`VERSION_HEADER`,
+wire-contracts §2) via `resolve_version(headers)`, and echoed outbound under the same name;
+`BenzeneMessageApplication(registry, version_header="...")` renames it in one place for both
+directions and every transport. Helpers `encode_response(result)` and
 `error_payload(result)` produce the response envelope and the RFC 9457 problem document that is a
 failure's body (`{type, title, detail, benzeneStatus, errors[]}` — see
 [`benzene.results`](results.md#problem-details-on-the-wire-wire-contracts-13); RFC 9457's integer
@@ -223,25 +230,27 @@ app, and returns `(AppDefinition, Scope)`. `application_from(definition)` builds
 
 ## Versioning
 
-A message carries its version in a header (versioning.md §2). Inbound, `resolve_version` reads the
-first present of `VERSION_HEADER_NAMES` — `benzene-version` (canonical), then `version`, then
-`x-version` — so a peer in any language reaches the right handler; outbound, write the canonical
-`benzene-version`. Over HTTP a `{version}` route segment (e.g. `/v{version}/orders/{id}`) is
-authoritative when present, falling back to the headers otherwise (see [`benzene.http`](http.md)).
+A message carries its version in **one** header, `benzene-version` (wire-contracts §2, versioning.md
+§2) — there is no fallback list, so a caller's own `version`/`x-version` header is an ordinary header
+and selects nothing. Over HTTP a `{version}` route segment (e.g. `/v{version}/orders/{id}`) supplies the
+version exactly as if the header had been sent, and wins over it (see [`benzene.http`](http.md)).
 When a request declared a version, the response echoes it in the canonical `benzene-version` header
 (wire-contracts §2.1; versioning.md §4.2, "respond in the same version"), so a consumer knows which
 schema the body is — a downcast reply says so. An unversioned request gets no such header, leaving
 that traffic untouched.
 
-**Selection.** By default handlers are selected by **exact `(topic, version)`** (`exact_version`): a
-message with no version signal is served by the unversioned handler (version `""`), and an unknown
-version is a `not-found`. Pass a `version_selector` to opt into a different policy —
-`highest_version` returns the exact match if present, else the natural-highest registered version
-(`v2` before `v10`); a selector is just a `VersionSelector` callable, so you can supply your own.
-(The spec's built-in .NET selector falls back to the highest version; this port defaults to
-exact-only so an unknown version fails loudly rather than silently routing to a newer handler —
-opt into `highest_version` for the .NET-style fallback. The same keyword works on
-`message_router(registry, version_selector=...)`.)
+**Selection** (core-concepts §2). By default handlers are selected by **exact `(topic, version)`**
+(`exact_version`): an unknown version is a `not-found` naming the topic and the version, never a
+fallback to another version's handler. A message with no version goes to the topic's **default
+handler** — the unversioned one, else the one declared `default=True`. A topic whose handlers are all
+versioned with none declared default is valid but fails every unversioned message, so the router
+warns about it when the application is built (`NoDefaultHandlerWarning`, a `UserWarning` you can
+filter). Pass a `version_selector` to opt into a different policy — `highest_version` returns the
+exact (or default) match if present, else the natural-highest registered version (`v2` before
+`v10`); a selector is just a `VersionSelector` callable, so you can supply your own. The same
+keyword works on `message_router(registry, version_selector=...)`. Step 2 of the spec's rule — a
+handler the version can be *cast* to — has no candidates here, because this port's casting is
+registration-level: `casting_handler` registers each version it serves, so the exact match finds it.
 
 ```python
 from benzene.core import BenzeneMessageApplication, highest_version
@@ -261,13 +270,14 @@ def make_place_v1(latest):
         return await latest(PlaceOrderV2(sku=request.sku, quantity=request.count))  # upcast v1 -> v2
     return place_v1
 
-registry.register("orders:place", make_place_v1(place_v2), version="v1")   # inferred: PlaceOrderV1
+registry.register("orders:place", make_place_v1(place_v2), version="v1",  # inferred: PlaceOrderV1
+                  default=True)                     # a message with no version gets v1
 ```
 
 Each registration's `request_type` is inferred from the handler's first-parameter annotation
 (`place_v2(request: PlaceOrderV2)`, `place_v1(request: PlaceOrderV1)`), so the router builds the body
-into the right per-version type without repeating it. A v1 client (`version: v1`, the old `count`
-field) and a v2 client (`benzene-version: v2`, `quantity`) now both reach the one shared `place_v2`
+into the right per-version type without repeating it. A v1 client (the old `count`
+field — `benzene-version: v1`, or no version at all) and a v2 client (`benzene-version: v2`, `quantity`) now both reach the one shared `place_v2`
 implementation.
 
 **Transparent casting** (versioning.md §4) removes the per-version forwarder. Register the one-step
@@ -289,7 +299,8 @@ registry.register("orders:place", place_v2, version="v2",           # request_ty
                   response_type=OrderPlacedV2)
 registry.register("orders:place",                                    # v1 served transparently
                   casting_handler(place_v2, casters, to=PlaceOrderV2, response_to=OrderPlacedV1),
-                  version="v1", request_type=PlaceOrderV1, response_type=OrderPlacedV1)
+                  version="v1", request_type=PlaceOrderV1, response_type=OrderPlacedV1,
+                  default=True)
 ```
 
 `place_v2` only ever sees the canonical type. The transparent (`casting_handler`) registration **must**
@@ -539,8 +550,7 @@ make a blocking SDK call safe: sharing one event loop works because the consumer
 `SupportsDefinitions`, `Scope`,
 `ServiceNotRegisteredError`, `AppDefinition`, `BenzeneStartUp`, `HealthChecks`, `HealthCheck`,
 `HealthCheckResult`, `HealthReport`, `DuplicateHealthCheckError`, `HEALTH_TOPIC`,
-`health_interception`, `VERSION_HEADER`,
-`VERSION_HEADER_NAMES`, `VersionSelector`, `application_from`, `build_application`, `definition_of`,
+`health_interception`, `VERSION_HEADER`, `NoDefaultHandlerWarning`, `VersionSelector`, `application_from`, `build_application`, `definition_of`,
 `decode_response`, `encode_response`, `error_payload`, `exact_version`, `highest_version`, `message`, `message_router`,
 `resolve_version`, `read_message_metadata`, `MetadataKeys`, `DEFAULT_METADATA_KEYS`,
 `DEFAULT_TOPIC_KEY`, `DEFAULT_VERSION_KEY`, `MessageSender`, `with_retry`, `with_correlation_id`,

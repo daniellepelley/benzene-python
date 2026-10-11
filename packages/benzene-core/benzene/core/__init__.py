@@ -41,7 +41,6 @@ from .dependencies import (
 )
 from .envelope import (
     VERSION_HEADER,
-    VERSION_HEADER_NAMES,
     BenzeneMessageApplication,
     decode_response,
     encode_response,
@@ -85,6 +84,7 @@ from .outbound import (
 from .pipeline import Middleware, MiddlewarePipeline, Next
 from .registry import (
     DuplicateHandlerError,
+    NoDefaultHandlerWarning,
     Registry,
     SupportsDefinitions,
     VersionSelector,
@@ -124,6 +124,7 @@ __all__ = [
     "casting_handler",
     "DEFAULT_RETRYABLE",
     "DuplicateHandlerError",
+    "NoDefaultHandlerWarning",
     "DuplicateHealthCheckError",
     "DuplicatePipelineError",
     "InProcessFanOutSender",
@@ -178,7 +179,6 @@ __all__ = [
     "Scope",
     "ServiceNotRegisteredError",
     "VERSION_HEADER",
-    "VERSION_HEADER_NAMES",
     "VersionSelector",
     "definition_of",
     "infer_request_type",

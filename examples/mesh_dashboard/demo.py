@@ -194,7 +194,9 @@ def build_demo_mesh(collector: MeshCollector | None = None) -> DashboardMesh:
         )
         return Result.created({"sku": request.sku})
 
-    order_registry = Registry().register(PLACE_ORDER, place, version="2", response_type=OrderPlaced)
+    order_registry = Registry().register(
+        PLACE_ORDER, place, version="2", default=True, response_type=OrderPlaced
+    )
     orders, order_traces = _service("orders", order_registry)
 
     registries = {

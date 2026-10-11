@@ -1,8 +1,15 @@
 """The handler registry (core-concepts.md sections 2 and 9).
 
 A (topic id, version) pair maps to at most one handler; registering two for the same pair is a
-*startup* error, not a runtime dispatch ambiguity. When a message arrives without a version, the
-unversioned handler (version = "") handles it; versioned handlers are selected only by exact match.
+*startup* error, not a runtime dispatch ambiguity.
+
+Version selection (core-concepts §2) is the router's :data:`VersionSelector`; the default,
+:func:`exact_version`, is the spec's rule: a message carrying version *v* goes to the handler
+registered for exactly *v*, else it is ``not-found`` — never "the nearest" or "the highest". A
+message carrying **no** version goes to the topic's **default handler**: the unversioned handler, or
+else the versioned handler the application declared default (``default=True``). A topic whose
+handlers are all versioned with none declared default is valid, but every unversioned message to it
+fails, so the router warns about it at start-up (:class:`NoDefaultHandlerWarning`).
 """
 
 from __future__ import annotations
@@ -26,7 +33,18 @@ class SupportsDefinitions(Protocol):
 
 
 class DuplicateHandlerError(Exception):
-    """Raised at registration time when a (topic, version) pair already has a handler."""
+    """Raised at registration time when a (topic, version) pair already has a handler, or when a
+    second handler of one topic is declared ``default=True``."""
+
+
+class NoDefaultHandlerWarning(UserWarning):
+    """A topic has only versioned handlers and none declared default (core-concepts §2).
+
+    Valid, but a message to it that carries no ``benzene-version`` header answers ``not-found``.
+    Declare one handler the default (``@message(topic, version="v1", default=True)``) so producers
+    that predate versioning keep working, or silence it with :mod:`warnings` if that failure is the
+    intent.
+    """
 
 
 class Registry:
@@ -61,16 +79,19 @@ class Registry:
         version: str = "",
         request_type: type | None = None,
         response_type: type | None = None,
+        *,
+        default: bool = False,
     ) -> Registry:
         """Explicitly register a handler (the first-class registration path).
 
         ``request_type`` is inferred from the handler's first-parameter annotation when omitted
-        (:func:`~benzene.core.infer_request_type`); pass it explicitly to override.
+        (:func:`~benzene.core.infer_request_type`); pass it explicitly to override. ``default=True``
+        declares a versioned handler its topic's default — where a message with no version goes.
         """
         if request_type is None:
             request_type = infer_request_type(handler)
         return self.add_definition(
-            HandlerDefinition(topic, handler, version, request_type, response_type)
+            HandlerDefinition(topic, handler, version, request_type, response_type, default)
         )
 
     def add(self, fn: Handler) -> Registry:
@@ -94,12 +115,33 @@ class Registry:
                 "exactly one handler — remove the duplicate registration, or give one handler a "
                 "distinct version."
             )
+        declared = next((d for d in self.versions_of(definition.topic) if d.is_default), None)
+        if definition.is_default and declared is not None:
+            raise DuplicateHandlerError(
+                f"Topic {definition.topic!r} already declares {_describe(declared)} its default "
+                f"handler, so {_describe(definition)} cannot be declared default too: a message with "
+                "no version goes to exactly one handler. Keep default=True on one of them."
+            )
         self._by_key[key] = definition
         return self
 
     def find(self, topic: str, version: str = "") -> HandlerDefinition | None:
-        """Resolve a handler by exact (topic, version). No version falls back to unversioned."""
+        """Resolve a handler by exact ``(topic, version)`` — ``""`` is the unversioned handler only.
+
+        For "where does a message with no version go" use :meth:`default_for`.
+        """
         return self._by_key.get((topic, version))
+
+    def default_for(self, topic: str) -> HandlerDefinition | None:
+        """The topic's default handler: the unversioned one, else the one declared ``default=True``.
+
+        The unversioned handler wins when both exist (core-concepts §2), so a ``default=True`` beside
+        an unversioned handler has no effect until the unversioned one is retired.
+        """
+        unversioned = self._by_key.get((topic, ""))
+        if unversioned is not None:
+            return unversioned
+        return next((d for d in self.versions_of(topic) if d.is_default), None)
 
     def definitions(self) -> list[HandlerDefinition]:
         return list(self._by_key.values())
@@ -108,9 +150,31 @@ class Registry:
         """Every handler registered for ``topic``, across all versions (registration order)."""
         return [d for d in self._by_key.values() if d.topic == topic]
 
+    def topics_without_default(self) -> list[str]:
+        """Topics whose handlers are all versioned and none declared default (registration order).
+
+        A message carrying no version to one of these answers ``not-found`` — valid, and reported at
+        start-up by :func:`~benzene.core.message_router` (core-concepts §2).
+        """
+        topics = dict.fromkeys(d.topic for d in self._by_key.values())
+        return [topic for topic in topics if self.default_for(topic) is None]
+
+
+def _describe(definition: HandlerDefinition) -> str:
+    if definition.version:
+        return f"version {definition.version!r}"
+    return "the unversioned handler"
+
 
 def exact_version(registry: Registry, topic: str, version: str) -> HandlerDefinition | None:
-    """The default selector: an exact ``(topic, version)`` match (unversioned when ``version`` is '')."""
+    """The default selector (core-concepts §2): the handler registered for exactly ``version``.
+
+    No version (``""``) selects the topic's default handler (:meth:`Registry.default_for`). A version
+    with no handler of its own is ``not-found`` — there is no nearest or highest fallback, because
+    serving another version's behaviour to a caller that named one is what versioning prevents.
+    """
+    if not version:
+        return registry.default_for(topic)
     return registry.find(topic, version)
 
 
@@ -126,13 +190,15 @@ def _natural_key(version: str) -> tuple:
 
 
 def highest_version(registry: Registry, topic: str, version: str) -> HandlerDefinition | None:
-    """An opt-in selector: the exact match if present, else the **highest** available version.
+    """An opt-in selector: :func:`exact_version`'s answer if it has one, else the **highest** version.
 
-    "Highest" is a natural ordering of the version strings (``v2`` before ``v10``); for a different
-    scheme (e.g. semantic versioning) write your own selector — it is just a callable. Exact match is
-    still preferred, so a pinned version always wins over the fallback.
+    Not the spec's default and never installed for you (core-concepts §2 permits a different policy
+    only as an explicit option): pass ``version_selector=highest_version`` to opt in. "Highest" is a
+    natural ordering of the version strings (``v2`` before ``v10``); for a different scheme (e.g.
+    semantic versioning) write your own selector — it is just a callable. An exact match, and for an
+    unversioned message the topic's default handler, still win over the fallback.
     """
-    exact = registry.find(topic, version)
+    exact = exact_version(registry, topic, version)
     if exact is not None:
         return exact
     candidates = registry.versions_of(topic)

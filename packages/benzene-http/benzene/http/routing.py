@@ -127,15 +127,20 @@ class HttpRouter:
         version: str = "",
         request_type: type | None = None,
         response_type: type | None = None,
+        *,
+        default: bool = False,
     ) -> HttpRouter:
         """Explicitly map a route to a topic/handler (no decorators required).
 
         ``request_type`` is inferred from the handler's first-parameter annotation when omitted
-        (:func:`~benzene.core.infer_request_type`); pass it explicitly to override.
+        (:func:`~benzene.core.infer_request_type`); pass it explicitly to override. ``default=True``
+        declares a versioned handler its topic's default, as on :meth:`benzene.core.Registry.register`.
         """
         if request_type is None:
             request_type = infer_request_type(handler)
-        definition = HandlerDefinition(topic, handler, version, request_type, response_type)
+        definition = HandlerDefinition(
+            topic, handler, version, request_type, response_type, is_default=default
+        )
         self._register(method, path, definition)
         return self
 

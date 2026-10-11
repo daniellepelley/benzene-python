@@ -73,13 +73,19 @@ def infer_request_type(handler: Handler) -> type | None:
 
 @dataclass(frozen=True)
 class HandlerDefinition:
-    """An explicit (topic, version, handler, types) registration record."""
+    """An explicit (topic, version, handler, types) registration record.
+
+    ``is_default`` marks a *versioned* handler as its topic's **default handler** — the one a
+    message carrying no version goes to when the topic has no unversioned handler (core-concepts §2).
+    An unversioned handler is its topic's default without saying so.
+    """
 
     topic: str
     handler: Handler
     version: str = ""
     request_type: type | None = None
     response_type: type | None = None
+    is_default: bool = False
 
 
 def message(
@@ -87,17 +93,27 @@ def message(
     version: str = "",
     request_type: type | None = None,
     response_type: type | None = None,
+    *,
+    default: bool = False,
 ) -> Callable[[Handler], Handler]:
     """Tag an async handler function with a topic (the annotation *idiom*).
 
     The tagged function is picked up by :meth:`Registry.add`; it stays an ordinary callable.
+    ``default=True`` declares a versioned handler its topic's default — where a message with no
+    ``benzene-version`` goes when the topic has no unversioned handler::
+
+        @message("orders:place", version="v1", default=True)   # pre-versioning producers land here
+        async def place_v1(request: PlaceOrderV1) -> Result: ...
+
+        @message("orders:place", version="v2")
+        async def place_v2(request: PlaceOrderV2) -> Result: ...
     """
 
     def decorate(fn: Handler) -> Handler:
         setattr(
             fn,
             _BENZENE_MESSAGE_ATTR,
-            (topic, version, request_type or infer_request_type(fn), response_type),
+            (topic, version, request_type or infer_request_type(fn), response_type, default),
         )
         return fn
 
@@ -109,5 +125,5 @@ def definition_of(fn: Handler) -> HandlerDefinition | None:
     tag = getattr(fn, _BENZENE_MESSAGE_ATTR, None)
     if tag is None:
         return None
-    topic, version, request_type, response_type = tag
-    return HandlerDefinition(topic, fn, version, request_type, response_type)
+    topic, version, request_type, response_type, is_default = tag
+    return HandlerDefinition(topic, fn, version, request_type, response_type, is_default)

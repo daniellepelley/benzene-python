@@ -36,7 +36,8 @@ class ProcessedLog:
 
 
 def make_create_order_v1(log: ProcessedLog) -> Handler:
-    """The V1 implementation of ``order:create`` — runs only when ``benzene-version`` is ``v1``."""
+    """The V1 implementation of ``order:create`` — runs when ``benzene-version`` is ``v1``, and,
+    as the declared default, when a producer sends no version at all."""
 
     async def create_order_v1(request: CreateOrderV1) -> Result:
         log.record(f"order:create v1 | customer={request.customer_name} qty={request.quantity}")
@@ -46,11 +47,7 @@ def make_create_order_v1(log: ProcessedLog) -> Handler:
 
 
 def make_create_order_v2(log: ProcessedLog) -> Handler:
-    """The V2 implementation of ``order:create``.
-
-    Because ``v2`` is the highest registered version, it is also the one the ``highest_version``
-    selector falls back to when a producer sends no version at all — so V2 is the topic's default.
-    """
+    """The V2 implementation of ``order:create`` — runs only when ``benzene-version`` is ``v2``."""
 
     async def create_order_v2(request: CreateOrderV2) -> Result:
         log.record(

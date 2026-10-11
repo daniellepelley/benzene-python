@@ -14,21 +14,24 @@ now I need v2" through that toolkit, in the order you'd actually reach for it.
 
 ## 1. How a version is carried and resolved
 
-Inbound, a message names its version in **one of three headers**, tried in order —
-`benzene-version` (the canonical one Benzene writes outbound), then `version`, then `x-version`. A peer
-in any language (.NET, Go, TS) may send whichever it has; the first present wins. `resolve_version`
-reads them, and `VERSION_HEADER_NAMES` is that ordered list:
+A message names its version in **one header**, `benzene-version` — the same name in every language,
+read inbound and echoed outbound. A caller's own `version` or `x-version` header (an API or SDK
+version, typically) is an ordinary header and selects nothing: reading it as a payload version would
+silently misroute the message to another version's handler. `resolve_version` reads the one header:
 
 ```python
-from benzene.core import VERSION_HEADER_NAMES, resolve_version
+from benzene.core import VERSION_HEADER, resolve_version
 
-VERSION_HEADER_NAMES                                  # ('benzene-version', 'version', 'x-version')
+VERSION_HEADER                                        # 'benzene-version'
 
 resolve_version({"benzene-version": "v2"})            # 'v2'
-resolve_version({"x-version": "v2"})                  # 'v2'  (fallback header still works)
-resolve_version({"version": "a", "x-version": "b"})   # 'a'   (order-sensitive: first present wins)
-resolve_version({})                                   # ''    (no signal -> the unversioned handler)
+resolve_version({"x-version": "v2"})                  # ''    (an ordinary header, not a version)
+resolve_version({})                                   # ''    (no signal -> the topic's default handler)
 ```
+
+If your producers already use a different name, rename it in one place —
+`BenzeneMessageApplication(registry, version_header="schema-version")` — and every transport reads it
+(and the response echoes it) under that name instead.
 
 Over HTTP you don't touch headers at all — a `{version}` **route segment** drives selection. Register
 one route with the segment and let the message registry hold the versions:
@@ -42,7 +45,7 @@ async def get_v1(_req: dict) -> Result: return Result.ok({"served": "v1"})
 async def get_v2(_req: dict) -> Result: return Result.ok({"served": "v2"})
 
 registry = Registry()
-registry.register("orders:get", get_v1, version="v1")
+registry.register("orders:get", get_v1, version="v1", default=True)
 registry.register("orders:get", get_v2, version="v2")
 
 router = HttpRouter()
@@ -52,8 +55,8 @@ app = BenzeneHttpApp(router, application=BenzeneMessageApplication(registry))
 # GET /v1/orders -> {"served": "v1"} ;  GET /v2/orders -> {"served": "v2"}
 ```
 
-The captured segment becomes the resolved version, so `/v1/orders` selects the `"v1"` handler and
-`/v2/orders` the `"v2"` one. (Prefer the literal prefix outside the capture — `"/v{version}/orders"`
+The captured segment is supplied exactly as if the caller had sent the `benzene-version` header, so
+`/v1/orders` selects the `"v1"` handler and `/v2/orders` the `"v2"` one. (Prefer the literal prefix outside the capture — `"/v{version}/orders"`
 captures just `"2"`, so register those handlers as `version="2"`; match your route to your version
 strings either way.) The segment drives selection only — it never leaks into the request the handler
 sees.
@@ -87,15 +90,23 @@ async def place_v2(request: PlaceOrderV2) -> Result:
 
 registry = (
     Registry()
-    .register("orders:place", place_v1, version="v1")   # request_type inferred: PlaceOrderV1
-    .register("orders:place", place_v2, version="v2")   # request_type inferred: PlaceOrderV2
+    .register("orders:place", place_v1, version="v1", default=True)  # request_type: PlaceOrderV1
+    .register("orders:place", place_v2, version="v2")                # request_type: PlaceOrderV2
 )
 ```
 
-By default selection is **exact match** (`exact_version`): the requested version must be registered, or
-the message is a loud `not-found`. A message with no version signal is served by the unversioned handler
-(version `""`). This fail-loud default is deliberate — an unknown version is a mistake worth surfacing,
-not a request to silently route to whatever handler happens to be newest.
+Selection is **exact match** (`exact_version`, the spec's rule): the requested version must be
+registered, or the message is a loud `not-found` naming the topic and the version. There is no
+"nearest" or "highest" fallback by default — serving another version's behaviour to a caller that
+named a version is exactly what versioning exists to prevent.
+
+A message with **no** version goes to the topic's **default handler**: the unversioned handler if
+there is one, otherwise the one you declared with `default=True` (the `@message` decorator takes the
+same keyword). Declaring the oldest version you still accept the default is what keeps producers that
+predate versioning working once you turn it on. A topic whose handlers are all versioned and none
+declared default is valid, but every unversioned message to it is `not-found`, so building the
+application warns you with a `NoDefaultHandlerWarning`. Two `default=True` handlers on one topic is a
+`DuplicateHandlerError` at registration.
 
 When you *do* want latest-wins fallback — an unknown or absent version served by the highest registered
 version — opt into the `highest_version` selector on the application:
@@ -136,7 +147,8 @@ def make_place_v1(latest: Handler) -> Handler:
 registry = (
     Registry()
     .register("orders:place", place_v2, version="v2")                    # inferred: PlaceOrderV2
-    .register("orders:place", make_place_v1(place_v2), version="v1")     # inferred: PlaceOrderV1
+    .register("orders:place", make_place_v1(place_v2), version="v1",     # inferred: PlaceOrderV1
+              default=True)                                              # unversioned callers -> v1
 )
 ```
 
@@ -182,7 +194,8 @@ registry = (
               response_type=OrderPlacedV2)                                 # request_type inferred
     .register("orders:place",                                              # v1, served transparently
               casting_handler(place_v2, casters, to=PlaceOrderV2, response_to=OrderPlacedV1),
-              version="v1", request_type=PlaceOrderV1, response_type=OrderPlacedV1)
+              version="v1", request_type=PlaceOrderV1, response_type=OrderPlacedV1,
+              default=True)
 )
 ```
 

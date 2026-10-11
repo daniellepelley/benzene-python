@@ -21,26 +21,21 @@ from .pipeline import MiddlewarePipeline
 from .registry import Registry, VersionSelector
 from .router import message_router
 
-#: The canonical header carrying the payload/handler version (versioning.md §2). Written outbound.
+#: The one header carrying a message's version (wire-contracts §2, core-concepts §2): it selects the
+#: handler and names the payload's schema version. Read inbound and echoed outbound under this name.
+#: There is no fallback list — a caller's own ``version`` / ``x-version`` header is an ordinary
+#: header and selects nothing. Rename it per application with
+#: ``BenzeneMessageApplication(version_header=...)``.
 VERSION_HEADER = "benzene-version"
 
-#: The ordered fallback list read inbound — a peer (.NET/Go/TS) may send any of these; first wins.
-VERSION_HEADER_NAMES: tuple[str, ...] = (VERSION_HEADER, "version", "x-version")
 
+def resolve_version(headers: Mapping[str, str], name: str = VERSION_HEADER) -> str:
+    """Read the message version from the ``name`` header (``benzene-version`` by default).
 
-def resolve_version(
-    headers: Mapping[str, str], names: tuple[str, ...] = VERSION_HEADER_NAMES
-) -> str:
-    """Read the message version from the first present header in ``names`` (versioning.md §2).
-
-    Absent from all of them → ``""`` (the unversioned default). Headers are matched lower-case, as
+    Absent → ``""``, which routes to the topic's default handler. Headers are matched lower-case, as
     the envelope normalises them.
     """
-    for name in names:
-        value = headers.get(name)
-        if value:
-            return value
-    return ""
+    return headers.get(name.lower()) or ""
 
 
 class BenzeneMessageApplication:
@@ -57,18 +52,27 @@ class BenzeneMessageApplication:
         container: Container | None = None,
         *,
         version_selector: VersionSelector | None = None,
+        version_header: str = VERSION_HEADER,
     ) -> None:
         self._registry = registry
         self._container = container or Container()
         self._pipeline = pipeline or MiddlewarePipeline()
+        self._version_header = version_header.lower()
         # The router is the terminal middleware, registered last.
         self._pipeline.use(message_router(registry, version_selector))
+
+    @property
+    def version_header(self) -> str:
+        """The header this application reads a message's version from and echoes it back under —
+        the one place it is configured, which every binding (the HTTP ``/v{version}`` route segment
+        included) writes through."""
+        return self._version_header
 
     async def handle(self, request_envelope: dict[str, Any]) -> dict[str, Any]:
         topic = request_envelope.get("topic") or ""
         headers = {k.lower(): v for k, v in (request_envelope.get("headers") or {}).items()}
         body = request_envelope.get("body") or ""
-        version = resolve_version(headers)
+        version = resolve_version(headers, self._version_header)
 
         try:
             parsed = json.loads(body) if body else {}
@@ -87,7 +91,7 @@ class BenzeneMessageApplication:
         # the request actually declared one, so unversioned traffic is byte-for-byte unchanged and a
         # consumer that sees the header can trust the body is that version (e.g. a downcast reply).
         if version:
-            response["headers"][VERSION_HEADER] = version
+            response["headers"][self._version_header] = version
         return response
 
 

@@ -27,7 +27,6 @@ from typing import Any
 from urllib.parse import parse_qsl
 
 from benzene.core import (
-    VERSION_HEADER,
     AppDefinition,
     BenzeneMessageApplication,
     Container,
@@ -128,13 +127,15 @@ class BenzeneHttpApp:
             request_data = {**base, **query_data, **path_params}
 
         request_headers = {k.lower(): v for k, v in (headers or {}).items()}
-        # Version precedence: a {version} route segment is authoritative; else the route's static
-        # version fills in unless the caller pinned one via any recognised version header — checked
-        # through resolve_version so a fallback header (version/x-version) counts too (versioning.md §2).
+        # The route segment is sugar for the version header (versioning.md §2.1): a {version} segment
+        # is supplied exactly as if the caller had sent the header, so it wins; else the route's
+        # static version fills in unless the caller pinned one with the header. Written under the
+        # application's own header name, so renaming it there renames it here too.
+        version_header = self._application.version_header
         if route_version is not None:
-            request_headers[VERSION_HEADER] = route_version
-        elif endpoint.version and not resolve_version(request_headers):
-            request_headers[VERSION_HEADER] = endpoint.version
+            request_headers[version_header] = route_version
+        elif endpoint.version and not resolve_version(request_headers, version_header):
+            request_headers[version_header] = endpoint.version
 
         envelope = {
             "topic": endpoint.topic,

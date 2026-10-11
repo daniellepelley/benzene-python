@@ -2,26 +2,37 @@
 
 Resolves the context's topic to a handler, maps the request, runs the handler, and records the
 result. Registered last in the pipeline. Empty topic → ``validation-error``; no handler →
-``not-found``; an uncaught handler exception → ``service-unavailable`` (never crashes the adapter).
+``not-found`` naming the topic and the version asked for; an uncaught handler exception →
+``service-unavailable`` (never crashes the adapter).
 """
 
 from __future__ import annotations
+
+import warnings
 
 from benzene.results import Result
 
 from .context import Context
 from .mapping import to_request
 from .pipeline import Middleware, Next
-from .registry import Registry, VersionSelector, exact_version
+from .registry import NoDefaultHandlerWarning, Registry, VersionSelector, exact_version
 
 
 def message_router(
     registry: Registry, version_selector: VersionSelector | None = None
 ) -> Middleware:
     """Terminal middleware resolving topic → handler. ``version_selector`` chooses the
-    version-selection policy — same keyword as :class:`BenzeneMessageApplication` (default: exact
-    ``(topic, version)`` match; pass ``highest_version`` for latest-wins fallback)."""
+    version-selection policy — same keyword as :class:`BenzeneMessageApplication` (default:
+    :func:`~benzene.core.exact_version`, the spec's rule; pass ``highest_version`` to opt in to a
+    latest-wins fallback).
+
+    Building the router is the start-up moment, so under the default selector it warns
+    (:class:`~benzene.core.NoDefaultHandlerWarning`) about every topic whose handlers are all
+    versioned with none declared default — a message without a version to one of them fails.
+    """
     selector = version_selector or exact_version
+    if selector is exact_version:
+        _warn_about_topics_without_default(registry)
 
     async def middleware(context: Context, next: Next) -> None:  # noqa: A002 - spec name
         if not context.topic:
@@ -30,7 +41,7 @@ def message_router(
 
         definition = selector(registry, context.topic, context.version)
         if definition is None:
-            context.result = Result.not_found(f"No handler found for topic {context.topic}")
+            context.result = Result.not_found(_no_handler(registry, context.topic, context.version))
             return
 
         # Mapping the payload onto the handler's declared type can fail (e.g. a required field is
@@ -50,3 +61,30 @@ def message_router(
         # Terminal middleware: deliberately does not call next().
 
     return middleware
+
+
+def _no_handler(registry: Registry, topic: str, version: str) -> str:
+    """The ``not-found`` detail: which topic, which version, and what the topic does serve."""
+    served = [d.version for d in registry.versions_of(topic)]
+    if not served:
+        return f"No handler found for topic {topic!r}"
+    listed = ", ".join(repr(v) if v else "unversioned" for v in served)
+    if version:
+        return f"No handler found for topic {topic!r} at version {version!r} (it serves {listed})"
+    return (
+        f"No default handler for topic {topic!r}: the message carries no version and every "
+        f"handler is versioned ({listed}), none declared default"
+    )
+
+
+def _warn_about_topics_without_default(registry: Registry) -> None:
+    for topic in registry.topics_without_default():
+        versions = ", ".join(repr(d.version) for d in registry.versions_of(topic))
+        warnings.warn(
+            f"Topic {topic!r} has only versioned handlers ({versions}) and none is declared its "
+            "default, so a message to it without a benzene-version header answers not-found. "
+            f"Declare one default — @message({topic!r}, version=..., default=True) or "
+            "registry.register(..., default=True) — or register an unversioned handler.",
+            NoDefaultHandlerWarning,
+            stacklevel=4,  # _warn → message_router → BenzeneMessageApplication → the caller
+        )

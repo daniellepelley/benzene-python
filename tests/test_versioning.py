@@ -1,26 +1,31 @@
-"""Handler-version selection over the inbound version-header fallback list (versioning.md §2).
+"""Handler-version selection (core-concepts §2, versioning.md §2).
 
-A message carries its version in one of an ordered list of headers — ``benzene-version`` (canonical),
-then ``version``, then ``x-version`` — so a peer in any language reaches the right versioned handler.
-Absent from all of them, the unversioned handler serves the request.
+A message carries its version in **one** header, ``benzene-version``: an exact match selects the
+handler, an unknown version is ``not-found``, and no version goes to the topic's default handler —
+the unversioned one, else the one declared ``default=True``. A caller's own ``version`` or
+``x-version`` header is an ordinary header and selects nothing.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import warnings
 from dataclasses import dataclass
 
 import pytest
 from benzene.core import (
-    VERSION_HEADER_NAMES,
+    VERSION_HEADER,
     BenzeneMessageApplication,
+    DuplicateHandlerError,
     Handler,
     NoCastPathError,
+    NoDefaultHandlerWarning,
     Registry,
     SchemaCasters,
     casting_handler,
     highest_version,
+    message,
     resolve_version,
 )
 from benzene.core.registry import _natural_key
@@ -47,28 +52,116 @@ def _run(headers: dict[str, str]) -> str:
     return json.loads(response["body"])["handler"]
 
 
-def test_default_header_names_are_the_spec_list() -> None:
-    assert VERSION_HEADER_NAMES == ("benzene-version", "version", "x-version")
+def test_the_version_header_is_benzene_version() -> None:
+    assert VERSION_HEADER == "benzene-version"
 
 
-@pytest.mark.parametrize("header", ["benzene-version", "version", "x-version"])
-def test_any_fallback_header_selects_the_versioned_handler(header: str) -> None:
-    assert _run({header: "v2"}) == "v2"
+def test_benzene_version_selects_the_versioned_handler() -> None:
+    assert _run({"benzene-version": "v2"}) == "v2"
+
+
+@pytest.mark.parametrize("header", ["version", "x-version"])
+def test_a_plain_version_header_is_an_ordinary_header_not_a_version(header: str) -> None:
+    # A producer's own API/SDK version must never misroute to another version's handler (D10).
+    assert _run({header: "v2"}) == "v1"
 
 
 def test_absent_version_selects_the_unversioned_handler() -> None:
     assert _run({}) == "v1"
 
 
-def test_canonical_header_wins_over_fallbacks() -> None:
-    # benzene-version is first in the list, so it takes precedence over `version` / `x-version`.
-    assert _run({"benzene-version": "v2", "version": "", "x-version": ""}) == "v2"
-
-
-def test_resolve_version_is_order_sensitive() -> None:
-    assert resolve_version({"x-version": "v2"}) == "v2"
-    assert resolve_version({"version": "a", "x-version": "b"}) == "a"
+def test_resolve_version_reads_one_header() -> None:
+    assert resolve_version({"benzene-version": "v2"}) == "v2"
+    assert resolve_version({"x-version": "v2", "version": "v3"}) == ""
     assert resolve_version({}) == ""
+    assert resolve_version({"schema-version": "v4"}, "Schema-Version") == "v4"
+
+
+def test_the_version_header_is_renamed_in_one_place_for_both_directions() -> None:
+    async def v2(_request: dict) -> Result:
+        return Result.ok({"handler": "v2"})
+
+    registry = Registry().register("orders:get", v2, version="v2", default=True)
+    app = BenzeneMessageApplication(registry, version_header="schema-version")
+    response = asyncio.run(
+        app.handle({"topic": "orders:get", "headers": {"schema-version": "v2"}, "body": "{}"})
+    )
+    assert json.loads(response["body"]) == {"handler": "v2"}
+    assert response["headers"]["schema-version"] == "v2"  # echoed under the configured name
+    assert "benzene-version" not in response["headers"]
+
+
+# --- the default handler for a message with no version (core-concepts §2) -------------------------
+
+
+def _defaulted_app() -> BenzeneMessageApplication:
+    @message("orders:list", version="v1", default=True)
+    async def list_v1(_request: dict) -> Result:
+        return Result.ok({"handler": "v1"})
+
+    @message("orders:list", version="v2")
+    async def list_v2(_request: dict) -> Result:
+        return Result.ok({"handler": "v2"})
+
+    return BenzeneMessageApplication(Registry().add(list_v1).add(list_v2))
+
+
+def _list(headers: dict[str, str]) -> dict:
+    return asyncio.run(_defaulted_app().handle({"topic": "orders:list", "headers": headers, "body": "{}"}))
+
+
+def test_absent_version_goes_to_the_declared_default() -> None:
+    assert json.loads(_list({})["body"]) == {"handler": "v1"}
+    assert json.loads(_list({"benzene-version": "v2"})["body"]) == {"handler": "v2"}
+
+
+def test_an_unknown_version_is_not_found_naming_the_topic_and_version() -> None:
+    response = _list({"benzene-version": "v9"})
+    assert response["statusCode"] == "not-found"
+    detail = json.loads(response["body"])["detail"]
+    assert "'orders:list'" in detail and "'v9'" in detail
+
+
+def test_an_unversioned_handler_is_the_default_without_being_declared() -> None:
+    async def plain(_request: dict) -> Result:
+        return Result.ok({"handler": "plain"})
+
+    async def v1(_request: dict) -> Result:
+        return Result.ok({"handler": "v1"})
+
+    registry = Registry().register("t", plain).register("t", v1, version="v1", default=True)
+    app = BenzeneMessageApplication(registry)
+    response = asyncio.run(app.handle({"topic": "t", "headers": {}, "body": "{}"}))
+    assert json.loads(response["body"]) == {"handler": "plain"}  # the unversioned one wins
+
+
+def test_two_declared_defaults_are_a_startup_error() -> None:
+    async def handler(_request: dict) -> Result:
+        return Result.ok()
+
+    registry = Registry().register("t", handler, version="v1", default=True)
+    with pytest.raises(DuplicateHandlerError, match="already declares version 'v1' its default"):
+        registry.register("t", handler, version="v2", default=True)
+
+
+def test_all_versioned_with_no_default_warns_at_startup_and_fails_unversioned_messages() -> None:
+    async def handler(_request: dict) -> Result:
+        return Result.ok()
+
+    registry = Registry().register("t", handler, version="v1").register("t", handler, version="v2")
+    with pytest.warns(NoDefaultHandlerWarning, match="'t' has only versioned handlers"):
+        app = BenzeneMessageApplication(registry)
+
+    response = asyncio.run(app.handle({"topic": "t", "headers": {}, "body": "{}"}))
+    assert response["statusCode"] == "not-found"
+    assert "No default handler for topic 't'" in json.loads(response["body"])["detail"]
+
+
+def test_a_declared_default_or_an_opt_in_selector_does_not_warn() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", NoDefaultHandlerWarning)
+        _defaulted_app()
+        _selector_app(highest_version)  # every version is reachable, so nothing will fail
 
 
 # --- the casting-handler pattern (versioning.md §3.1): serve multiple payload versions -----------
@@ -102,7 +195,10 @@ def _make_place_v1(latest: Handler) -> Handler:
 def _versioned_orders_app() -> BenzeneMessageApplication:
     registry = Registry()
     registry.register("orders:place", _place_v2, version="v2", request_type=PlaceOrderV2)
-    registry.register("orders:place", _make_place_v1(_place_v2), version="v1", request_type=PlaceOrderV1)
+    registry.register(
+        "orders:place", _make_place_v1(_place_v2), version="v1", request_type=PlaceOrderV1,
+        default=True,
+    )
     return BenzeneMessageApplication(registry)
 
 
@@ -115,7 +211,7 @@ def _place(headers: dict[str, str], body: str) -> dict:
 
 def test_casting_handler_upcasts_v1_to_the_latest_implementation() -> None:
     # A v1 client uses the old field name `count`; the forwarding handler upcasts to v2.
-    v1 = _place({"version": "v1"}, '{"sku": "A", "count": 3}')
+    v1 = _place({"benzene-version": "v1"}, '{"sku": "A", "count": 3}')
     v2 = _place({"benzene-version": "v2"}, '{"sku": "A", "quantity": 3}')
     assert v1 == v2 == {"sku": "A", "quantity": 3}  # both reach the one shared v2 implementation
 
@@ -123,7 +219,7 @@ def test_casting_handler_upcasts_v1_to_the_latest_implementation() -> None:
 def test_unknown_version_is_a_not_found() -> None:
     response = asyncio.run(
         _versioned_orders_app().handle(
-            {"topic": "orders:place", "headers": {"version": "v9"}, "body": '{"sku": "A"}'}
+            {"topic": "orders:place", "headers": {"benzene-version": "v9"}, "body": '{"sku": "A"}'}
         )
     )
     assert response["statusCode"] == "not-found"  # exact-match selection; no v9 handler registered
@@ -141,7 +237,7 @@ def _versioned_http_app():
         return Result.ok({"served": "v2"})
 
     registry = Registry()
-    registry.register("api:echo", echo_v1, version="v1")
+    registry.register("api:echo", echo_v1, version="v1", default=True)
     registry.register("api:echo", echo_v2, version="v2")
 
     router = HttpRouter()
@@ -168,7 +264,7 @@ def test_http_version_segment_is_not_leaked_into_the_request() -> None:
     from benzene.http import BenzeneHttpApp, HttpRouter
 
     registry = Registry()
-    registry.register("api:echo", echo, version="v1")
+    registry.register("api:echo", echo, version="v1", default=True)
     router = HttpRouter()
     router.register("GET", "/{version}/echo", "api:echo", echo)
     app = BenzeneHttpApp(router, application=BenzeneMessageApplication(registry))
@@ -177,9 +273,9 @@ def test_http_version_segment_is_not_leaked_into_the_request() -> None:
     assert captured == {"q": "1"}  # the query param is present; `version` is not
 
 
-def test_route_static_version_yields_to_any_caller_version_header() -> None:
+def test_route_static_version_yields_to_the_callers_version_header() -> None:
     # A route pinned to a static version (no {version} segment) is only a default: the caller may
-    # override it with ANY recognised version header, not just the canonical benzene-version.
+    # override it with the benzene-version header - and only with that one.
     from benzene.http import BenzeneHttpApp, HttpRouter
 
     async def v1(_request: dict) -> Result:
@@ -189,7 +285,7 @@ def test_route_static_version_yields_to_any_caller_version_header() -> None:
         return Result.ok({"served": "v2"})
 
     registry = Registry()
-    registry.register("api:echo", v1, version="v1")
+    registry.register("api:echo", v1, version="v1", default=True)
     registry.register("api:echo", v2, version="v2")
     router = HttpRouter()
     router.register("GET", "/echo", "api:echo", v1, version="v1")  # static default v1
@@ -197,9 +293,11 @@ def test_route_static_version_yields_to_any_caller_version_header() -> None:
 
     # No header -> the route's static default handler.
     assert json.loads(asyncio.run(app.handle("GET", "/echo")).body) == {"served": "v1"}
-    # A fallback header (x-version, not the canonical one) still overrides the static default.
-    overridden = asyncio.run(app.handle("GET", "/echo", headers={"x-version": "v2"}))
+    overridden = asyncio.run(app.handle("GET", "/echo", headers={"benzene-version": "v2"}))
     assert json.loads(overridden.body) == {"served": "v2"}
+    # An unrelated x-version header is just a header: the static default still applies.
+    ignored = asyncio.run(app.handle("GET", "/echo", headers={"x-version": "v2"}))
+    assert json.loads(ignored.body) == {"served": "v1"}
 
 
 # --- opt-in highest-version selector (versioning.md §3) ------------------------------------------
@@ -222,7 +320,7 @@ def _selector_app(selector):
 
 
 def _served(app, version: str) -> dict:
-    headers = {"version": version} if version else {}
+    headers = {"benzene-version": version} if version else {}
     response = asyncio.run(app.handle({"topic": "api:thing", "headers": headers, "body": "{}"}))
     return json.loads(response["body"]) if response["body"] else {"statusCode": response["statusCode"]}
 
@@ -242,9 +340,10 @@ def test_highest_version_still_prefers_an_exact_match() -> None:
 
 
 def test_default_selector_is_exact_match_only() -> None:
-    app = _selector_app(None)  # default: exact match, no fallback
+    with pytest.warns(NoDefaultHandlerWarning):  # three versions, none declared default
+        app = _selector_app(None)  # default: exact match, no fallback
     response = asyncio.run(
-        app.handle({"topic": "api:thing", "headers": {"version": "v9"}, "body": "{}"})
+        app.handle({"topic": "api:thing", "headers": {"benzene-version": "v9"}, "body": "{}"})
     )
     assert response["statusCode"] == "not-found"
 
@@ -344,7 +443,7 @@ def _transparent_orders_app() -> BenzeneMessageApplication:
 
     casters = _order_casters()
     registry = Registry()
-    registry.register("orders:place", place_v2, version="v2",
+    registry.register("orders:place", place_v2, version="v2", default=True,
                       request_type=PlaceOrderV2, response_type=OrderPlacedV2)
     # v1 and v0 are served transparently — one line each, no hand-written forwarder.
     registry.register(
@@ -370,13 +469,13 @@ def _transparent_place(headers: dict[str, str], body: str) -> dict:
 def test_casting_handler_upcasts_request_and_downcasts_response() -> None:
     # A v1 caller sends `count`; the handler sees v2 (`quantity`) and returns OrderPlacedV2, which is
     # downcast to OrderPlacedV1 (no `quantity`) on the way out.
-    out = _transparent_place({"version": "v1"}, '{"sku": "A", "count": 3}')
+    out = _transparent_place({"benzene-version": "v1"}, '{"sku": "A", "count": 3}')
     assert out == {"status": "created", "body": {"id": "ord-A"}}  # downcast dropped `quantity`
 
 
 def test_casting_handler_composes_a_two_step_upcast() -> None:
     # v0 -> v1 -> v2 upcast is found by chaining; the handler still only knows v2.
-    out = _transparent_place({"version": "v0"}, '{"sku": "Z"}')
+    out = _transparent_place({"benzene-version": "v0"}, '{"sku": "Z"}')
     assert out == {"status": "created", "body": {"id": "ord-Z"}}
 
 
@@ -428,10 +527,10 @@ def test_casting_handler_does_not_downcast_a_failure_payload() -> None:
 def test_response_echoes_the_declared_version() -> None:
     response = asyncio.run(
         _transparent_orders_app().handle(
-            {"topic": "orders:place", "headers": {"version": "v1"}, "body": '{"sku": "A", "count": 1}'}
+            {"topic": "orders:place", "headers": {"Benzene-Version": "v1"}, "body": '{"sku": "A", "count": 1}'}
         )
     )
-    # Even though the caller used the `version` fallback header, the reply writes the canonical one.
+    # Read case-insensitively, written lower-case.
     assert response["headers"]["benzene-version"] == "v1"
 
 
