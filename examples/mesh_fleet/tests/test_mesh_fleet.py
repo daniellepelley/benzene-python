@@ -25,8 +25,8 @@ def test_provider_edges_are_declared_and_calls_feed_invocation_stats() -> None:
     fleet = build_fleet()
     asyncio.run(fleet.place_order("ABC"))
 
-    # orders declares it produces inventory:reserve; inventory declares it produces notify:send — the
-    # collector's graph is built from those descriptors alone (mesh.md §4); the call each hop actually
+    # orders declares it sends inventory:reserve; inventory declares it sends notify:send — the
+    # collector's graph is built from those registrations alone (mesh.md §4); the call each hop actually
     # made feeds invocation counts, not the edge itself.
     reserve = fleet.collector.query_topic({"topic": "inventory:reserve"})
     assert reserve["providers"] == ["orders"]

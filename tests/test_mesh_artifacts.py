@@ -34,39 +34,39 @@ def _fleet() -> MeshCollector:
     c.ingest_register(
         {
             "service": "orders",
-            "topics": [{"id": "order:create", "version": "1", "requestSchema": _ORDER_SCHEMA}],
-            "produces": [{"id": "stock:reserve"}],
-            "descriptorHash": "h-ord",
+            "requests": [{"topic": "order:create", "version": "1", "request": _ORDER_SCHEMA}],
+            "sends": [{"topic": "stock:reserve", "request": {}}],
+            "registrationHash": "h-ord",
         }
     )
     c.ingest_register(
         {
             "service": "inventory",
-            "topics": [{"id": "stock:reserve", "responseSchema": _RESERVE_SCHEMA}],
-            "descriptorHash": "h-inv",
+            "requests": [{"topic": "stock:reserve", "response": _RESERVE_SCHEMA}],
+            "registrationHash": "h-inv",
         }
     )
     c.ingest_register(
-        {"service": "notifications", "topics": [{"id": "notify:send"}], "descriptorHash": "h-not"}
+        {"service": "notifications", "requests": [{"topic": "notify:send"}], "registrationHash": "h-not"}
     )
     c.ingest_heartbeat(
         {
             "service": "orders",
             "instanceId": "i1",
-            "descriptorHash": "h-ord",
+            "registrationHash": "h-ord",
             "health": {"isHealthy": True, "healthChecks": {"db": {"status": "ok", "type": "sql"}}},
         }
     )
-    # inventory's live instance runs a different descriptor hash -> unhealthy + contract drift.
+    # inventory's live instance runs a different registrationHash -> unhealthy + contract drift.
     c.ingest_heartbeat(
         {
             "service": "inventory",
             "instanceId": "i1",
-            "descriptorHash": "h-OLD",
+            "registrationHash": "h-OLD",
             "health": {"isHealthy": False},
         }
     )
-    # orders declares it produces stock:reserve (-> provider edge); this trace of the call feeds
+    # orders declares it sends to stock:reserve (-> provider edge); this trace of the call feeds
     # invocation/error stats only, never graph membership.
     c.ingest_traces(
         {
@@ -142,7 +142,20 @@ def test_topology_edges_come_from_trace_parentage_with_error_rate() -> None:
 
 def test_topics_carry_consumers_producers_and_reserved_flag() -> None:
     c = _fleet()
-    c.ingest_register({"service": "collector", "topics": [{"id": "benzene:mesh:query:fleet"}]})
+    # A benzene: entry in a registration is ignored (mesh.md §4); a traced one is plumbing.
+    c.ingest_traces(
+        {
+            "events": [
+                {
+                    "traceId": "t-r",
+                    "spanId": "s-r",
+                    "service": "orders",
+                    "topic": "benzene:spec",
+                    "status": "ok",
+                }
+            ]
+        }
+    )
     arts = build_artifacts(c, generated_at=_AT)
     by_topic = {t["topic"]: t for t in arts["topics"]["topics"]}
 
@@ -150,21 +163,21 @@ def test_topics_carry_consumers_producers_and_reserved_flag() -> None:
     assert reserve["producers"] == [{"service": "orders"}]
     assert reserve["consumers"] == [{"service": "inventory"}]
     assert reserve["reserved"] is False
-    assert reserve["responseSchema"] == _RESERVE_SCHEMA  # retained from the descriptor feed
+    assert reserve["responseSchema"] == _RESERVE_SCHEMA  # retained from the registration
     assert reserve["requestSchema"] is None  # not declared -> absent, not fabricated
 
-    assert by_topic["benzene:mesh:query:fleet"]["reserved"] is True  # benzene:* is plumbing
+    assert by_topic["benzene:spec"]["reserved"] is True  # benzene:* is plumbing
     assert arts["topics"]["removedTopics"] == []
 
 
 def test_dropped_topic_moves_to_removed_topics() -> None:
     c = MeshCollector()
     c.ingest_register(
-        {"service": "orders", "topics": [{"id": "order:create"}], "descriptorHash": "h1"}
+        {"service": "orders", "requests": [{"topic": "order:create"}], "registrationHash": "h1"}
     )
     # Re-register dropping order:create for order:cancel — nobody consumes (handles) order:create anymore.
     c.ingest_register(
-        {"service": "orders", "topics": [{"id": "order:cancel"}], "descriptorHash": "h2"}
+        {"service": "orders", "requests": [{"topic": "order:cancel"}], "registrationHash": "h2"}
     )
     topics = build_artifacts(c, generated_at=_AT)["topics"]
     active = {t["topic"] for t in topics["topics"]}
@@ -186,10 +199,10 @@ def test_topics_carry_schemas_version_and_schema_mismatch() -> None:
 def test_schema_mismatch_when_two_consumers_disagree() -> None:
     c = MeshCollector()
     c.ingest_register(
-        {"service": "a", "topics": [{"id": "shared:topic", "responseSchema": _ORDER_SCHEMA}]}
+        {"service": "a", "requests": [{"topic": "shared:topic", "response": _ORDER_SCHEMA}]}
     )
     c.ingest_register(
-        {"service": "b", "topics": [{"id": "shared:topic", "responseSchema": _RESERVE_SCHEMA}]}
+        {"service": "b", "requests": [{"topic": "shared:topic", "response": _RESERVE_SCHEMA}]}
     )
     topic = {t["topic"]: t for t in build_artifacts(c, generated_at=_AT)["topics"]["topics"]}[
         "shared:topic"
@@ -215,11 +228,12 @@ def test_service_document_reports_hash_drift_and_health() -> None:
 
 def test_service_document_carries_spec_and_per_check_health() -> None:
     orders = build_artifacts(_fleet(), generated_at=_AT)["services"]["orders"]
-    # The reconstructed spec document names the topic + its retained schema.
+    # The spec is the Contract Document the service registered, as registered (mesh.md §2).
     spec = json.loads(orders["specJson"])
     assert spec["service"] == "orders"
-    assert spec["topics"][0]["id"] == "order:create"
-    assert spec["topics"][0]["requestSchema"] == _ORDER_SCHEMA
+    assert spec["requests"][0]["topic"] == "order:create"
+    assert spec["requests"][0]["request"] == _ORDER_SCHEMA
+    assert spec["registrationHash"] == "h-ord"
     # Per-check health detail from the heartbeat surfaces on the service page.
     assert orders["health"]["healthChecks"] == {"db": {"status": "ok", "type": "sql"}}
 
@@ -227,13 +241,13 @@ def test_service_document_carries_spec_and_per_check_health() -> None:
 def test_topic_schema_change_is_flagged_in_changes() -> None:
     c = MeshCollector()
     c.ingest_register(
-        {"service": "orders", "topics": [{"id": "order:create", "requestSchema": _ORDER_SCHEMA}]}
+        {"service": "orders", "requests": [{"topic": "order:create", "request": _ORDER_SCHEMA}]}
     )
     by_topic = {t["topic"]: t for t in build_artifacts(c, generated_at=_AT)["topics"]["topics"]}
     assert by_topic["order:create"]["changes"] == []  # first registration — nothing changed yet
     # Re-register the same topic with a different schema -> schema-changed.
     c.ingest_register(
-        {"service": "orders", "topics": [{"id": "order:create", "requestSchema": _RESERVE_SCHEMA}]}
+        {"service": "orders", "requests": [{"topic": "order:create", "request": _RESERVE_SCHEMA}]}
     )
     change = {t["topic"]: t for t in build_artifacts(c, generated_at=_AT)["topics"]["topics"]}[
         "order:create"
@@ -245,10 +259,10 @@ def test_topic_schema_change_is_flagged_in_changes() -> None:
 def test_previous_spec_hash_records_a_contract_change() -> None:
     c = MeshCollector()
     c.ingest_register(
-        {"service": "orders", "topics": [{"id": "order:create"}], "descriptorHash": "h1"}
+        {"service": "orders", "requests": [{"topic": "order:create"}], "registrationHash": "h1"}
     )
     c.ingest_register(
-        {"service": "orders", "topics": [{"id": "order:create"}], "descriptorHash": "h2"}
+        {"service": "orders", "requests": [{"topic": "order:create"}], "registrationHash": "h2"}
     )
     orders = build_artifacts(c, generated_at=_AT)["services"]["orders"]
     assert orders["specHash"] == "h2"
@@ -338,7 +352,7 @@ def test_polled_fleet_enriches_topics_and_service_health() -> None:
 
 
 def test_anonymous_service_known_only_via_traces_degrades_cleanly() -> None:
-    # A service the collector only ever saw as a trace emitter (never registered) has no descriptor:
+    # A service the collector only ever saw as a trace emitter (never registered) has no document:
     # its per-service doc carries no spec/hash, and the estate lists it as unreachable.
     c = MeshCollector()
     c.ingest_traces(
@@ -350,7 +364,7 @@ def test_anonymous_service_known_only_via_traces_degrades_cleanly() -> None:
     )
     arts = build_artifacts(c, generated_at=_AT)
     ghost = arts["services"]["ghost"]
-    assert ghost["specJson"] is None  # no descriptor -> no reconstructed spec
+    assert ghost["specJson"] is None  # never registered -> no document
     assert ghost["specHash"] is None
     assert ghost["health"]["healthChecks"] == {}
     status = {s["name"]: s["status"] for s in arts["manifest"]["services"]}
@@ -374,18 +388,18 @@ def test_a_failed_write_leaves_no_partial_or_orphan_temp_file(tmp_path: Path) ->
 
 def test_topology_never_draws_a_service_calling_itself() -> None:
     # Two services consume (handle) the same topic (alpha, beta both serve shared:work); alpha also
-    # *calls* it (produces it), load-balanced to beta. alpha is then both a provider and a consumer of
+    # *calls* it (sends to it), load-balanced to beta. alpha is then both a provider and a consumer of
     # the topic — the edge builder must skip the alpha->alpha self-loop and keep only alpha->beta.
     c = MeshCollector()
     c.ingest_register(
         {
             "service": "alpha",
-            "topics": [{"id": "shared:work"}],
-            "produces": [{"id": "shared:work"}],
-            "descriptorHash": "a",
+            "requests": [{"topic": "shared:work"}],
+            "sends": [{"topic": "shared:work", "request": {}}],
+            "registrationHash": "a",
         }
     )
-    c.ingest_register({"service": "beta", "topics": [{"id": "shared:work"}], "descriptorHash": "b"})
+    c.ingest_register({"service": "beta", "requests": [{"topic": "shared:work"}], "registrationHash": "b"})
     c.ingest_traces(
         {
             "events": [

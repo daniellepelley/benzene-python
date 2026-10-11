@@ -205,7 +205,7 @@ def test_the_poller_carries_the_served_registration_hash() -> None:
 
 
 def _registered_hash(collector: MeshCollector) -> str:
-    return collector.snapshot()["services"][0]["descriptorHash"]
+    return collector.snapshot()["services"][0]["registrationHash"]
 
 
 def test_a_malformed_service_response_is_a_failed_result_not_a_broken_sweep() -> None:
@@ -331,6 +331,10 @@ def test_a_contract_document_service_folds_into_the_collector_like_any_other() -
     assert "benzene:spec" not in {t["topic"] for t in fleet["topics"]}
     # ...and the served registrationHash is what the collector keys drift on.
     assert _registered_hash(collector) == _FOREIGN_CONTRACT_DOCUMENT["registrationHash"]
+    # The served document is the register body (mesh.md §2): it is ingested as served, and the
+    # heartbeat the poller synthesises carries its serviceVersion.
+    assert collector.snapshot()["services"][0]["document"] == _FOREIGN_CONTRACT_DOCUMENT
+    assert collector.snapshot()["services"][0]["instances"][0]["serviceVersion"] == "2.1.0"
 
 
 def test_a_polled_contract_documents_refs_are_resolved_into_real_schemas() -> None:

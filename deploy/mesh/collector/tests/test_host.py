@@ -44,12 +44,12 @@ async def _drive(app, path: str) -> tuple[int, bytes]:
 def test_ingest_and_query_over_http() -> None:
     host = build_mesh_host(sources=[])
 
-    # A service registers by POSTing its descriptor to the ingest route...
+    # A service registers by POSTing its Contract Document to the ingest route...
     register = asyncio.run(
         host.app.handle(
             "POST",
             "/mesh/register",
-            body=json.dumps({"service": "orders", "topics": [{"id": "orders:place"}]}),
+            body=json.dumps({"service": "orders", "requests": [{"topic": "orders:place"}]}),
         )
     )
     assert register.status_code == 200
@@ -73,7 +73,7 @@ def test_health_surface_is_served_for_the_load_balancer() -> None:
 
 def test_poll_loop_folds_a_source_then_stops() -> None:
     async def spec() -> dict:
-        return {"service": "inventory", "topics": [{"id": "inventory:reserve"}]}
+        return {"service": "inventory", "requests": [{"topic": "inventory:reserve"}]}
 
     async def health() -> dict:
         return {"isHealthy": True, "healthChecks": {}}
@@ -129,7 +129,7 @@ def test_host_backed_by_a_store_survives_a_rebuild(tmp_path: Path) -> None:
         first.app.handle(
             "POST",
             "/mesh/register",
-            body=json.dumps({"service": "orders", "topics": [{"id": "orders:place"}]}),
+            body=json.dumps({"service": "orders", "requests": [{"topic": "orders:place"}]}),
         )
     )
     assert register.status_code == 200
@@ -175,7 +175,7 @@ def test_artifact_writer_publishes_manifest_from_the_catalog(tmp_path: Path) -> 
         host.app.handle(
             "POST",
             "/mesh/register",
-            body=json.dumps({"service": "orders", "topics": [{"id": "order:create"}]}),
+            body=json.dumps({"service": "orders", "requests": [{"topic": "order:create"}]}),
         )
     )
     config = MeshConfig(sources=[], poll_interval_seconds=1.0, artifacts_dir=str(tmp_path))

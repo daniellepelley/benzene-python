@@ -3,8 +3,8 @@
 Each service runs its own pipeline with ``trace_middleware`` (so every invocation emits a TraceEvent)
 and calls the next service through a ``with_trace_propagation``-wrapped in-process sender (so the
 ``traceparent`` — hence the parent/child span link — crosses the hop). At startup each service
-registers its descriptor — including an :class:`~benzene.mesh.OutboundRegistry` declaring what it
-calls — with the collector, so the producer/consumer graph exists before a single order is placed;
+registers its Contract Document (mesh.md §2) — whose ``sends`` come from an
+:class:`~benzene.mesh.OutboundRegistry` declaring what it calls — with the collector, so the producer/consumer graph exists before a single order is placed;
 after a call chain, every service's traces are pushed to the collector too, feeding invocation/error
 stats and status counts, never graph membership (mesh.md §4).
 
@@ -21,18 +21,18 @@ from typing import Any
 
 from benzene.core import (
     BenzeneMessageApplication,
+    ContractInfo,
     MessageSender,
     MiddlewarePipeline,
     Registry,
     decode_response,
+    derive_contract,
     encode_body,
 )
 from benzene.mesh import (
     MeshCollector,
     OutboundRegistry,
     QueueTraceExporter,
-    ServiceDescriptor,
-    ServiceInfo,
     trace_middleware,
     with_trace_propagation,
 )
@@ -126,8 +126,8 @@ def build_fleet(collector: MeshCollector | None = None) -> Fleet:
     order_registry = Registry().register(PLACE_ORDER, place)
     orders, order_traces = _service("orders", order_registry)
 
-    # Register each service's descriptor — including what it produces — with the collector (what a
-    # service does on startup; this alone is what puts provider edges in the graph, mesh.md §2.3/§4).
+    # Register each service's Contract Document — its `sends` included — with the collector (what a
+    # service does on startup; this alone is what puts provider edges in the graph, mesh.md §2, §4).
     outbound: dict[str, OutboundRegistry] = {
         "orders": OutboundRegistry().register_send(RESERVE_STOCK),
         "inventory": OutboundRegistry().register_send(SEND_NOTIFICATION),
@@ -138,10 +138,10 @@ def build_fleet(collector: MeshCollector | None = None) -> Fleet:
         ("inventory", inv_registry),
         ("notifications", notif_registry),
     ):
-        descriptor = ServiceDescriptor.derive(
-            registry, ServiceInfo(service=name, placement={"cloud": "aws"}), outbound[name]
+        document = derive_contract(
+            ContractInfo(name, placement={"cloud": "aws"}), registry, outbound=outbound[name]
         )
-        collector.ingest_register(descriptor.to_payload())
+        collector.ingest_register(document.to_payload())
 
     return Fleet(
         collector=collector,

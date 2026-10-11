@@ -161,7 +161,7 @@ def test_collector_rehydrates_from_an_s3_store_on_construction() -> None:
     fake = _FakeS3Client()
     store = S3CollectorStore("bucket", client=fake)
     first = MeshCollector(store=store)
-    first.ingest_register({"service": "orders", "topics": [{"id": "order:create"}]})
+    first.ingest_register({"service": "orders", "requests": [{"topic": "order:create"}]})
 
     # A brand-new collector pointed at the same S3 object comes up already knowing the fleet —
     # exactly the seam a stateless Lambda invocation needs between separate invocations.
@@ -177,9 +177,9 @@ def test_collector_snapshot_round_trips_the_full_catalog() -> None:
     source.ingest_register(
         {
             "service": "orders",
-            "topics": [{"id": "order:create"}],
-            "produces": [{"id": "stock:reserve"}],
-            "descriptorHash": "h1",
+            "requests": [{"topic": "order:create"}],
+            "sends": [{"topic": "stock:reserve", "request": {}}],
+            "registrationHash": "h1",
         }
     )
     source.ingest_heartbeat(
@@ -187,7 +187,7 @@ def test_collector_snapshot_round_trips_the_full_catalog() -> None:
             "service": "orders",
             "instanceId": "i1",
             "health": {"isHealthy": True},
-            "descriptorHash": "h1",
+            "registrationHash": "h1",
         }
     )
     source.ingest_traces(
@@ -228,13 +228,13 @@ def test_collector_snapshot_round_trips_the_full_catalog() -> None:
     assert restored.query_service({"service": "orders"}) == source.query_service(
         {"service": "orders"}
     )
-    # Provider edges (declared via `produces`) survive the round-trip.
+    # Provider edges (declared via `sends`) survive the round-trip.
     assert restored.query_topic({"topic": "stock:reserve"})["providers"] == ["orders"]
 
 
 def test_collector_snapshot_is_json_serializable() -> None:
     c = MeshCollector()
-    c.ingest_register({"service": "orders", "topics": [{"id": "order:create"}]})
+    c.ingest_register({"service": "orders", "requests": [{"topic": "order:create"}]})
     c.ingest_traces(
         {
             "events": [
@@ -254,7 +254,7 @@ def test_collector_snapshot_is_json_serializable() -> None:
 def test_collector_rehydrates_from_its_store_on_construction(tmp_path: Path) -> None:
     store = JsonFileCollectorStore(tmp_path / "state.json")
     first = MeshCollector(store=store)
-    first.ingest_register({"service": "orders", "topics": [{"id": "order:create"}]})
+    first.ingest_register({"service": "orders", "requests": [{"topic": "order:create"}]})
 
     # A brand-new collector pointed at the same store comes up already knowing the fleet.
     second = MeshCollector(store=store)
@@ -265,7 +265,7 @@ def test_collector_persists_after_every_mutating_ingest(tmp_path: Path) -> None:
     store = JsonFileCollectorStore(tmp_path / "state.json")
     c = MeshCollector(store=store)
     # All four mutating ingests must write through the store, not just register/heartbeat.
-    c.ingest_register({"service": "orders", "topics": [{"id": "order:create"}]})
+    c.ingest_register({"service": "orders", "requests": [{"topic": "order:create"}]})
     c.ingest_heartbeat({"service": "orders", "instanceId": "i1", "health": {"isHealthy": True}})
     c.ingest_traces(
         {"events": [{"traceId": "t", "spanId": "s", "service": "orders", "topic": "order:create"}]}
@@ -284,7 +284,7 @@ def test_collector_persists_after_every_mutating_ingest(tmp_path: Path) -> None:
 
 def test_restore_ignores_an_incompatible_snapshot_version() -> None:
     c = MeshCollector()
-    c.ingest_register({"service": "orders", "topics": [{"id": "order:create"}]})
+    c.ingest_register({"service": "orders", "requests": [{"topic": "order:create"}]})
     c.restore({"version": 999, "services": [{"name": "ghost", "provided": []}]})
     # A future/foreign snapshot is ignored, leaving the existing catalog untouched.
     assert "orders" in {s["service"] for s in c.query_fleet({})["services"]}

@@ -162,7 +162,7 @@ def test_run_mesh_aggregation_publishes_registry_and_full_catalog_to_blob() -> N
     assert all(s["address"].endswith(".azurewebsites.net") for s in registry["services"])
 
     # manifest.json (and the rest of the catalog) reflect INTERROGATION-time identity: each service's
-    # own descriptor "service" field, read off the /benzene/spec response.
+    # own Contract Document "service" field, read off the /benzene/spec response.
     manifest = container.blobs["mesh/manifest.json"]
     manifest_services = {s["name"]: s for s in manifest["services"]}
     assert set(manifest_services) == set(KNOWN_SERVICES)

@@ -65,10 +65,6 @@ SERVICE_SENDS: dict[str, tuple[str, ...]] = {
     "notifications": (),
     "analytics": (),
 }
-#: Both kinds together: every topic a service produces onto (a provider edge in the mesh graph).
-SERVICE_PRODUCES: dict[str, tuple[str, ...]] = {
-    name: SERVICE_SENDS[name] + SERVICE_EVENTS[name] for name in SERVICE_EVENTS
-}
 
 
 # --- payloads (each just an order id — enough to route, chain, and observe) -----------------------

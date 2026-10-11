@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 # The closed classification vocabulary (mesh.md). `contract-drift` is never produced by classify() —
-# it is reserved for collector/reader-derived issues (descriptor-hash mismatch, schema divergence).
+# it is reserved for collector/reader-derived issues (registration-hash mismatch, schema divergence).
 CLASSIFICATIONS: frozenset[str] = frozenset(
     {"exception", "validation", "config-wiring", "dependency", "contract-drift", "unclassified"}
 )

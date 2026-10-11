@@ -72,13 +72,13 @@ def _artifacts() -> dict:
     c.ingest_register(
         {
             "service": "orders",
-            "topics": [{"id": "order:create", "requestSchema": {"type": "object"}}],
-            "produces": [{"id": "stock:reserve"}],
-            "descriptorHash": "h1",
+            "requests": [{"topic": "order:create", "request": {"type": "object"}}],
+            "sends": [{"topic": "stock:reserve", "request": {}}],
+            "registrationHash": "h1",
         }
     )
     c.ingest_register(
-        {"service": "inventory", "topics": [{"id": "stock:reserve"}], "descriptorHash": "h2"}
+        {"service": "inventory", "requests": [{"topic": "stock:reserve"}], "registrationHash": "h2"}
     )
     c.ingest_heartbeat({"service": "orders", "instanceId": "i1", "health": {"isHealthy": True}})
     c.ingest_traces(

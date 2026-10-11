@@ -10,11 +10,11 @@ The scenario is a single moment during an ``orders`` redeploy:
 - **schema-changed** — ``orders`` re-registers ``orders:place`` with a new request contract (a
   ``coupon`` field was added). ``topics.json`` flags the topic ``changes: [{"kind": "schema-changed"}]``
   and ``services/orders.json`` carries both ``specHash`` and ``previousSpecHash``.
-- **removedTopics** — the new ``orders`` descriptor no longer consumes (handles) ``orders:cancel`` (it
+- **removedTopics** — the new ``orders`` registration no longer consumes (handles) ``orders:cancel`` (it
   moved elsewhere). No one consumes it now, so it drops off the functional map into
   ``topics.removedTopics``.
 - **contractDrift** — one old ``orders`` instance (``orders-1``) is still running the *previous*
-  descriptor and heartbeats its old hash, while the redeployed ``orders-2`` beats the new one. The
+  contract and heartbeats its old ``registrationHash``, while the redeployed ``orders-2`` beats the new one. The
   hash mismatch marks the service as drifted in ``manifest.json`` and ``services/orders.json`` until
   the last old task is replaced.
 - **schemaMismatch** — two services consume (handle) ``inventory:reserve`` with *different* request
@@ -31,12 +31,10 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from benzene.core import Registry
+from benzene.core import ContractDocument, ContractInfo, Registry, derive_contract
 from benzene.mesh import (
     Heartbeat,
     MeshCollector,
-    ServiceDescriptor,
-    ServiceInfo,
     build_artifacts,
     write_artifacts,
 )
@@ -77,13 +75,17 @@ async def _noop(_request: Any) -> Result:
     return Result.ok({})
 
 
-def _descriptor(service: str, topics: dict[str, type]) -> ServiceDescriptor:
-    """Derive a descriptor from a typed registry (topic id -> request dataclass)."""
+def _document(service: str, topics: dict[str, type]) -> ContractDocument:
+    """Derive a service's Contract Document — its register body (mesh.md §2) — from a typed registry
+    (topic id -> request dataclass)."""
     registry = Registry()
     for topic, request_type in topics.items():
         registry.register(topic, _noop, request_type=request_type)
-    return ServiceDescriptor.derive(
-        registry, ServiceInfo(service=service, service_version="1.0.0", placement={"cloud": "aws"})
+    return derive_contract(
+        ContractInfo(
+            service, service_version="1.0.0", version_scheme="semver", placement={"cloud": "aws"}
+        ),
+        registry,
     )
 
 
@@ -92,37 +94,29 @@ def build_evolving_mesh() -> MeshCollector:
     collector = MeshCollector()
 
     # 1. orders v1: consumes (handles) orders:place (v1 contract) and orders:cancel. One instance beats it.
-    orders_v1 = _descriptor("orders", {"orders:place": PlaceOrderV1, "orders:cancel": CancelOrder})
+    orders_v1 = _document("orders", {"orders:place": PlaceOrderV1, "orders:cancel": CancelOrder})
     collector.ingest_register(orders_v1.to_payload())
     collector.ingest_heartbeat(
-        Heartbeat(
-            service="orders",
-            sent_at="2026-01-01T00:00:00Z",
-            instance_id="orders-1",
-            descriptor_hash=orders_v1.descriptor_hash(),
-            is_healthy=True,
+        Heartbeat.for_document(
+            orders_v1, sent_at="2026-01-01T00:00:00Z", instance_id="orders-1"
         ).to_payload()
     )
 
     # 2. orders redeploys: orders:place gains a coupon field, orders:cancel is dropped. The new
     #    instance orders-2 beats the new hash; the old orders-1 above never re-beat (the straggler).
-    orders_v2 = _descriptor("orders", {"orders:place": PlaceOrderV2})
+    orders_v2 = _document("orders", {"orders:place": PlaceOrderV2})
     collector.ingest_register(orders_v2.to_payload())
     collector.ingest_heartbeat(
-        Heartbeat(
-            service="orders",
-            sent_at="2026-01-01T00:05:00Z",
-            instance_id="orders-2",
-            descriptor_hash=orders_v2.descriptor_hash(),
-            is_healthy=True,
+        Heartbeat.for_document(
+            orders_v2, sent_at="2026-01-01T00:05:00Z", instance_id="orders-2"
         ).to_payload()
     )
 
     # 3. Two consumers of inventory:reserve with different request contracts — a schema mismatch the
     #    UI flags until the legacy service is migrated.
-    inventory = _descriptor("inventory", {"inventory:reserve": ReserveStock})
+    inventory = _document("inventory", {"inventory:reserve": ReserveStock})
     collector.ingest_register(inventory.to_payload())
-    legacy = _descriptor("inventory-legacy", {"inventory:reserve": ReserveStockLegacy})
+    legacy = _document("inventory-legacy", {"inventory:reserve": ReserveStockLegacy})
     collector.ingest_register(legacy.to_payload())
 
     return collector

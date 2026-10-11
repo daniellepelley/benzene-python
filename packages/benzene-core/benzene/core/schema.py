@@ -1,11 +1,9 @@
-"""Payload-schema derivation for the mesh descriptor — a Python type → the JSON Schema 2020-12 subset
-(mesh.md section 2).
+"""Payload-schema derivation — a Python type → a small, fixed JSON Schema 2020-12 subset.
 
-Projects a handler's declared request/response type into a small, fixed subset of JSON Schema for the
-mesh :class:`~benzene.mesh.ServiceDescriptor`, which keeps this dialect until it is retired. The
-Contract Document's schemas are derived separately, in the OpenAPI 3.0 dialect it declares, with
-named components (:mod:`benzene.core.contract_schema`). The mapping is mesh.md's *schema derivation*
-table, read through Python's type system:
+Projects a handler's declared request/response type into JSON Schema 2020-12 — the dialect OpenAPI
+3.1 adopts, which is why ``benzene-openapi``'s generator embeds these schemas verbatim. The Contract
+Document's schemas are derived separately, in the OpenAPI 3.0 dialect it declares, with named
+components (:mod:`benzene.core.contract_schema`). The mapping, read through Python's type system:
 
 ======================  =========================================================
 Python type             JSON Schema

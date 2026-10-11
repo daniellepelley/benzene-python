@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 
 from benzene.core import HEALTH_TOPIC, MessageSender
-from benzene.mesh import MESH_TOPIC, QueueTraceExporter, parse_traceparent, with_trace_propagation
+from benzene.mesh import QueueTraceExporter, parse_traceparent, with_trace_propagation
 from benzene.testing import FakeMessageSender, create_test_host
 
 from aws_lambda_mesh.service.domain import (
@@ -174,14 +174,13 @@ def test_analytics_consumes_payment_captured_and_shipment_dispatched() -> None:
 # --- the mesh's own interrogation surfaces: direct invoke on the two reserved topics ----------------
 
 
-def test_benzene_mesh_topic_answers_a_direct_invoke_with_the_service_descriptor() -> None:
+def test_the_retired_benzene_mesh_topic_is_no_longer_answered() -> None:
+    # The self-description is benzene:spec alone (mesh.md §1); benzene:mesh is not a reserved topic.
     host, _ = make_host("shipping")
 
-    result = host.send_invoke(MESH_TOPIC)
+    result = host.send_invoke("benzene:mesh")
 
-    assert result.is_successful
-    assert result.payload["service"] == "shipping"
-    assert {t["id"] for t in result.payload["topics"]} == {SHIPPING_BOOK_TOPIC}
+    assert not result.is_successful
 
 
 def test_benzene_spec_topic_answers_a_direct_invoke_with_the_contract_document() -> None:

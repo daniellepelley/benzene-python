@@ -38,7 +38,7 @@ def test_topics_carry_schemas_and_version() -> None:
     topics = {t["topic"]: t for t in artifacts["topics"]["topics"]}
 
     place = topics["orders:place"]
-    assert place["version"] == "2"  # the descriptor declared orders:place at version 2
+    assert place["version"] == "2"  # the registration declared orders:place at version 2
     # The request/response schemas are derived from the typed registry, not hand-written.
     assert place["requestSchema"]["properties"].keys() >= {"sku", "quantity"}
     assert place["responseSchema"]["properties"].keys() >= {"sku", "reserved"}
@@ -52,10 +52,12 @@ def test_service_page_has_per_check_health_and_spec() -> None:
     assert orders["health"]["isHealthy"] is True
     assert set(orders["health"]["healthChecks"]) == {"database", "inventory-api"}
     assert orders["specHash"] is not None
-    # specJson round-trips to the retained contract for the service's consumed (handled) topic.
+    # specJson is the Contract Document the service registered (mesh.md §2).
     spec = json.loads(orders["specJson"])
     assert spec["service"] == "orders"
-    assert [t["id"] for t in spec["topics"]] == ["orders:place"]
+    assert [r["topic"] for r in spec["requests"]] == ["orders:place"]
+    assert [s["topic"] for s in spec["sends"]] == ["inventory:reserve"]
+    assert spec["registrationHash"] == orders["specHash"]
 
 
 def test_topology_and_usage_come_from_real_traces() -> None:
@@ -65,7 +67,7 @@ def test_topology_and_usage_come_from_real_traces() -> None:
 
     artifacts = build_artifacts(mesh.collector, generated_at="2026-01-01T00:00:00Z")
 
-    # The call graph is declared (orders produces inventory:reserve; inventory produces notify:send);
+    # The call graph is declared (orders sends inventory:reserve; inventory sends notify:send);
     # placing an order also traces the real orders→inventory→notifications hops.
     edges = {(e["client"], e["server"]) for e in artifacts["topology"]["edges"]}
     assert ("orders", "inventory") in edges

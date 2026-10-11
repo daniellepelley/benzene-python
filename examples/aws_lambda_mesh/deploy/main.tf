@@ -175,7 +175,7 @@ data "aws_iam_policy_document" "mesh" {
     actions   = ["lambda:ListFunctions", "lambda:ListTags"]
     resources = ["*"]
   }
-  # Interrogate: invoke the discovered service functions directly (benzene:mesh / benzene:healthcheck).
+  # Interrogate: invoke the discovered service functions directly (benzene:spec / benzene:healthcheck).
   statement {
     actions   = ["lambda:InvokeFunction"]
     resources = [for s in local.services : "arn:aws:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${s}"]

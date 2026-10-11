@@ -1,11 +1,12 @@
 """The service's composition root: one ``BenzeneStartUp``, the domain it wires is chosen at
 construction time by ``service_name`` (``orders`` / ``payments`` / ``shipping`` / ``inventory`` /
 ``notifications`` / ``analytics`` — the ``SERVICE_NAME`` env var, read by ``host.py``). Mirrors
-``examples/k8s_mesh/service/startup.py``'s shape, extended with the two reserved-topic interceptors a
-*direct Lambda invoke* interrogation needs (a Lambda has no HTTP GET the mesh can poll, unlike K8s):
+``examples/k8s_mesh/service/startup.py``'s shape, answering the two reserved topics a *direct Lambda
+invoke* interrogation needs (a Lambda has no HTTP GET the mesh can poll, unlike K8s):
 
-- :func:`~benzene.mesh.mesh_interception` answers ``benzene:mesh`` with the derived
-  :class:`~benzene.mesh.ServiceDescriptor` — what the mesh's ``spec`` interrogation invokes.
+- ``benzene:spec`` answers with the Contract Document the composition root derives from
+  ``contract=ContractInfo(...)`` — what the mesh's ``spec`` interrogation invokes, and the very body a
+  pushed registration would carry (mesh.md §2).
 - :func:`~benzene.core.health_interception` answers ``benzene:healthcheck`` with the health aggregate
   — what the mesh's ``health`` interrogation invokes.
 
@@ -33,13 +34,7 @@ from benzene.core import (
     health_interception,
 )
 from benzene.http import HttpRouter, StandardPaths
-from benzene.mesh import (
-    QueueTraceExporter,
-    ServiceDescriptor,
-    ServiceInfo,
-    mesh_interception,
-    trace_middleware,
-)
+from benzene.mesh import QueueTraceExporter, trace_middleware
 
 from .domain import (
     ORDER_CREATE_TOPIC,
@@ -132,11 +127,10 @@ class ServiceStartUp(BenzeneStartUp):
             outbound.register_event(topic, Message)
         for topic in SERVICE_SENDS[name]:
             outbound.register_send(topic, Message)
-        descriptor = ServiceDescriptor.derive(registry, ServiceInfo(service=name), outbound)
         standard = StandardPaths(
-            # /benzene/invoke, /benzene/health, /benzene/spec over HTTP (API Gateway) — plus, via the
-            # two interceptors below, the *same* benzene:mesh / benzene:healthcheck topics answer a
-            # direct Lambda invoke too, which is how this example's mesh actually interrogates.
+            # /benzene/invoke, /benzene/health, /benzene/spec over HTTP (API Gateway) — plus the *same*
+            # benzene:spec / benzene:healthcheck topics answer a direct Lambda invoke too, which is how
+            # this example's mesh actually interrogates.
             health=checks,
         )
         exporter = services.get_service(QueueTraceExporter)
@@ -144,9 +138,8 @@ class ServiceStartUp(BenzeneStartUp):
             # Outermost, so it times the whole invocation including routing (mesh.md §3) — the host
             # (build_service, host.py) drains this same exporter instance and pushes the batch to the
             # mesh Lambda after each invocation, feeding invocation/error stats for the edges the
-            # descriptor above already declared (mesh.md §4).
+            # Contract Document already declares (mesh.md §4).
             trace_middleware(exporter, service=name, instance_id=name),
-            mesh_interception(descriptor),
             health_interception(checks),
         ]
         return AppDefinition(
@@ -155,5 +148,6 @@ class ServiceStartUp(BenzeneStartUp):
             middleware=middleware,
             standard_paths=standard,
             outbound=outbound,
-            contract=ContractInfo(name),
+            # AWS Lambda; the region is left out rather than guessed.
+            contract=ContractInfo(name, placement={"cloud": "aws"}),
         )

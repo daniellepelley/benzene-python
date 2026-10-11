@@ -1,12 +1,12 @@
 """OpenAPI 3.1 generation from the handler registry — a sibling projection to the derived spec.
 
-The port already derives two documents from the same registry: the Cloud Service Profile's
-:class:`~benzene.core.ContractDocument` (served at ``/benzene/spec``, in the OpenAPI 3.0 dialect) and
-the mesh :class:`~benzene.mesh.ServiceDescriptor`, which embeds the per-topic JSON Schema that
-:func:`benzene.core.json_schema` derives from a handler's declared request/response type. This module
-adds a further projection of that *same* registry: a standard **OpenAPI 3.1** document, so the contract
-a service serves can be browsed, diffed, and fed to the OpenAPI tooling ecosystem (Swagger UI, code
-generators, contract linters) without a hand-maintained spec. Mirrors .NET's ``Benzene.Schema.OpenApi``.
+The port already derives the Cloud Service Profile's :class:`~benzene.core.ContractDocument` from the
+registry (served at ``/benzene/spec``, in the OpenAPI 3.0 dialect, and registered with a mesh
+collector). This module adds a further projection of that *same* registry — a standard **OpenAPI
+3.1** document embedding the per-topic JSON Schema :func:`benzene.core.json_schema` derives from a
+handler's declared request/response type — so the contract a service serves can be browsed, diffed,
+and fed to the OpenAPI tooling ecosystem (Swagger UI, code generators, contract linters) without a
+hand-maintained spec. Mirrors .NET's ``Benzene.Schema.OpenApi``.
 
 **The mapping.** Benzene is message-topic-based, not REST, so there is no natural resource hierarchy
 to project. The faithful anchor is the profile's well-known invoke endpoint (``POST /benzene/invoke``,
@@ -19,7 +19,7 @@ the single invoke base the wire binding actually multiplexes them through.
 
 **Schemas are reused, never re-derived.** Every operation's ``requestBody`` and success response
 ``$ref`` a component in ``components.schemas`` whose value is exactly :func:`benzene.core.json_schema`
-of the topic's request/response type — the same 2020-12 subset the descriptor embeds (OpenAPI
+of the topic's request/response type — a 2020-12 subset (OpenAPI
 3.1 adopts the 2020-12 dialect, so the schemas drop in unchanged). Failure responses map the Benzene
 failure statuses to HTTP codes through the port's own :func:`benzene.http.to_http` table and share one
 ``BenzeneProblem`` component: the RFC 9457 problem document this port actually emits

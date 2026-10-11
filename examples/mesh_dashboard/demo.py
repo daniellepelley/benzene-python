@@ -7,10 +7,10 @@ realistic mesh in memory and projects the collector's catalog into the full mesh
 To make the dashboard show something worth looking at, the demo drives every input the projection
 reads from:
 
-- **Typed descriptors** — each service is registered from a *typed* :class:`~benzene.core.Registry`
-  (``request_type`` / ``response_type`` per topic) plus an :class:`~benzene.mesh.OutboundRegistry`
-  declaring what it calls, so :meth:`ServiceDescriptor.derive` carries real request/response schemas,
-  versions, and provider edges into ``topics.json``/``topology.json`` and ``services/{name}.json`` —
+- **Typed registrations** — each service registers its Contract Document (mesh.md §2), derived from a
+  *typed* :class:`~benzene.core.Registry` (``request_type`` / ``response_type`` per topic) plus an
+  :class:`~benzene.mesh.OutboundRegistry` declaring what it calls, so it carries real request/response
+  schemas, versions, and provider edges into ``topics.json``/``topology.json`` and ``services/{name}.json`` —
   before a single order is placed (mesh.md §4).
 - **Heartbeats** — each service beats with named health checks, so ``services/{name}.json`` renders
   per-check health, not just an aggregate.
@@ -20,7 +20,7 @@ reads from:
 
 The wiring here (in-process senders, one shared collector) is the demo substitute for the deployed
 shape — Lambda services, SNS/HTTP senders, a Fargate collector fed by the poller (pull spec/health)
-plus the pushed traces (the call graph). The descriptors, the feeds, and the artifact projection are
+plus the pushed traces (the call graph). The registrations, the feeds, and the artifact projection are
 identical; see [`deploy/mesh`](../../deploy/mesh/README.md) for the host that serves the output.
 """
 
@@ -32,10 +32,12 @@ from typing import Any
 
 from benzene.core import (
     BenzeneMessageApplication,
+    ContractInfo,
     MessageSender,
     MiddlewarePipeline,
     Registry,
     decode_response,
+    derive_contract,
     encode_body,
 )
 from benzene.mesh import (
@@ -43,8 +45,6 @@ from benzene.mesh import (
     MeshCollector,
     OutboundRegistry,
     QueueTraceExporter,
-    ServiceDescriptor,
-    ServiceInfo,
     build_artifacts,
     trace_middleware,
     with_trace_propagation,
@@ -59,7 +59,7 @@ SEND_NOTIFICATION = "notify:send"
 
 
 # --- Payload shapes -------------------------------------------------------------------------------
-# Plain dataclasses are all the descriptor needs: ``json_schema`` derives each topic's request/response
+# Plain dataclasses are all the Contract Document needs: it derives each topic's request/response
 # schema from these, so they show up as real contracts on the functional map.
 
 
@@ -127,7 +127,7 @@ def _service(name: str, registry: Registry) -> tuple[BenzeneMessageApplication, 
 @dataclass
 class DashboardMesh:
     """A wired demo mesh: the shared collector, the entry service, its trace exporters, and the
-    registries (kept so a caller can re-derive descriptors, e.g. to demo a redeploy)."""
+    registries (kept so a caller can re-derive documents, e.g. to demo a redeploy)."""
 
     collector: MeshCollector
     orders: BenzeneMessageApplication
@@ -206,7 +206,7 @@ def build_demo_mesh(collector: MeshCollector | None = None) -> DashboardMesh:
         "notifications": notif_registry,
     }
 
-    # Startup: each service registers its descriptor, then beats with named health checks. This is
+    # Startup: each service registers its Contract Document, then beats with named health checks. This is
     # what fills manifest.json (status), topics.json (schemas + version), and services/{name}.json
     # (spec + per-check health) before a single request is served.
     health_checks = {
@@ -214,26 +214,26 @@ def build_demo_mesh(collector: MeshCollector | None = None) -> DashboardMesh:
         "inventory": {"database": {"status": "ok"}, "warehouse-feed": {"status": "ok"}},
         "notifications": {"smtp": {"status": "ok"}},
     }
-    # What each service calls (mesh.md §2.3) — this alone is what puts provider edges in the graph.
+    # What each service calls — its `sends` — is what puts provider edges in the graph (mesh.md §4).
     outbound: dict[str, OutboundRegistry] = {
         "orders": OutboundRegistry().register_send(RESERVE_STOCK),
         "inventory": OutboundRegistry().register_send(SEND_NOTIFICATION),
         "notifications": OutboundRegistry(),
     }
     for name, registry in registries.items():
-        descriptor = ServiceDescriptor.derive(
+        document = derive_contract(
+            ContractInfo(
+                name, service_version="1.0.0", version_scheme="semver", placement={"cloud": "aws"}
+            ),
             registry,
-            ServiceInfo(service=name, service_version="1.0.0", placement={"cloud": "aws"}),
-            outbound[name],
+            outbound=outbound[name],
         )
-        collector.ingest_register(descriptor.to_payload())
+        collector.ingest_register(document.to_payload())
         collector.ingest_heartbeat(
-            Heartbeat(
-                service=name,
+            Heartbeat.for_document(
+                document,
                 sent_at="2026-01-01T00:00:00Z",
                 instance_id=f"{name}-1",
-                descriptor_hash=descriptor.descriptor_hash(),
-                is_healthy=True,
                 health_checks=health_checks[name],
             ).to_payload()
         )

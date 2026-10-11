@@ -1,6 +1,6 @@
 """Service discovery — the set of services/endpoints known to the mesh (Benzene.Mesh.Discovery.*).
 
-The mesh already knows how to *describe* a service (the :class:`~benzene.mesh.ServiceDescriptor`) and
+The mesh already knows how a service *describes* itself (its Contract Document, on ``benzene:spec``) and
 how to *poll* a known fleet (the :class:`~benzene.mesh.MeshPoller`). What it does not do is answer the
 prior question — *which services are there to poll in the first place?* A :class:`Discovery` is that
 seam: an async source that enumerates the mesh's live endpoints, so the fleet a poller or router sees
@@ -8,7 +8,7 @@ is read from a cloud registry (AWS Cloud Map, Azure, Kubernetes) rather than han
 
 :meth:`Discovery.discover` returns a list of :class:`ServiceEndpoint`\\ s — a deliberately small
 identity/address/metadata triple, the lowest common denominator every cloud registry can produce. An
-endpoint is *not* a descriptor: discovery tells you a service exists and where to reach it, and the
+endpoint is *not* a self-description: discovery tells you a service exists and where to reach it, and the
 poller then reads that address for the full contract. An empty mesh is an empty list, never an error.
 
 Mirrors .NET's ``Benzene.Mesh.Discovery`` abstractions; the concrete cloud adapters live in
@@ -25,8 +25,8 @@ from typing import Any, Protocol, runtime_checkable
 class ServiceEndpoint:
     """One discovered service: its logical name, a reachable address, and free-form metadata.
 
-    ``name`` is the mesh service identity (the same value a :class:`~benzene.mesh.ServiceDescriptor`
-    carries in ``service``); ``address`` is a URL or host the poller/router can reach. ``metadata``
+    ``name`` is the mesh service identity (the same value a service's Contract Document carries in
+    ``service``); ``address`` is a URL or host the poller/router can reach. ``metadata``
     holds whatever the registry knew and the port did not model — availability zone, instance id,
     ARN, labels — so nothing a cloud registry returns is lost. Frozen and hashable so a caller can
     dedupe endpoints across registries.

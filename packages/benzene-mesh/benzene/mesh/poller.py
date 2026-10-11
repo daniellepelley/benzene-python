@@ -14,9 +14,10 @@ egress wiring to appear in the mesh; it only has to be *pollable* — in any lan
     await poller.poll_once()                 # one sweep; call on a timer for a live fleet
     fleet = collector.query_fleet({})        # now reflects both services
 
-Pull covers identity, topics, health, **and the declared producer/consumer graph** — a polled
-document's ``events`` and ``sends`` fold into the collector as ``produces``, exactly like ``topics`` does (mesh.md §4), so the graph exists
-whether a fleet is pulled or pushed to. Traces still feed invocation/error stats, never graph
+Pull covers identity, topics, health, **and the declared producer/consumer graph**: the document a
+service serves on ``/benzene/spec`` is exactly the body it would register (mesh.md §2), so the poller
+ingests it as a registration unchanged — ``requests`` for consumers, ``events`` ∪ ``sends`` for
+providers (mesh.md §4) — and the graph exists whether a fleet is pulled or pushed to. Traces still feed invocation/error stats, never graph
 membership. A source that is down is recorded as a failed :class:`PollResult` and never breaks the
 sweep of the rest of the fleet.
 """
@@ -32,7 +33,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from .collector import MeshCollector
-from .specdoc import spec_produces, spec_registration_hash, spec_service, spec_topics
+from .specdoc import spec_registration_hash, spec_service, spec_service_version
 
 #: A GET fetch: a URL → ``(status_code, body_text)``. Injectable so a test drives it with no network.
 HttpGet = Callable[[str], Awaitable[tuple[int, str]]]
@@ -138,28 +139,20 @@ class MeshPoller:
             health = await source.fetch_health()
         except Exception as exc:  # a down/unreachable service must not break the sweep
             return PollResult(source.name, ok=False, error=str(exc))
-        # The Contract Document every port's /benzene/spec answers with. Its producers are events and
-        # sends together; its served registrationHash is the drift signal - never a hash recomputed
-        # here over some other projection, which would compare two different things.
+        # The Contract Document every port's /benzene/spec answers with IS the register body (mesh.md
+        # §2): ingest it as served. A document without a service name takes the source's.
         service = spec_service(spec, source.name)
+        self._collector.ingest_register({**spec, "service": service})
+        # The poller polls one instance per source, and reads its hash and version off the same
+        # document - the served registrationHash, never one recomputed here over another projection.
+        heartbeat: dict[str, Any] = {"service": service, "instanceId": source.name, "health": health}
         registration_hash = spec_registration_hash(spec)
-        self._collector.ingest_register(
-            {
-                "service": service,
-                "topics": spec_topics(spec),
-                "produces": spec_produces(spec),
-                "descriptorHash": registration_hash,
-            }
-        )
-        # The poller polls one instance per source, and reads its hash off the same document.
-        self._collector.ingest_heartbeat(
-            {
-                "service": service,
-                "instanceId": source.name,
-                "health": health,
-                "descriptorHash": registration_hash,
-            }
-        )
+        if registration_hash is not None:
+            heartbeat["registrationHash"] = registration_hash
+        service_version = spec_service_version(spec)
+        if service_version is not None:
+            heartbeat["serviceVersion"] = service_version
+        self._collector.ingest_heartbeat(heartbeat)
         return PollResult(service, ok=True)
 
 

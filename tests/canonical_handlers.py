@@ -1,7 +1,7 @@
 """The canonical conformance handlers every runner must register (conformance/README.md).
 
 They demonstrate idiomatic request mapping: dataclass request types constructed from the decoded
-JSON body by the framework's request mapper, and typed responses so the mesh descriptor can derive
+JSON body by the framework's request mapper, and typed responses so the Contract Document can derive
 a request/response schema per topic. A required field is one with **no default** (so it appears in
 the derived schema's ``required``); optional fields carry a default.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from benzene.core import Handler, OutboundRegistry, Registry, message
+from benzene.core import Handler, Registry, message
 from benzene.results import BenzeneError, ProblemDetails, Result, Status, is_successful
 
 
@@ -199,22 +199,16 @@ CANONICAL_PAYLOAD_TYPES: dict[str, type] = {
 
 
 def register_canonical(registry: Registry) -> Registry:
-    """Register the two canonical handlers (greet + status) — the descriptor's exact topic set."""
+    """Register the two canonical handlers (greet + status) — the ``benzene:spec`` cases' topic set."""
     return registry.add(greet).add(status_handler)
-
-
-def register_canonical_outbound(outbound: OutboundRegistry) -> OutboundRegistry:
-    """Register the descriptor fixture's one outbound topic: the one-way send ``conformance:log``
-    (no handler anywhere) — what ``ServiceDescriptor.produces`` derives from (mesh.md §2.3)."""
-    return outbound.register_send("conformance:log", LogEntry)
 
 
 def register_canonical_with_problem(registry: Registry) -> Registry:
     """The canonical handlers plus ``conformance:problem`` (for the problem-details envelope cases).
 
-    Separate from :func:`register_canonical` on purpose: ``mesh-descriptor-cases.json`` pins the
-    derived descriptor's topic set to greet and status alone, so the problem handler must not be in
-    the registry the descriptor is derived from. The same split .NET's runner makes.
+    Separate from :func:`register_canonical` on purpose: the ``benzene:spec`` cases derive their
+    document from greet and status alone, so the problem handler stays out of that registry. The
+    same split .NET's runner makes.
     """
     return register_canonical(registry).add(problem_handler)
 

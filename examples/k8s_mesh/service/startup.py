@@ -47,8 +47,11 @@ from .domain import (
 class ServiceStartUp(BenzeneStartUp):
     """Registers the domain the ``service_name`` selects and wires its HTTP + envelope routes."""
 
-    def __init__(self, service_name: str) -> None:
+    def __init__(self, service_name: str, *, cloud: str = "self-hosted") -> None:
         self._service_name = service_name
+        # Where it runs (contract-document §1 `placement`): configured, since a pod cannot tell a
+        # managed cluster's cloud from inside; no region is guessed.
+        self._cloud = cloud
 
     def configure_services(self, services: Container, config: Mapping[str, str]) -> None:
         services.try_add_singleton(QueueTraceExporter)
@@ -60,7 +63,8 @@ class ServiceStartUp(BenzeneStartUp):
 
         router = HttpRouter()
         # What each service sends (contract-document §3): a command to a topic the next service
-        # defines, so a send, not an event. Read by the Contract Document and the mesh descriptor.
+        # defines, so a send, not an event. It lands in the Contract Document's `sends` — served on
+        # benzene:spec and registered with the mesh (mesh.md §2) alike.
         outbound = OutboundRegistry()
         if name == "orders":
             outbound.register_send(PAYMENT_TAKE_TOPIC, TakePaymentRequest, PaymentTaken)
@@ -91,5 +95,5 @@ class ServiceStartUp(BenzeneStartUp):
             middleware=middleware,
             standard_paths=standard,
             outbound=outbound,
-            contract=ContractInfo(name),
+            contract=ContractInfo(name, placement={"cloud": self._cloud}),
         )

@@ -266,7 +266,7 @@ def test_a_trace_pushed_between_aggregation_runs_survives_into_the_next_publishe
     push = asyncio.run(trace_inbox.send_message("benzene:mesh:traces", {"events": events}))
     assert push.is_successful
 
-    # 3. The NEXT scheduled pass re-polls descriptors/health, drains the inbox, and publishes the
+    # 3. The NEXT scheduled pass re-polls specs/health, drains the inbox, and publishes the
     #    merged catalog -- the trace pushed in step 2 must still be there.
     catalog_s3 = _FakeS3Client()
     asyncio.run(

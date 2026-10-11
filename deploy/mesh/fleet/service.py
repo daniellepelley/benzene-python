@@ -5,14 +5,15 @@ the environment decides its identity, the topic it serves, the sibling it calls 
 reports traces. Each service:
 
 - exposes ``/benzene/spec`` + ``/benzene/health`` (so the mesh collector can **poll** it — identity,
-  topics, health, and the send to ``NEXT_TOPIC`` declared on the one outbound registry the Contract
-  Document and the pushed descriptor below both read),
+  topics, health, and the send to ``NEXT_TOPIC`` declared on its outbound registry, all in the one
+  Contract Document),
 - runs ``trace_middleware`` and, when ``NEXT_URL`` is set, calls the next service through a
   ``with_trace_propagation``-wrapped HTTP sender (so the ``traceparent`` crosses the hop), and
-- when ``COLLECTOR_URL`` is set, **pushes** its ``ServiceDescriptor`` — ``produces=[NEXT_TOPIC]`` when
-  there's a next hop — once at startup, so the collector's provider edge exists before a single request
-  is served (mesh.md §4), then pushes each trace batch after every invocation to feed that edge's
-  invocation/error stats (best-effort — a collector hiccup never fails the request).
+- when ``COLLECTOR_URL`` is set, **registers** that same Contract Document — whose ``sends`` lists
+  ``NEXT_TOPIC`` when there's a next hop — once at startup, so the collector's provider edge exists
+  before a single request is served (mesh.md §2, §4), then pushes each trace batch after every
+  invocation to feed that edge's invocation/error stats (best-effort — a collector hiccup never fails
+  the request).
 
 Env: ``SERVICE_NAME``, ``SERVICE_TOPIC``, ``SERVICE_ROUTE`` (default ``/<name>``), ``NEXT_URL`` +
 ``NEXT_TOPIC`` (optional), ``COLLECTOR_URL`` (optional).
@@ -42,8 +43,7 @@ from benzene.mesh import (
     TRACES_TOPIC,
     MeshFeedSender,
     QueueTraceExporter,
-    ServiceDescriptor,
-    ServiceInfo,
+    registration_document,
     trace_middleware,
     with_trace_propagation,
 )
@@ -132,23 +132,23 @@ def build_service(
     )
     registry = Registry.from_definitions(router)
     # What this service sends (contract-document §3): a one-way send to the next hop, a topic the
-    # next service defines. One declaration feeds the Contract Document and the descriptor alike.
+    # next service defines. It lands in the Contract Document's `sends`, served and registered alike.
     outbound = OutboundRegistry()
     if config.next_topic:
         outbound.register_send(config.next_topic, FleetRequest)
-    app = AwsLambdaApp.from_definition(
-        AppDefinition(
-            registry=registry,
-            router=router,
-            middleware=[trace_middleware(exporter, service=config.name, instance_id=config.name)],
-            standard_paths=StandardPaths(
-                # Two named checks so the mesh-ui per-service page shows real per-check health.
-                health=HealthChecks().add("core", lambda: True).add("trace-exporter", lambda: True),
-            ),
-            outbound=outbound,
-            contract=ContractInfo(config.name),
-        )
+    definition = AppDefinition(
+        registry=registry,
+        router=router,
+        middleware=[trace_middleware(exporter, service=config.name, instance_id=config.name)],
+        standard_paths=StandardPaths(
+            # Two named checks so the mesh-ui per-service page shows real per-check health.
+            health=HealthChecks().add("core", lambda: True).add("trace-exporter", lambda: True),
+        ),
+        outbound=outbound,
+        # Deployed as an AWS Lambda; the region is left out rather than guessed.
+        contract=ContractInfo(config.name, placement={"cloud": "aws"}),
     )
+    app = AwsLambdaApp.from_definition(definition)
 
     if feeds is None and config.collector_url:
         # Push register (once, below) to /mesh/register and each trace batch to /mesh/traces — one
@@ -160,11 +160,10 @@ def build_service(
             )
         )
     if feeds is not None:
-        # What this service produces (mesh.md §2.3) — the collector's provider edge exists from this
-        # one call, with zero traffic; it does not wait on (or come from) a trace.
-        descriptor = ServiceDescriptor.derive(registry, ServiceInfo(service=config.name), outbound)
+        # The register body is the Contract Document /benzene/spec serves (mesh.md §2): its `sends`
+        # put the collector's provider edge in place with zero traffic, not waiting on a trace.
         with contextlib.suppress(Exception):  # register is best-effort, never fails startup
-            asyncio.run(feeds.register(descriptor))
+            asyncio.run(feeds.register(registration_document(definition)))
     return FleetService(app=app, exporter=exporter, feeds=feeds)
 
 

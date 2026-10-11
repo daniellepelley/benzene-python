@@ -34,7 +34,7 @@ def test_retired_topic_moves_to_removed() -> None:
 def test_straggler_instance_marks_the_service_drifted() -> None:
     artifacts = build_evolution_artifacts()
     drift = {s["name"]: s["contractDrift"] for s in artifacts["manifest"]["services"]}
-    # orders-1 still runs the old descriptor; orders-2 the new one — the mismatch is drift.
+    # orders-1 still runs the old contract; orders-2 the new one — the mismatch is drift.
     assert drift["orders"] is True
     assert drift["inventory"] is False
 

@@ -1,8 +1,8 @@
 """Mesh module tests: the language-neutral conformance fixtures plus focused unit tests.
 
-The descriptor/trace fixtures run through the shared ``conformance_runner`` (so they also run without
-pytest); this module surfaces each fixture row as a granular test and adds unit tests for schema
-derivation, the ``benzene:mesh`` interceptor, and the collector feed sender.
+The trace fixture runs through the shared ``conformance_runner`` (so it also runs without pytest); this
+module surfaces each fixture row as a granular test and adds unit tests for schema derivation, the
+register body (the Contract Document, mesh.md §2), and the collector feed sender.
 """
 
 from __future__ import annotations
@@ -14,11 +14,19 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import pytest
-from benzene.core import BenzeneMessageApplication, MiddlewarePipeline, Registry
+from benzene.core import (
+    AppDefinition,
+    BenzeneMessageApplication,
+    ContractInfo,
+    MiddlewarePipeline,
+    OutboundRegistry,
+    Registry,
+    application_from,
+    json_schema,
+)
 from benzene.mesh import (
     HEARTBEAT_TOPIC,
     ISSUES_TOPIC,
-    MESH_TOPIC,
     REGISTER_TOPIC,
     TRACES_TOPIC,
     Heartbeat,
@@ -26,15 +34,12 @@ from benzene.mesh import (
     IssueAggregator,
     MeshFeedSender,
     QueueTraceExporter,
-    ServiceDescriptor,
-    ServiceInfo,
     TraceEvent,
     classify,
     current_traceparent,
     issue_fingerprint,
-    json_schema,
-    mesh_interception,
     parse_traceparent,
+    registration_document,
     trace_middleware,
     with_trace_propagation,
 )
@@ -45,7 +50,6 @@ from .canonical_handlers import register_canonical, register_with_panic
 from .conformance_runner import (
     CONFORMANCE_DIR,
     _mesh_subset,
-    run_mesh_descriptor,
     run_mesh_trace,
 )
 
@@ -63,10 +67,6 @@ class _Node:
 
 
 # --- conformance fixtures (aggregate + granular) -------------------------------------------------
-
-def test_mesh_descriptor_conforms() -> None:
-    assert run_mesh_descriptor() == []
-
 
 def test_mesh_trace_conforms() -> None:
     assert run_mesh_trace() == []
@@ -137,48 +137,62 @@ def test_schema_recursive_cuts_the_cycle() -> None:
     assert schema["required"] == ["value"]
 
 
-# --- interception unit tests ---------------------------------------------------------------------
+# --- the register body: the Contract Document (mesh.md §2) --------------------------------------
 
-def _descriptor() -> ServiceDescriptor:
-    info = ServiceInfo(service="conformance", service_version="1.0.0", placement={"cloud": "self-hosted"})
-    return ServiceDescriptor.derive(register_canonical(Registry()), info)
-
-
-def test_mesh_interception_returns_descriptor() -> None:
-    app = BenzeneMessageApplication(
-        register_canonical(Registry()), MiddlewarePipeline().use(mesh_interception(_descriptor()))
+def _definition(
+    *, profile: dict[str, object] | None = None, degraded: tuple[str, ...] = ()
+) -> AppDefinition:
+    contract = ContractInfo(
+        "conformance",
+        service_version="1.0.0",
+        version_scheme="semver",
+        placement={"cloud": "self-hosted"},
+        profile=profile,
+        degraded=degraded,
     )
-    response = asyncio.run(app.handle({"topic": MESH_TOPIC, "headers": {}, "body": ""}))
-    assert response["statusCode"] == "ok"
-    body = json.loads(response["body"])
-    assert body["service"] == "conformance"
-    assert body["descriptorHash"].startswith("sha256:")
-    assert {t["id"] for t in body["topics"]} == {"conformance:greet", "conformance:status"}
+    return AppDefinition(
+        registry=register_canonical(Registry()),
+        outbound=OutboundRegistry().register_send("conformance:log", dict),
+        contract=contract,
+    )
 
 
-def test_mesh_interception_ignores_version_and_passes_through() -> None:
-    app = BenzeneMessageApplication(
-        register_canonical(Registry()), MiddlewarePipeline().use(mesh_interception(_descriptor()))
+def test_registration_document_is_the_document_benzene_spec_serves() -> None:
+    definition = _definition()
+    app = application_from(definition)
+    served = json.loads(
+        asyncio.run(app.handle({"topic": "benzene:spec", "headers": {}, "body": ""}))["body"]
     )
-    # version ignored on the reserved topic
-    versioned = asyncio.run(
-        app.handle({"topic": MESH_TOPIC, "headers": {"benzene-version": "v2"}, "body": ""})
-    )
-    assert versioned["statusCode"] == "ok"
-    # a normal topic still routes to its handler
-    routed = asyncio.run(
-        app.handle({"topic": "conformance:greet", "headers": {}, "body": '{"name":"world"}'})
-    )
-    assert json.loads(routed["body"]) == {"greeting": "Hello world"}
+    assert registration_document(definition).to_payload() == served
+    assert served["service"] == "conformance"
+    assert served["runtime"] == "python"
+    assert served["placement"] == {"cloud": "self-hosted"}
+    assert {r["topic"] for r in served["requests"]} == {"conformance:greet", "conformance:status"}
+    assert [s["topic"] for s in served["sends"]] == ["conformance:log"]
+    assert "instanceId" not in served  # instances are a heartbeat's business, never the document's
 
 
-def test_mesh_interception_alias() -> None:
-    app = BenzeneMessageApplication(
-        register_canonical(Registry()),
-        MiddlewarePipeline().use(mesh_interception(_descriptor(), aliases=["mesh:whoami"])),
+def test_deployment_fields_are_outside_both_hashes() -> None:
+    plain = registration_document(_definition())
+    dressed = registration_document(
+        _definition(profile={"name": "cloud-service", "missing": ["R6"]}, degraded=("sends",))
     )
-    response = asyncio.run(app.handle({"topic": "mesh:whoami", "headers": {}, "body": ""}))
-    assert response["statusCode"] == "ok"
+    payload = dressed.to_payload()
+    assert payload["profile"] == {"name": "cloud-service", "missing": ["R6"]}
+    assert payload["degraded"] == ["sends"]
+    assert "degraded" not in plain.to_payload()  # omitted when empty
+    assert dressed.registration_hash == plain.registration_hash
+    assert dressed.contract_hash == plain.contract_hash
+
+
+def test_degraded_names_only_document_members() -> None:
+    with pytest.raises(ValueError, match="degraded"):
+        registration_document(_definition(degraded=("registry",)))
+
+
+def test_registration_needs_a_contract() -> None:
+    with pytest.raises(ValueError, match="ContractInfo"):
+        registration_document(AppDefinition(registry=register_canonical(Registry())))
 
 
 # --- collector feed sender unit tests ------------------------------------------------------------
@@ -186,11 +200,12 @@ def test_mesh_interception_alias() -> None:
 def test_feed_sender_register_and_traces() -> None:
     fake = FakeMessageSender()
     feeds = MeshFeedSender(fake)
-    descriptor = _descriptor()
+    document = registration_document(_definition())
 
-    asyncio.run(feeds.register(descriptor))
+    asyncio.run(feeds.register(document))
     assert fake.last_topic == REGISTER_TOPIC
-    assert fake.last_message["service"] == "conformance"
+    assert fake.last_message == document.to_payload()
+    assert fake.last_message["registrationHash"].startswith("sha256:")
 
     exporter = InMemoryTraceExporter()
     pipeline = MiddlewarePipeline().use(trace_middleware(exporter, service="conformance"))
@@ -207,23 +222,45 @@ def test_heartbeat_payload_shape() -> None:
         service="orders",
         sent_at="2026-07-16T09:14:03Z",
         instance_id="orders-7f9c",
-        descriptor_hash="sha256:abc",
+        registration_hash="sha256:abc",
+        service_version="1.4.2",
         is_healthy=True,
         health_checks={"registry": {"isHealthy": True}},
     )
-    payload = hb.to_payload()
-    assert payload["service"] == "orders"
-    assert payload["health"] == {"isHealthy": True, "healthChecks": {"registry": {"isHealthy": True}}}
+    assert hb.to_payload() == {
+        "service": "orders",
+        "serviceVersion": "1.4.2",
+        "instanceId": "orders-7f9c",
+        "registrationHash": "sha256:abc",
+        "sentAt": "2026-07-16T09:14:03Z",
+        "health": {"isHealthy": True, "healthChecks": {"registry": {"isHealthy": True}}},
+    }
+
+
+def test_heartbeat_for_document_carries_its_hash_and_version() -> None:
+    document = registration_document(_definition())
+    payload = Heartbeat.for_document(
+        document, sent_at="2026-07-16T09:14:03Z", instance_id="c-1"
+    ).to_payload()
+    assert payload["service"] == "conformance"
+    assert payload["serviceVersion"] == "1.0.0"
+    assert payload["registrationHash"] == document.registration_hash
+    assert "descriptorHash" not in payload
+
+
+def test_heartbeat_omits_an_undeclared_service_version() -> None:
+    payload = Heartbeat(service="orders", sent_at="2026-07-16T09:14:03Z").to_payload()
+    assert "serviceVersion" not in payload
 
 
 def test_publish_heartbeat_sends_the_beat() -> None:
     fake = FakeMessageSender()
     feeds = MeshFeedSender(fake)
-    hb = Heartbeat(service="orders", sent_at="2026-07-16T09:14:03Z", descriptor_hash="sha256:abc")
+    hb = Heartbeat(service="orders", sent_at="2026-07-16T09:14:03Z", registration_hash="sha256:abc")
     asyncio.run(feeds.publish_heartbeat(hb))
     assert fake.last_topic == HEARTBEAT_TOPIC
     assert fake.last_message["service"] == "orders"
-    assert fake.last_message["descriptorHash"] == "sha256:abc"
+    assert fake.last_message["registrationHash"] == "sha256:abc"
 
 
 # --- issues feed unit tests ----------------------------------------------------------------------

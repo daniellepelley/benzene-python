@@ -86,7 +86,7 @@ example's work touched:
   `tests/test_mesh_blob_artifacts.py`.
 - **The Contract Document's `events` and `sends`** (`packages/benzene-core/benzene/core/contract.py`,
   `declarations.py`) — the pull path's half of the declared producer/consumer graph: `MeshPoller`
-  reads `events` ∪ `sends` as the topics a polled service produces, so a pull-only estate (this one)
+  ingests the polled document as a registration — `events` ∪ `sends` as its providers — so a pull-only estate (this one)
   reports providers as well as consumers. The declarations live in `benzene.core`, so a service
   declares what it sends without a `benzene.mesh` dependency (R5 is reachable on `benzene.core`
   alone). Unit tests: `tests/test_wellknown.py`, `tests/test_mesh_poller.py`.

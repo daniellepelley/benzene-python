@@ -102,16 +102,16 @@ def test_traces_are_pushed_to_the_collector_after_an_invocation() -> None:
 
 def test_register_declares_the_next_hop_as_a_provider_at_startup() -> None:
     # The mesh's provider edge must exist the moment a service registers — with zero traffic — not
-    # wait on (or come from) a trace (mesh.md §2.3/§4). Injecting `feeds` (like `next_sender` above)
+    # wait on (or come from) a trace (mesh.md §2, §4). Injecting `feeds` (like `next_sender` above)
     # is what makes this observable without a real COLLECTOR_URL/network call.
     registered: list = []
 
     class _Feeds:
-        async def register(self, descriptor):
-            registered.append(descriptor)
+        async def register(self, document):
+            registered.append(document)
             return Result.ok()
 
-    build_service(
+    service = build_service(
         ServiceConfig("orders", "orders:place", "/orders", next_topic="inventory:reserve"),
         feeds=_Feeds(),  # type: ignore[arg-type]
     )
@@ -119,20 +119,24 @@ def test_register_declares_the_next_hop_as_a_provider_at_startup() -> None:
     assert len(registered) == 1
     payload = registered[0].to_payload()
     assert payload["service"] == "orders"
-    assert [t["id"] for t in payload["produces"]] == ["inventory:reserve"]
+    assert [s["topic"] for s in payload["sends"]] == ["inventory:reserve"]
+    assert payload["placement"] == {"cloud": "aws"}
+    # The register body is the very document /benzene/spec serves.
+    served = lambda_handler_for(service)(ApiGatewayRequestBuilder("GET", "/benzene/spec").build())
+    assert json.loads(served["body"]) == payload
 
 
 def test_register_declares_no_producers_for_a_terminal_service() -> None:
     registered: list = []
 
     class _Feeds:
-        async def register(self, descriptor):
-            registered.append(descriptor)
+        async def register(self, document):
+            registered.append(document)
             return Result.ok()
 
     build_service(ServiceConfig("notifications", "notify:send", "/notifications"), feeds=_Feeds())  # type: ignore[arg-type]
 
-    assert registered[0].to_payload()["produces"] == []
+    assert registered[0].to_payload()["sends"] == []
 
 
 def test_no_collector_configured_means_no_push() -> None:

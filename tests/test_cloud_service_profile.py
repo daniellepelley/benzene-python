@@ -1,24 +1,26 @@
 """The Cloud Service Profile self-check — evaluate an AppDefinition against R1–R8.
 
-Pins the mapping from what a composition root wired to the descriptor's ``profile`` field: a fully
-provisioned service is conformant (profile carries only its name), a partly-wired one lists exactly the
-requirement ids it is missing, and the verdict rides on the descriptor without touching its hash
-(mesh.md §2.2 — ``profile`` is self-description, not contract).
+Pins the mapping from what a composition root wired to the Contract Document's ``profile`` field: a
+fully provisioned service is conformant (profile carries only its name), a partly-wired one lists
+exactly the requirement ids it is missing, and the verdict rides on the document — served on
+``benzene:spec`` and registered with a collector — without touching either hash (contract-document §1).
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 from dataclasses import dataclass
 
-from benzene.core import AppDefinition, ContractInfo, HealthChecks, Registry
+from benzene.core import AppDefinition, ContractInfo, HealthChecks, Registry, application_from
 from benzene.http import StandardPaths
 from benzene.mesh import (
     PROFILE_NAME,
     REQUIREMENT_IDS,
     CloudServiceProfileReport,
-    ServiceDescriptor,
-    ServiceInfo,
+    declare_cloud_service_profile,
     evaluate_cloud_service_profile,
+    registration_document,
 )
 from benzene.results import Result
 
@@ -88,7 +90,7 @@ def test_a_relocated_prefix_only_costs_r7() -> None:
 
 def test_no_application_topics_costs_r2() -> None:
     # A registry with only reserved (benzene:*) topics serves no application traffic.
-    registry = Registry().register("benzene:mesh", _place)
+    registry = Registry().register("benzene:spec", _place)
     report = evaluate_cloud_service_profile(AppDefinition(registry=registry))
     assert "R2" in report.missing
     assert "no non-reserved topics" in report.reason("R2")
@@ -118,20 +120,34 @@ def test_router_only_definition_is_hostable() -> None:
     assert "R2" not in report.missing  # and serves an application topic
 
 
-def test_profile_rides_on_the_descriptor_without_changing_its_hash() -> None:
-    registry = Registry().register("orders:place", _place, request_type=Order)
-    report = evaluate_cloud_service_profile(
-        _full_definition(), mesh_feeds=True, trace_propagation=True
-    )
+def test_r6_needs_the_self_description_too() -> None:
+    # The feeds are declared, but with no ContractInfo there is no document for benzene:spec to serve
+    # or for a registration to carry (cloud-service-profile R6).
+    definition = _full_definition()
+    definition.contract = None
+    report = evaluate_cloud_service_profile(definition, mesh_feeds=True, trace_propagation=True)
+    assert "R6" in report.missing
+    assert "no Contract Document" in report.reason("R6")
 
-    plain = ServiceDescriptor.derive(registry, ServiceInfo(service="orders"))
-    profiled = ServiceDescriptor.derive(
-        registry, ServiceInfo(service="orders", profile=report.to_profile())
+
+def test_profile_rides_on_the_document_without_changing_its_hashes() -> None:
+    plain = registration_document(_full_definition())
+    definition = declare_cloud_service_profile(_full_definition(), mesh_feeds=True)
+    profiled = registration_document(definition)
+    # profile is outside both hashes (contract-document §1) ...
+    assert plain.registration_hash == profiled.registration_hash
+    assert plain.contract_hash == profiled.contract_hash
+    # ... but it is on the registered document, and on the one benzene:spec serves.
+    assert profiled.to_payload()["profile"] == {"name": PROFILE_NAME, "missing": ["R8"]}
+    served = asyncio.run(
+        application_from(definition).handle({"topic": "benzene:spec", "headers": {}, "body": ""})
     )
-    # profile is self-description, excluded from the hash (mesh.md §2.2) ...
-    assert plain.descriptor_hash() == profiled.descriptor_hash()
-    # ... but it does appear in the emitted payload.
-    assert profiled.to_payload()["profile"] == {"name": PROFILE_NAME}
+    assert json.loads(served["body"]) == profiled.to_payload()
+
+
+def test_declaring_a_profile_without_a_contract_changes_nothing() -> None:
+    definition = AppDefinition(registry=Registry().register("orders:place", _place))
+    assert declare_cloud_service_profile(definition) is definition
 
 
 def test_report_shape_is_complete() -> None:

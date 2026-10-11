@@ -42,15 +42,20 @@ def test_collector_case(case: dict) -> None:
 def _register(
     c: MeshCollector,
     service: str,
-    topics: list[str],
-    descriptor_hash: str | None = None,
-    produces: list[str] | None = None,
+    requests: list[str],
+    registration_hash: str | None = None,
+    sends: list[str] | None = None,
+    events: list[str] | None = None,
 ) -> None:
-    body: dict = {"service": service, "topics": [{"id": t} for t in topics]}
-    if produces is not None:
-        body["produces"] = [{"id": t} for t in produces]
-    if descriptor_hash:
-        body["descriptorHash"] = descriptor_hash
+    """Register a Contract Document (mesh.md §2) that asserts all three members."""
+    body: dict = {
+        "service": service,
+        "requests": [{"topic": t, "request": {}} for t in requests],
+        "events": [{"topic": t, "message": {}} for t in events or []],
+        "sends": [{"topic": t, "request": {}} for t in sends or []],
+    }
+    if registration_hash:
+        body["registrationHash"] = registration_hash
     c.ingest_register(body)
 
 
@@ -66,13 +71,13 @@ def test_reregistration_replaces_consumer_edges() -> None:
 def test_provider_edges_are_declared_not_trace_derived() -> None:
     c = MeshCollector()
     _register(c, "payments", ["payments:capture"])
-    _register(c, "orders", ["order:create"], produces=["payments:capture"])
+    _register(c, "orders", ["order:create"], sends=["payments:capture"])
     topic = c.query_topic({"topic": "payments:capture"})
     assert topic["providers"] == ["orders"]  # declared, not derived from any trace
     assert topic["consumers"] == ["payments"]
     assert topic["invocations"] == 0
 
-    # Re-registering without `produces` drops the provider edge wholesale, like `topics` does.
+    # Re-registering without the send drops the provider edge wholesale, as `requests` does.
     _register(c, "orders", ["order:create"])
     assert c.query_topic({"topic": "payments:capture"})["providers"] == []
 
@@ -113,7 +118,7 @@ def test_trace_parentage_does_not_admit_a_provider_edge() -> None:
 def test_a_declared_edge_with_no_trace_is_unobserved_not_removed() -> None:
     c = MeshCollector()
     _register(c, "payments", ["payments:capture"])
-    _register(c, "orders", ["order:create"], produces=["payments:capture"])
+    _register(c, "orders", ["order:create"], sends=["payments:capture"])
     topic = c.query_topic({"topic": "payments:capture"})
     assert topic["providers"] == ["orders"]  # still declared — unobserved is a candidate, not a fact
     assert topic["providerActivity"] == {"orders": {}}  # no lastObservedAt: never traced
@@ -123,7 +128,7 @@ def test_a_declared_edge_with_no_trace_is_unobserved_not_removed() -> None:
 def test_a_declared_edge_is_observed_once_a_matching_trace_arrives() -> None:
     c = MeshCollector()
     _register(c, "payments", ["payments:capture"])
-    _register(c, "orders", ["order:create"], produces=["payments:capture"])
+    _register(c, "orders", ["order:create"], sends=["payments:capture"])
     c.ingest_traces(
         {
             "events": [
@@ -178,7 +183,7 @@ def test_an_undeclared_consumer_edge_files_a_contract_drift_issue() -> None:
 def test_an_undeclared_provider_edge_files_a_contract_drift_issue() -> None:
     c = MeshCollector()
     _register(c, "payments", ["payments:capture"])
-    _register(c, "orders", ["order:create"])  # does NOT declare produces=[payments:capture]
+    _register(c, "orders", ["order:create"])  # does NOT declare sends=[payments:capture]
     c.ingest_traces(
         {
             "events": [
@@ -209,7 +214,8 @@ def test_an_undeclared_provider_edge_files_a_contract_drift_issue() -> None:
 
 def test_an_anonymous_service_is_never_flagged_for_drift() -> None:
     # A service that never registered has no declared contract to diverge from — it's an existing,
-    # separate signal (missingFeeds: descriptor), not contract-drift.
+    # separate signal (missingFeeds: descriptor, the read models' name for the registration), not
+    # contract-drift.
     c = MeshCollector()
     c.ingest_traces(
         {
@@ -251,12 +257,12 @@ def test_repeated_undeclared_calls_merge_into_one_drift_issue_by_fingerprint() -
 
 def test_heartbeats_drive_health_and_hash_mismatch() -> None:
     c = MeshCollector()
-    _register(c, "orders", ["order:create"], descriptor_hash="sha256:aaaa")
+    _register(c, "orders", ["order:create"], registration_hash="sha256:aaaa")
     c.ingest_heartbeat(
         {
             "service": "orders",
             "instanceId": "i1",
-            "descriptorHash": "sha256:aaaa",
+            "registrationHash": "sha256:aaaa",
             "health": {"isHealthy": True, "healthChecks": {}},
         }
     )
@@ -265,7 +271,7 @@ def test_heartbeats_drive_health_and_hash_mismatch() -> None:
         {
             "service": "orders",
             "instanceId": "i2",
-            "descriptorHash": "sha256:bbbb",
+            "registrationHash": "sha256:bbbb",
             "health": {"isHealthy": False, "healthChecks": {}},
         }
     )
@@ -277,12 +283,12 @@ def test_heartbeats_drive_health_and_hash_mismatch() -> None:
 
 def test_missing_feeds_and_anonymous_service() -> None:
     c = MeshCollector()
-    _register(c, "orders", ["order:create"])  # descriptor only
+    _register(c, "orders", ["order:create"])  # registration only
     fleet = c.query_fleet({})
     orders = next(s for s in fleet["services"] if s["service"] == "orders")
     assert orders["health"] == "unknown"
     assert orders["missingFeeds"] == ["health", "traces"]
-    # a trace-only service is anonymous (no descriptor, no health)
+    # a trace-only service is anonymous (no registration, no health)
     c.ingest_traces(
         {
             "events": [
@@ -449,3 +455,109 @@ def test_issues_feed_absence_flagged_only_when_a_failure_needs_explaining() -> N
     c.ingest_issues({"service": "orders", "issues": []})  # a liveness beat clears the flag
     orders = next(s for s in c.query_fleet({})["services"] if s["service"] == "orders")
     assert orders["missingFeeds"] == ["descriptor", "health"]
+
+
+# --- the register body is the Contract Document (mesh.md §2, §4) ---------------------------------
+
+
+def _trace(c: MeshCollector, service: str, topic: str, span: str, parent: str | None = None) -> None:
+    event = {"traceId": "t", "spanId": span, "service": service, "topic": topic, "status": "ok"}
+    if parent:
+        event["parentSpanId"] = parent
+    c.ingest_traces({"events": [event]})
+
+
+def test_a_published_event_makes_its_publisher_a_provider() -> None:
+    c = MeshCollector()
+    _register(c, "orders", ["order:create"], events=["order:placed"])
+    _register(c, "shipping", ["order:placed"])
+    topic = c.query_topic({"topic": "order:placed"})
+    assert topic["providers"] == ["orders"]
+    assert topic["consumers"] == ["shipping"]
+
+
+def test_benzene_entries_are_ignored_on_every_member() -> None:
+    c = MeshCollector()
+    _register(
+        c,
+        "orders",
+        ["order:create", "benzene:spec"],
+        events=["benzene:mesh:heartbeat"],
+        sends=["benzene:mesh:traces"],
+    )
+    assert [t["topic"] for t in c.query_fleet({})["topics"]] == ["order:create"]
+    assert c.query_fleet({})["services"][0]["topics"] == 1
+
+
+def test_a_body_without_a_dialect_or_hashes_is_accepted() -> None:
+    # A collector requires only `service` (mesh.md §2): no schemaDialect check, no hash check.
+    c = MeshCollector()
+    assert c.ingest_register({"service": "orders", "requests": [{"topic": "order:create"}]}) == {
+        "accepted": 1
+    }
+    assert c.query_topic({"topic": "order:create"})["consumers"] == ["orders"]
+
+
+def test_a_carried_registration_hash_is_trusted_not_recomputed() -> None:
+    c = MeshCollector()
+    _register(c, "orders", ["order:create"], registration_hash="sha256:aaaa")  # a fake value
+    c.ingest_heartbeat({"service": "orders", "instanceId": "i1", "registrationHash": "sha256:aaaa"})
+    assert c.query_service({"service": "orders"})["instances"][0]["hashMatches"] is True
+
+
+def test_a_service_only_registration_asserts_nothing_and_flags_no_drift() -> None:
+    c = MeshCollector()
+    c.ingest_register({"service": "orders"})
+    _trace(c, "orders", "order:create", "s1")  # orders handles a topic its body never listed
+    assert c.query_fleet({})["issues"] == []  # an unknown member cannot be diverged from
+    assert c.query_topic({"topic": "order:create"})["consumers"] == []  # and adds no edge
+
+
+def test_a_degraded_member_is_unknown() -> None:
+    c = MeshCollector()
+    _register(c, "payments", ["payments:capture"])
+    c.ingest_register(
+        {
+            "service": "orders",
+            "requests": [{"topic": "order:create", "request": {}}],
+            "events": [],
+            "sends": [],
+            "degraded": ["sends"],
+        }
+    )
+    _trace(c, "orders", "order:create", "s-orders")
+    _trace(c, "payments", "payments:capture", "s-payments", parent="s-orders")
+    # orders could not determine its sends, so its call to payments:capture is not undeclared...
+    assert c.query_fleet({})["issues"] == []
+    # ...but its requests are known, so an unlisted handled topic still is.
+    _trace(c, "orders", "order:cancel", "s-cancel")
+    drift = c.query_fleet({})["issues"]
+    assert [(i["service"], i["topic"]) for i in drift] == [("orders", "order:cancel")]
+
+
+def test_request_schemas_are_kept_dereferenced_and_the_document_retained() -> None:
+    c = MeshCollector()
+    body = {
+        "schemaDialect": "openapi-3.0",
+        "service": "orders",
+        "requests": [
+            {
+                "topic": "order:create",
+                "version": "2",
+                "request": {"$ref": "#/components/schemas/CreateOrder"},
+                "response": {},
+            }
+        ],
+        "events": [],
+        "sends": [],
+        "components": {
+            "schemas": {"CreateOrder": {"type": "object", "properties": {"sku": {"type": "string"}}}}
+        },
+    }
+    c.ingest_register(body)
+    entry = c.snapshot()["services"][0]
+    assert entry["topicSpecs"]["order:create"] == {
+        "version": "2",
+        "requestSchema": {"type": "object", "properties": {"sku": {"type": "string"}}},
+    }
+    assert entry["document"] == body

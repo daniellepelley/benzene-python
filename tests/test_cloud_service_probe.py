@@ -20,13 +20,7 @@ from benzene.core import (
     Registry,
 )
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
-from benzene.mesh import (
-    ServiceDescriptor,
-    ServiceInfo,
-    Verdict,
-    mesh_interception,
-    probe_cloud_service,
-)
+from benzene.mesh import Verdict, probe_cloud_service
 from benzene.results import Result
 
 
@@ -50,15 +44,14 @@ def _client(app: BenzeneHttpApp):
 
 
 def _profiled_app() -> BenzeneHttpApp:
-    """A fully-provisioned service: an app topic, mesh descriptor, and the /benzene/* surfaces."""
+    """A fully-provisioned service: an app topic, its Contract Document on benzene:spec (the body it
+    registers with a mesh collector), and the /benzene/* surfaces."""
     router = HttpRouter().register("POST", "/orders", "orders:place", _place, request_type=Order)
     registry = Registry.from_definitions(router)
-    descriptor = ServiceDescriptor.derive(registry, ServiceInfo(service="orders"))
     return BenzeneHttpApp.from_definition(
         AppDefinition(
             registry=registry,
             router=router,
-            middleware=[mesh_interception(descriptor)],
             standard_paths=StandardPaths(health=HealthChecks().add("core", lambda: True)),
             contract=ContractInfo("orders"),
         )
@@ -74,10 +67,27 @@ def test_a_fully_provisioned_service_audits_clean() -> None:
         assert report.verdict(satisfied) is Verdict.SATISFIED, satisfied
     # ...and the structurally-unobservable trio stays inconclusive by design.
     assert report.inconclusive == ["R6", "R8"]
+    # R6's observable half is the self-description on benzene:spec, never the retired benzene:mesh.
+    assert "benzene:spec" in _reason(report, "R6")
+
+
+def test_a_service_without_benzene_spec_fails_r6s_observable_half() -> None:
+    # The surfaces are there, but no ContractInfo: benzene:spec is not answered with a document.
+    router = HttpRouter().register("POST", "/orders", "orders:place", _place, request_type=Order)
+    app = BenzeneHttpApp.from_definition(
+        AppDefinition(
+            registry=Registry.from_definitions(router),
+            router=router,
+            standard_paths=StandardPaths(health=HealthChecks().add("core", lambda: True)),
+        )
+    )
+    report = asyncio.run(probe_cloud_service("http://svc", http=_client(app)))
+    assert report.verdict("R6") is Verdict.NOT_SATISFIED
+    assert report.verdict("R4") is Verdict.SATISFIED  # /benzene/invoke still answered an envelope
 
 
 def test_a_bare_service_is_found_missing_its_surfaces() -> None:
-    # Only an application route — no standard_paths, no mesh interception.
+    # Only an application route — no standard_paths, no self-description.
     router = HttpRouter().register("POST", "/orders", "orders:place", _place, request_type=Order)
     app = BenzeneHttpApp(router)
     report = asyncio.run(probe_cloud_service("http://svc", http=_client(app)))
@@ -168,7 +178,9 @@ def _foreign_service_client():
         if path == "/benzene/health":
             return 200, json.dumps({"isHealthy": True, "healthChecks": {}})
         if path == "/benzene/invoke":
-            inner = json.dumps({"service": "payments-api", "topics": [{"id": "payments:capture"}]})
+            # The probe invokes benzene:spec: the same document, over the envelope endpoint.
+            assert body is not None and json.loads(body)["topic"] == "benzene:spec"
+            inner = json.dumps(_DOTNET_CONTRACT_DOCUMENT)
             return 200, json.dumps({"statusCode": "ok", "headers": {}, "body": inner})
         return 404, ""
 
@@ -181,6 +193,7 @@ def test_a_foreign_contract_document_service_grades_the_same_as_this_ports() -> 
     assert report.not_satisfied == []
     assert report.verdict("R5") is Verdict.SATISFIED
     assert report.verdict("R2") is Verdict.SATISFIED
+    assert report.verdict("R6") is Verdict.INCONCLUSIVE  # observable half holds
 
 
 def test_the_probes_topic_count_ignores_the_reserved_framework_topics() -> None:

@@ -1,28 +1,30 @@
-"""Self-check a service against the Cloud Service Profile and carry the verdict on its descriptor.
+"""Self-check a service against the Cloud Service Profile and carry the verdict on its Contract Document.
 
 The [Cloud Service Profile](../../docs/cloud-service-profile.md) names eight requirements (R1–R8) a
 service must satisfy to be a first-class fleet citizen. A composition root can grade its *own* wiring
-with :func:`~benzene.mesh.evaluate_cloud_service_profile` and attach the result to the descriptor's
-``profile`` field, so any tool that reaches the reserved ``benzene:mesh`` topic can ask a running
-service whether it claims the profile and, if not, which requirements it is missing.
+with :func:`~benzene.mesh.evaluate_cloud_service_profile`, and
+:func:`~benzene.mesh.declare_cloud_service_profile` puts the result on the Contract Document's
+``profile`` field — so ``benzene:spec`` serves it, and the registration a mesh collector receives
+(the same document, mesh.md §2) carries it: the fleet can see whether a running service claims the
+profile and, if not, which requirements it is missing.
 
 This dogfoods that flow end to end: a fully-wired service (registry + the well-known ``/benzene/*``
 surfaces via :class:`~benzene.http.StandardPaths`, plus the mesh feeds and trace propagation a meshed
-service provisions) grades itself conformant, and its descriptor carries ``profile: {"name":
-"cloud-service"}`` — with no ``missing`` — without disturbing the ``descriptorHash``.
+service provisions) grades itself conformant, and its document carries ``profile: {"name":
+"cloud-service"}`` — with no ``missing`` — without disturbing either hash.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from benzene.core import AppDefinition, ContractInfo, HealthChecks, Registry
+from benzene.core import AppDefinition, ContractDocument, ContractInfo, HealthChecks, Registry
 from benzene.http import StandardPaths
 from benzene.mesh import (
     CloudServiceProfileReport,
-    ServiceDescriptor,
-    ServiceInfo,
+    declare_cloud_service_profile,
     evaluate_cloud_service_profile,
+    registration_document,
 )
 from benzene.results import Result
 
@@ -43,7 +45,8 @@ def build_profiled_definition() -> AppDefinition:
     return AppDefinition(
         registry=registry,
         standard_paths=StandardPaths(health=HealthChecks().add("order-store", lambda: True)),
-        contract=ContractInfo("orders"),  # the self-description: benzene:spec + /benzene/spec
+        # the self-description: benzene:spec + /benzene/spec, and the mesh register body
+        contract=ContractInfo("orders", service_version="1.0.0", version_scheme="semver"),
     )
 
 
@@ -54,16 +57,12 @@ def self_check() -> CloudServiceProfileReport:
     )
 
 
-def descriptor_with_profile() -> ServiceDescriptor:
-    """Derive the service descriptor with its self-assessed profile attached (mesh.md §2)."""
-    report = self_check()
-    definition = build_profiled_definition()
-    # AppDefinition.registry is optional - an HTTP-only app has none - so narrow it before deriving.
-    assert definition.registry is not None
-    return ServiceDescriptor.derive(
-        definition.registry,
-        ServiceInfo(service="orders", service_version="1.0.0", profile=report.to_profile()),
+def document_with_profile() -> ContractDocument:
+    """The service's Contract Document with its self-assessed profile on it (contract-document §1)."""
+    definition = declare_cloud_service_profile(
+        build_profiled_definition(), mesh_feeds=True, trace_propagation=True
     )
+    return registration_document(definition)
 
 
 def _main() -> None:
@@ -71,7 +70,7 @@ def _main() -> None:
     print("conformant:", report.is_conformant, "missing:", report.missing)
     for check in report.checks:
         print(f"  {check.id}: {'ok' if check.satisfied else 'MISSING'} — {check.reason}")
-    print("descriptor profile:", descriptor_with_profile().to_payload()["profile"])
+    print("document profile:", document_with_profile().to_payload()["profile"])
 
 
 if __name__ == "__main__":

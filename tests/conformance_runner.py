@@ -37,7 +37,6 @@ from benzene.core import (
     AppDefinition,
     BenzeneMessageApplication,
     ComponentNameCollisionError,
-    ContractDocument,
     ContractInfo,
     HealthCheckResult,
     HealthChecks,
@@ -49,6 +48,7 @@ from benzene.core import (
     SettlementDefaults,
     application_from,
     contract_hash,
+    derive_contract,
     read_message_metadata,
     registration_hash,
     resolve_version,
@@ -65,8 +65,6 @@ from benzene.kafka import KafkaConsumerApp
 from benzene.mesh import (
     InMemoryTraceExporter,
     MeshCollector,
-    ServiceDescriptor,
-    ServiceInfo,
     collector_registry,
     parse_traceparent,
     trace_middleware,
@@ -80,7 +78,6 @@ from .canonical_handlers import (
     VALIDATION_AVAILABLE,
     register_all_canonical,
     register_canonical,
-    register_canonical_outbound,
     register_with_panic,
 )
 
@@ -107,13 +104,13 @@ UNRUN_FIXTURES: dict[str, str] = {
     "mesh-service-version-cases.json": (
         "conditional (conformance/README.md): required only of a collector claiming service-version "
         "identity. MeshCollector keys its catalog by service name alone, not by "
-        "(service, serviceVersion), so this port does not claim mesh §2.4 - claim it and run this, "
-        "or keep saying so here"
+        "(service, serviceVersion), so this port does not claim service-versions.md §1 - claim it "
+        "and run this, or keep saying so here"
     ),
     "mesh-version-order-cases.json": (
         "conditional (conformance/README.md): required only of a port that ORDERS service versions. "
-        "This port ships no version comparator (mesh §2.5), and §2.4 identity without §2.5 ordering "
-        "is conformant"
+        "This port ships no version comparator (service-versions.md §2), and §1 identity without §2 "
+        "ordering is conformant"
     ),
 }
 
@@ -323,94 +320,6 @@ def _mesh_subset(expected: Any, actual: Any) -> bool:
     return expected == actual
 
 
-def _mesh_subset_absent_ok(expected: dict, actual: dict) -> bool:
-    """Like ``_mesh_subset`` for dicts, but an expected empty-array value may be absent in ``actual``."""
-    for key, value in expected.items():
-        if isinstance(value, list) and value == [] and key not in actual:
-            continue
-        if key not in actual or not _mesh_subset(value, actual[key]):
-            return False
-    return True
-
-
-def _info_from_fixture(service_info: dict, **overrides: Any) -> ServiceInfo:
-    fields = {
-        "service": service_info["service"],
-        "service_version": service_info.get("serviceVersion"),
-        "placement": service_info.get("placement"),
-    }
-    fields.update(overrides)
-    return ServiceInfo(**fields)
-
-
-def _asserted(hash_spec: dict, key: str, failures: list[str]) -> bool:
-    """Whether the fixture asks for a hash property, recording a failure if it never mentions it.
-
-    ``hash_spec.get(key)`` reads the same whether the fixture says ``false`` or has never heard of
-    the key, and those mean opposite things. The Go and TypeScript runners each spent the whole
-    producer/consumer role inversion asking for ``sensitiveToConsumes`` after the fixture had renamed
-    it to ``sensitiveToProduces``; the guard read falsey, the check quietly stopped running, and the
-    suite stayed green while asserting nothing about produced topics. A key the fixture does not
-    carry is drift between runner and fixture - never permission to stop checking.
-    """
-    if key not in hash_spec:
-        failures.append(
-            f"mesh-descriptor: fixture hash section has no {key!r} - "
-            "the runner and the fixture have drifted"
-        )
-        return False
-    return bool(hash_spec[key])
-
-
-def run_mesh_descriptor() -> list[str]:
-    failures: list[str] = []
-    data = _load("mesh-descriptor-cases.json")
-    info = _info_from_fixture(data["serviceInfo"])
-    descriptor = ServiceDescriptor.derive(
-        register_canonical(Registry()), info, register_canonical_outbound(OutboundRegistry())
-    )
-    payload = descriptor.to_payload()
-
-    if not _mesh_subset_absent_ok(data["expectedDescriptor"], payload):
-        failures.append(f"mesh-descriptor: derived {payload} !⊇ {data['expectedDescriptor']}")
-
-    hash_spec = data["hash"]
-    h = descriptor.descriptor_hash()
-    if not h.startswith(hash_spec["prefix"]):
-        failures.append(f"mesh-descriptor: hash {h!r} lacks prefix {hash_spec['prefix']!r}")
-    if len(h) - len(hash_spec["prefix"]) != hash_spec["hexLength"]:
-        failures.append(f"mesh-descriptor: hash hex length != {hash_spec['hexLength']}")
-    if _asserted(hash_spec, "invariantToInstanceId", failures):
-        other = ServiceDescriptor.derive(
-            register_canonical(Registry()),
-            _info_from_fixture(data["serviceInfo"], instance_id="i-xyz"),
-            register_canonical_outbound(OutboundRegistry()),
-        )
-        if other.descriptor_hash() != h:
-            failures.append("mesh-descriptor: hash not invariant to instanceId")
-    if _asserted(hash_spec, "sensitiveToServiceVersion", failures):
-        other = ServiceDescriptor.derive(
-            register_canonical(Registry()),
-            _info_from_fixture(data["serviceInfo"], service_version="9.9.9"),
-            register_canonical_outbound(OutboundRegistry()),
-        )
-        if other.descriptor_hash() == h:
-            failures.append("mesh-descriptor: hash not sensitive to serviceVersion")
-    if _asserted(hash_spec, "sensitiveToTopics", failures):
-        from .canonical_handlers import greet
-
-        other = ServiceDescriptor.derive(
-            Registry().add(greet), info, register_canonical_outbound(OutboundRegistry())
-        )
-        if other.descriptor_hash() == h:
-            failures.append("mesh-descriptor: hash not sensitive to the topic set")
-    if _asserted(hash_spec, "sensitiveToProduces", failures):
-        other = ServiceDescriptor.derive(register_canonical(Registry()), info)  # no produces at all
-        if other.descriptor_hash() == h:
-            failures.append("mesh-descriptor: hash not sensitive to the produced-topic set")
-    return failures
-
-
 def run_mesh_trace() -> list[str]:
     failures: list[str] = []
     data = _load("mesh-trace-cases.json")
@@ -557,6 +466,11 @@ def run_settlement_defaults(data: dict) -> list[str]:
     return failures
 
 
+#: The members a derivation case compares exactly, not by subset (README "derivationCases").
+DOCUMENT_BODY = frozenset(
+    {"requests", "events", "sends", "components", "contractHash", "registrationHash"}
+)
+
 #: The schema members of each entry kind a derivation case compares (README "derivationCases").
 SCHEMA_MEMBERS: dict[str, tuple[str, ...]] = {
     "requests": ("request", "response"),
@@ -617,11 +531,21 @@ def run_contract_derivation(data: dict) -> list[str]:
     for case in _cases(data, "derivationCases", "contract-document", failures):
         name = case["name"]
         registry, outbound = _canonical_registrations(case["registrations"], CANONICAL_PAYLOAD_TYPES)
-        payload = ContractDocument.derive(
-            registry, service="conformance", outbound=outbound
-        ).to_payload()
+        # The case's identity and placement, through the composition root's own path (ContractInfo).
+        service_info = case.get("serviceInfo", {})
+        info = ContractInfo(
+            service_info.get("service", "conformance"),
+            service_version=service_info.get("serviceVersion", ""),
+            version_scheme=service_info.get("versionScheme", ""),
+            placement=service_info.get("placement"),
+        )
+        payload = derive_contract(info, registry, outbound=outbound).to_payload()
         schemas = payload["components"]["schemas"]
         expected = case["expected"]
+        # Identity fields subset-match; the entries and hashes are compared exactly below.
+        identity = {key: value for key, value in expected.items() if key not in DOCUMENT_BODY}
+        if not _is_subset(identity, payload):
+            failures.append(f"derivationCases[{name}]: identity {identity} not carried by the document")
         for kind, schema_members in SCHEMA_MEMBERS.items():
             actual_entries = {(e["topic"], e.get("version")): e for e in payload[kind]}
             expected_entries = {(e["topic"], e.get("version")): e for e in expected[kind]}
@@ -1187,7 +1111,6 @@ def run_all() -> list[str]:
         + run_problem_details()
         + run_transport_metadata()
         + run_grpc_status_mapping()
-        + run_mesh_descriptor()
         + run_mesh_trace()
         + run_mesh_collector()
         + run_contract_document_cases()
@@ -1206,7 +1129,7 @@ if __name__ == "__main__":
     print(
         "CONFORMANCE PASSED — status vocabulary, HTTP mapping, problem details (+ envelope endpoint "
         "and health routes), envelope (+ version selection), transport metadata (+ settlement "
-        "defaults), gRPC status mapping, mesh (descriptor + trace + collector + issues), "
+        "defaults), gRPC status mapping, mesh (trace + collector + issues), "
         "contract-document (derivation + naming + benzene:spec + parse/scope/closure), and "
         "contract-hash cases all green; "
         f"every vendored fixture claimed ({len(UNRUN_FIXTURES)} explicitly unrun); "

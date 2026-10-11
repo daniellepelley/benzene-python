@@ -9,6 +9,8 @@ Env vars (matching .NET's ``examples/K8sMesh/Service`` manifests):
   ``http://payments/benzene/invoke``); unset for a terminal service (``shipping``) or a standalone run.
 - ``MESH_COLLECTOR_ENVELOPE_URL`` — the mesh's ``/benzene/invoke`` URL (e.g.
   ``http://mesh/benzene/invoke``); unset disables reporting (register/heartbeat/traces) entirely.
+- ``MESH_CLOUD`` — the ``placement.cloud`` the Contract Document reports (default ``self-hosted``;
+  ``aws`` on EKS, say).
 - ``PORT`` — the HTTP port (default ``8080``).
 """
 
@@ -20,12 +22,7 @@ from dataclasses import dataclass
 
 from benzene.core import MessageSender, build_application, use_instance
 from benzene.http import BenzeneHttpApp
-from benzene.mesh import (
-    MeshFeedSender,
-    QueueTraceExporter,
-    ServiceDescriptor,
-    ServiceInfo,
-)
+from benzene.mesh import MeshFeedSender, QueueTraceExporter, registration_document
 
 from ..envelope_client import EnvelopeHttpMessageSender
 from .domain import NullMessageSender
@@ -52,7 +49,8 @@ def build_service_host(env: Mapping[str, str] | None = None) -> ServiceHost:
         EnvelopeHttpMessageSender(downstream_url) if downstream_url else NullMessageSender()
     )
     definition, scope = build_application(
-        ServiceStartUp(name), overrides=[use_instance(MessageSender, sender)]
+        ServiceStartUp(name, cloud=env.get("MESH_CLOUD") or "self-hosted"),
+        overrides=[use_instance(MessageSender, sender)],
     )
     app = BenzeneHttpApp.from_definition(definition)
 
@@ -60,21 +58,11 @@ def build_service_host(env: Mapping[str, str] | None = None) -> ServiceHost:
     if collector_url:
         exporter = scope.get_service(QueueTraceExporter)
         feeds = MeshFeedSender(EnvelopeHttpMessageSender(collector_url))
-        # What each service sends downstream - orders -> payments -> shipping (terminal) - is declared
-        # on the startup's outbound registry (definition.outbound): that is what puts provider edges in
-        # the mesh's graph; nothing here is derived from tracing a live call.
-        # ServiceStartUp.configure always sets registry (it's the router-derived registry, never left
-        # None) — assert rather than silently deriving from an empty Registry.
-        assert definition.registry is not None
-        descriptor = ServiceDescriptor.derive(
-            definition.registry,
-            ServiceInfo(
-                service=name,
-                instance_id=instance_id,
-                placement={"platform": "kubernetes", "zone": "in-cluster"},
-            ),
-            definition.outbound,
-        )
-        reporter = MeshReporter(feeds, descriptor, exporter, instance_id=instance_id)
+        # The register body is the Contract Document /benzene/spec serves (mesh.md §2). What each
+        # service sends downstream - orders -> payments -> shipping (terminal) - is in its `sends`,
+        # declared on the startup's outbound registry: that is what puts provider edges in the mesh's
+        # graph; nothing here is derived from tracing a live call.
+        document = registration_document(definition)
+        reporter = MeshReporter(feeds, document, exporter, instance_id=instance_id)
 
     return ServiceHost(app=app, reporter=reporter)

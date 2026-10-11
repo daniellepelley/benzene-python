@@ -14,9 +14,10 @@ silently upgraded:
 
 - **R8** (trace-context propagation) needs a *second* service to observe a forwarded ``traceparent``,
   or a collector deriving consumer edges — unobservable from one service.
-- **R6**'s register/heartbeat half: only the reserved ``benzene:mesh`` descriptor response is directly
-  observable; delivery to a collector is not. A passing descriptor check is reported as the
-  *observable half only*, never the whole of R6.
+- **R6**'s three feeds — registration, heartbeats, traces — are sent to a collector, which a probe
+  cannot see. What it can observe is the registration's *body*: the Contract Document the reserved
+  ``benzene:spec`` topic answers with over ``/benzene/invoke`` (mesh.md §2). A passing check is
+  reported as that *observable half only*, never the whole of R6.
 
 **R7** likewise degrades to ``inconclusive`` the moment the caller points the probe at a non-default
 prefix — it then has no way to know the service's own defaults, only that something answers where it
@@ -37,7 +38,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from .specdoc import is_contract_document, spec_topics
+from .specdoc import is_contract_document, spec_topic_ids
 
 #: The default well-known path prefix (design-principles §5.2).
 DEFAULT_PREFIX = "/benzene"
@@ -101,8 +102,8 @@ class CloudServiceProbeReport:
         }
 
 
-def _is_reserved(topic: str) -> bool:
-    return topic.startswith("benzene:")
+#: The reserved topic that answers with the service's Contract Document (contract-document §7).
+SPEC_TOPIC = "benzene:spec"
 
 
 async def probe_cloud_service(
@@ -124,13 +125,14 @@ async def probe_cloud_service(
 
     spec = await _get_json(call, f"{root}{prefix}/spec")
     health = await _get_json(call, f"{root}{prefix}/health", ok_statuses=(200, 503))
-    descriptor = await _invoke(call, f"{root}{prefix}/invoke", "benzene:mesh")
+    # The self-description over the envelope endpoint: the same document a registration carries.
+    described = await _invoke(call, f"{root}{prefix}/invoke", SPEC_TOPIC)
 
-    reachable = any(result.reached for result in (spec, health, descriptor))
+    reachable = any(result.reached for result in (spec, health, described))
     # A surface *answering* (a parsed spec/health document, or an invoke envelope) is stronger than a
     # mere HTTP response — a bare service reachable only through 404s answers nothing.
     surfaces_answered = (
-        spec.document is not None or health.document is not None or descriptor.envelope
+        spec.document is not None or health.document is not None or described.envelope
     )
     probes: list[RequirementProbe] = []
 
@@ -153,8 +155,7 @@ async def probe_cloud_service(
             RequirementProbe("R2", Verdict.NOT_SATISFIED, "/benzene/spec did not return a document")
         )
     else:
-        topic_ids = [str(t.get("id", "")) for t in spec_topics(spec.document)]
-        app_topics = [t for t in topic_ids if t and not _is_reserved(t)]
+        app_topics = spec_topic_ids(spec.document, "requests")  # benzene: entries are dropped
         probes.append(
             RequirementProbe(
                 "R2",
@@ -181,13 +182,13 @@ async def probe_cloud_service(
         RequirementProbe(
             "R4",
             Verdict.SATISFIED
-            if descriptor.reached and descriptor.envelope
+            if described.reached and described.envelope
             else Verdict.NOT_SATISFIED
-            if descriptor.status == 404
+            if described.status == 404
             else Verdict.INCONCLUSIVE,
             "/benzene/invoke accepted an envelope and returned one"
-            if descriptor.reached and descriptor.envelope
-            else descriptor.detail,
+            if described.reached and described.envelope
+            else described.detail,
         )
     )
 
@@ -203,25 +204,31 @@ async def probe_cloud_service(
         )
     )
 
-    # R6 — only the reserved benzene:mesh descriptor is observable; collector delivery is not, so the
-    # most a black-box probe can say is "the observable half holds" → inconclusive by design.
-    if descriptor.reached and descriptor.document is not None and "topics" in descriptor.document:
+    # R6 — the registration body is the Contract Document benzene:spec answers with; its delivery to a
+    # collector (and the heartbeat and trace feeds) is not observable, so the most a black-box probe
+    # can say is "the observable half holds" → inconclusive by design.
+    if (
+        described.reached
+        and described.document is not None
+        and is_contract_document(described.document)
+    ):
         probes.append(
             RequirementProbe(
                 "R6",
                 Verdict.INCONCLUSIVE,
-                "benzene:mesh returns a descriptor (observable half); register/heartbeat delivery to "
-                "a collector is not observable from outside",
+                "benzene:spec returns the Contract Document a registration carries (observable "
+                "half); registration, heartbeat and trace delivery to a collector is not observable "
+                "from outside",
             )
         )
     else:
         probes.append(
             RequirementProbe(
                 "R6",
-                Verdict.NOT_SATISFIED if descriptor.reached else Verdict.INCONCLUSIVE,
-                "benzene:mesh did not return a descriptor"
-                if descriptor.reached
-                else descriptor.detail,
+                Verdict.NOT_SATISFIED if described.reached else Verdict.INCONCLUSIVE,
+                "benzene:spec over /benzene/invoke did not return a Contract Document"
+                if described.reached
+                else described.detail,
             )
         )
 

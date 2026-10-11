@@ -8,7 +8,8 @@ repo's ``docs/guides/mesh-ui.md`` and pinned by the ``website/demos/mesh/`` fixt
 the Python aggregator's projection into that contract.
 
 The UI **must not invent fields and degrades gracefully when any is absent** (mesh.md §6), so this
-emits exactly what the collector's catalog knows. From the descriptor/spec feed it derives the estate
+emits exactly what the collector's catalog knows. From the registration feed (each service's Contract
+Document, mesh.md §2) it derives the estate
 (names, health, contract-drift + spec-hash history), the functional map (topics with **declared**
 consumers/producers, **request/response schemas, version, and schema-mismatch**), per-service **spec +
 per-check health**, and an **AsyncAPI** export of the domain topics; the topology (who calls whom) comes
@@ -106,7 +107,7 @@ def build_artifacts(
 
 
 def _drifted(service_detail: dict[str, Any]) -> bool:
-    # Any live instance whose descriptor hash differs from the registered one is contract drift.
+    # Any live instance whose registrationHash differs from the registered one is contract drift.
     return any(not inst["hashMatches"] for inst in service_detail.get("instances", []))
 
 
@@ -133,7 +134,8 @@ def _manifest(
 
 
 def _topology(collector: MeshCollector, fleet: dict[str, Any], generated_at: str) -> dict[str, Any]:
-    # A provider of a topic is the sender/caller (`produces`); a consumer is the handler (`topics`) —
+    # A provider of a topic is its publisher/caller (`events` ∪ `sends`); a consumer is the handler
+    # (`requests`) —
     # the receiver. So a provider is a *client* of that topic's consumer(s) (the sender calls the
     # handler). Aggregate invocations/errors across the topics a pair shares into one client -> server
     # edge (rate/latency need a metrics feed this collector doesn't have, so they stay null — the UI
@@ -175,7 +177,7 @@ def _topic_changes(
 
     A consumer (handler) whose retained contract for this topic differs from the one it declared on
     its prior register has changed the schema; the UI surfaces it inline on the functional map. Schema
-    authority stays with the handler registration (`topics`) — the consumer role under the 2026-08
+    authority stays with the handler registration (`requests`) — the consumer role under the 2026-08
     role inversion.
     """
     changes: list[dict[str, Any]] = []
@@ -202,7 +204,7 @@ def _topics(
 ) -> dict[str, Any]:
     # A topic that was once declared but is now handled by no one has been retired from the fleet's
     # contract — surface it as removed (the deprecation view) and drop it from the active list.
-    # Handler registration (`topics`) is the consumer role under the 2026-08 role inversion.
+    # Handler registration (`requests`) is the consumer role.
     currently_consumed = {
         topic for entry in services.values() for topic in entry.get("consumed", [])
     }
@@ -215,8 +217,8 @@ def _topics(
         detail = collector.query_topic({"topic": topic})
         providers = detail.get("providers", [])
         consumers = detail.get("consumers", [])
-        # Schema authority stays with whoever registered a handler for this topic (`topics`) — the
-        # consumer role now, not the provider (`produces`, the sender) role.
+        # Schema authority stays with whoever registered a handler for this topic (`requests`) — the
+        # consumer role, not the provider (`events`/`sends`) role.
         consumer_specs = [services.get(c, {}).get("topicSpecs", {}).get(topic) for c in consumers]
         present = [spec for spec in consumer_specs if spec]
         representative = present[0] if present else {}
@@ -252,8 +254,8 @@ def _service(
         "name": name,
         "fetchedAtUtc": generated_at,
         "specJson": _spec_json(name, entry),
-        "specHash": entry.get("descriptorHash"),
-        "previousSpecHash": entry.get("previousDescriptorHash"),
+        "specHash": entry.get("registrationHash"),
+        "previousSpecHash": entry.get("previousRegistrationHash"),
         "contractDrift": _drifted(detail),
         "health": _service_health(detail, entry),
         "error": None,
@@ -261,15 +263,17 @@ def _service(
 
 
 def _spec_json(name: str, entry: dict[str, Any]) -> str | None:
-    """Reconstruct the service's spec document (as a JSON string) from its retained topic contracts."""
-    if not entry.get("hasDescriptor"):
+    """The service's registered Contract Document, as a JSON string — what the UI's spec page reads.
+
+    The register body *is* the document the service serves on ``benzene:spec`` (mesh.md §2), so the
+    collector publishes it as received rather than reconstructing one. A reduced registration is
+    published as reduced; a service that never registered has none.
+    """
+    if not entry.get("registered"):
         return None
-    specs = entry.get("topicSpecs", {})
-    topics = []
-    for topic_id in sorted(entry.get("consumed", [])):
-        spec = specs.get(topic_id, {})
-        topics.append({"id": topic_id, **spec})
-    return json.dumps({"service": name, "topics": topics}, ensure_ascii=False)
+    document = dict(entry.get("document") or {})
+    document.setdefault("service", name)
+    return json.dumps(document, ensure_ascii=False)
 
 
 def _service_health(detail: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
@@ -333,7 +337,7 @@ def _asyncapi(
 
     One channel per non-reserved topic (payload = its retained schema), and an operation per role:
     a consumer (handler) ``receive``s the topic, a provider (sender) ``send``s it. A faithful export
-    of what the catalog knows — schemas populate where the descriptor declared them, else the message
+    of what the catalog knows — schemas populate where the registration declared them, else the message
     is left open.
     """
     channels: dict[str, Any] = {}
@@ -345,7 +349,7 @@ def _asyncapi(
             continue  # the UI hides benzene:* plumbing; keep it out of the domain export too
         detail = collector.query_topic({"topic": topic})
         consumers = detail.get("consumers", [])
-        # Schema authority stays with the handler registration (`topics`, the consumer role).
+        # Schema authority stays with the handler registration (`requests`, the consumer role).
         spec: dict[str, Any] = {}
         for consumer in consumers:
             spec = services.get(consumer, {}).get("topicSpecs", {}).get(topic) or spec

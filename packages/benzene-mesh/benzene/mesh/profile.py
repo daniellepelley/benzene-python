@@ -4,33 +4,34 @@ The [Cloud Service Profile](cloud-service-profile.md) names eight requirements (
 satisfy to be a first-class fleet citizen. This module projects a composition root's
 :class:`~benzene.core.AppDefinition` into a :class:`CloudServiceProfileReport` — a **build-time /
 wiring-time** self-assessment of what the setup actually provisioned. Its :meth:`~CloudServiceProfileReport.to_profile`
-output is the descriptor's optional ``profile`` field (mesh.md §2): ``{"name": "cloud-service",
-"missing": [...]}``, with ``missing`` omitted when fully conformant. Any tool that can reach the
-reserved ``benzene:mesh`` topic can then ask a running service whether it claims the profile and, if
-not, exactly which requirements its own wiring knows it is missing.
+output is the Contract Document's optional ``profile`` field (contract-document.md §1):
+``{"name": "cloud-service", "missing": [...]}``, with ``missing`` omitted when fully conformant. A
+service declares it on its :class:`~benzene.core.ContractInfo` (:func:`declare_cloud_service_profile`),
+so ``benzene:spec`` serves it and the register body carries it (mesh.md §2), and the fleet can see whether each service claims the profile and, if not, exactly which
+requirements its own wiring knows it is missing.
 
 This is a self-assessment of *provisioning*, not a runtime probe: it reflects what the composition
-root wired, and — like ``degraded`` — it never participates in the ``descriptorHash`` (mesh.md §2.2)
-and never changes because of runtime degradation (an unreachable collector does not make a conformant
+root wired, and — like ``degraded`` — it is outside both document hashes (contract-document §6) and
+never changes because of runtime degradation (an unreachable collector does not make a conformant
 service stop claiming the profile). It is the counterpart of the external live-probe checker, which
 audits a *deployed* service over HTTP from the outside.
 
 Most requirements are read straight off the ``AppDefinition`` (the registry and the ``standard_paths``
 declaration). Two are structurally invisible to pipeline inspection and are taken as explicit inputs —
 exactly the pair the profile spec (§5) singles out as unobservable from a single service's surfaces:
-**R6**'s register/heartbeat/trace *sending* (wired into the host loop, not the request pipeline) and
+**R6**'s registration/heartbeat/trace *sending* (wired into the host loop, not the request pipeline) and
 **R8**'s outbound ``traceparent`` propagation (a property of the outbound clients). A composition root
 that wired them says so; the default is the honest "not provisioned".
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from benzene.core import AppDefinition
 
-#: The profile's identifier, as carried in the descriptor's ``profile.name`` (cloud-service-profile.md).
+#: The profile's identifier, as carried in the document's ``profile.name`` (cloud-service-profile.md).
 PROFILE_NAME = "cloud-service"
 
 #: The default well-known path prefix (design-principles §5.2); R7 wants the surfaces here.
@@ -54,8 +55,8 @@ class CloudServiceProfileReport:
     """A service's self-assessment against the Cloud Service Profile's R1–R8.
 
     Build it with :func:`evaluate_cloud_service_profile`; read :attr:`missing` /
-    :attr:`is_conformant`, or hand :meth:`to_profile` to a :class:`~benzene.mesh.ServiceInfo` so the
-    verdict rides on the service descriptor.
+    :attr:`is_conformant`, or let :func:`declare_cloud_service_profile` put :meth:`to_profile` on the
+    Contract Document so the verdict rides on ``benzene:spec`` and on the registration.
     """
 
     checks: tuple[RequirementCheck, ...]
@@ -83,10 +84,10 @@ class CloudServiceProfileReport:
         raise KeyError(requirement_id)
 
     def to_profile(self) -> dict[str, Any]:
-        """The descriptor ``profile`` field (mesh.md §2): ``{"name", "missing"?}``.
+        """The document's ``profile`` field (contract-document §1): ``{"name", "missing"?}``.
 
         ``missing`` is omitted — not emitted empty — when the service is fully conformant, matching the
-        wire contract. Feed this to :class:`~benzene.mesh.ServiceInfo`'s ``profile`` argument.
+        wire contract. :func:`declare_cloud_service_profile` sets it as ``ContractInfo.profile``.
         """
         profile: dict[str, Any] = {"name": self.name}
         missing = self.missing
@@ -117,10 +118,11 @@ def evaluate_cloud_service_profile(
 ) -> CloudServiceProfileReport:
     """Assess an :class:`~benzene.core.AppDefinition` against the Cloud Service Profile (R1–R8).
 
-    ``mesh_feeds`` — set True when the composition root provisioned the service-side mesh feeds
-    (``benzene:mesh`` descriptor + register + heartbeat + trace sending, mesh.md §§1–4). These are
+    ``mesh_feeds`` — set True when the composition root provisioned R6's three service-side mesh feeds:
+    registration (its body the R5 Contract Document), heartbeats and traces (mesh.md §§2–5). These are
     sent from the host loop / outbound clients, not the request pipeline, so they cannot be read off
-    the definition (R6).
+    the definition. R6 also needs the self-description — ``benzene:spec`` answering with the
+    document, which is what a ``contract`` provisions — so it is unmet without one.
 
     ``trace_propagation`` — set True when the service joins inbound W3C trace context and its outbound
     Benzene clients forward ``traceparent`` (R8). This is a property of the outbound clients, again
@@ -198,14 +200,24 @@ def evaluate_cloud_service_profile(
         )
     )
 
-    # R6 — mesh service-side feeds. Not readable from the pipeline; declared by the composition root.
+    # R6 — the three mesh service-side feeds. Their sending is not readable from the pipeline, so the
+    # composition root declares it; the registration's body is the Contract Document, which is.
+    has_document = definition.contract is not None
+    r6 = mesh_feeds and has_document
     checks.append(
         RequirementCheck(
             "R6",
-            mesh_feeds,
-            "mesh feeds declared provisioned"
-            if mesh_feeds
-            else "mesh feeds not declared (pass mesh_feeds=True when register/heartbeat/traces are wired)",
+            r6,
+            "benzene:spec answers with the Contract Document; registration (that document), "
+            "heartbeats and traces declared provisioned"
+            if r6
+            else (
+                "mesh feeds declared, but there is no Contract Document to serve on benzene:spec or "
+                "to register (declare AppDefinition(contract=ContractInfo(...)))"
+                if mesh_feeds
+                else "mesh feeds not declared (pass mesh_feeds=True when registration/heartbeats/"
+                "traces are wired)"
+            ),
         )
     )
 
@@ -239,3 +251,25 @@ def evaluate_cloud_service_profile(
     )
 
     return CloudServiceProfileReport(checks=tuple(checks))
+
+
+def declare_cloud_service_profile(
+    definition: AppDefinition,
+    *,
+    mesh_feeds: bool = False,
+    trace_propagation: bool = False,
+) -> AppDefinition:
+    """``definition`` with its profile self-check on its Contract Document (contract-document §1).
+
+    Evaluates :func:`evaluate_cloud_service_profile` and sets the result as the ``profile`` of the
+    definition's :class:`~benzene.core.ContractInfo`, so ``benzene:spec`` serves it and the mesh
+    register body (:func:`~benzene.mesh.registration_document`) carries it — one document, both
+    surfaces. It is outside both hashes. A definition without a ``contract`` has no document to carry
+    a profile and is returned unchanged.
+    """
+    if definition.contract is None:
+        return definition
+    report = evaluate_cloud_service_profile(
+        definition, mesh_feeds=mesh_feeds, trace_propagation=trace_propagation
+    )
+    return replace(definition, contract=replace(definition.contract, profile=report.to_profile()))

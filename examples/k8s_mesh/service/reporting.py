@@ -13,17 +13,18 @@ import asyncio
 import contextlib
 from datetime import datetime, timezone
 
-from benzene.core import HealthChecks
-from benzene.mesh import Heartbeat, MeshFeedSender, QueueTraceExporter, ServiceDescriptor
+from benzene.core import ContractDocument, HealthChecks
+from benzene.mesh import Heartbeat, MeshFeedSender, QueueTraceExporter
 
 
 class MeshReporter:
-    """Periodically registers, heartbeats, and drains+pushes traces to a mesh collector."""
+    """Periodically registers its Contract Document, heartbeats, and drains+pushes traces to a mesh
+    collector (mesh.md §§2–5)."""
 
     def __init__(
         self,
         feeds: MeshFeedSender,
-        descriptor: ServiceDescriptor,
+        document: ContractDocument,
         exporter: QueueTraceExporter,
         *,
         instance_id: str,
@@ -31,7 +32,7 @@ class MeshReporter:
         interval_seconds: float = 15.0,
     ) -> None:
         self._feeds = feeds
-        self._descriptor = descriptor
+        self._document = document
         self._exporter = exporter
         self._instance_id = instance_id
         self._health = health or HealthChecks().add("self", lambda: True)
@@ -41,15 +42,15 @@ class MeshReporter:
         """Register + heartbeat + drain-and-push traces once. Never raises: a collector hiccup
         must never affect the service it observes (mesh.md, Degradation)."""
         with contextlib.suppress(Exception):
-            await self._feeds.register(self._descriptor)
+            await self._feeds.register(self._document)
         report = await self._health.run()
         with contextlib.suppress(Exception):
             await self._feeds.publish_heartbeat(
-                Heartbeat(
-                    service=self._descriptor.info.service,
+                # registrationHash + serviceVersion straight off the registered document (mesh.md §5)
+                Heartbeat.for_document(
+                    self._document,
                     sent_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     instance_id=self._instance_id,
-                    descriptor_hash=self._descriptor.descriptor_hash(),
                     is_healthy=report.is_healthy,
                     health_checks={name: r.to_payload() for name, r in report.checks.items()},
                 )

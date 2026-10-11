@@ -37,13 +37,13 @@ class _FakeContainerClient:
 def _fleet() -> MeshCollector:
     c = MeshCollector()
     c.ingest_register(
-        {"service": "orders", "topics": [{"id": "order:create"}], "descriptorHash": "h-ord"}
+        {"service": "orders", "requests": [{"topic": "order:create"}], "registrationHash": "h-ord"}
     )
     c.ingest_heartbeat(
         {
             "service": "orders",
             "instanceId": "i1",
-            "descriptorHash": "h-ord",
+            "registrationHash": "h-ord",
             "health": {"isHealthy": True},
         }
     )

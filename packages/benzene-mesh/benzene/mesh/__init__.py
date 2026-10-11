@@ -1,13 +1,14 @@
 """``benzene.mesh`` — make a Python Benzene service show up in the mesh (mesh.md).
 
-The mesh module turns a service into a first-class citizen of a Benzene mesh: it **describes itself**
-(the :class:`ServiceDescriptor`, derived from the handler registry, with per-topic request/response
-schemas and a content hash), **answers the reserved ``benzene:mesh`` topic** with that descriptor
-(:func:`mesh_interception`), **traces every invocation** (:func:`trace_middleware` → one
-:class:`TraceEvent` each), and **reports into a collector** over an outbound client
-(:class:`MeshFeedSender`). The pull side — :class:`MeshPoller` and :func:`probe_cloud_service` —
-reads the Contract Document a service's ``/benzene/spec`` answers with (:mod:`benzene.mesh.specdoc`), so
-a Python mesh grades and ingests a .NET, Go, or TypeScript service exactly as it does one of its own.
+The mesh module turns a service into a first-class citizen of a Benzene mesh. A service describes itself
+once — the :class:`~benzene.core.ContractDocument` its composition root derives and ``benzene:spec``
+serves — and **registers that same document** with a collector (:func:`registration_document`,
+mesh.md §2). It **traces every invocation** (:func:`trace_middleware` → one :class:`TraceEvent` each)
+and **reports into a collector** over an outbound client (:class:`MeshFeedSender`: registration,
+heartbeats, traces, issues). The receiving side is :class:`MeshCollector`; the pull side —
+:class:`MeshPoller` and :func:`probe_cloud_service` — reads the Contract Document a service's
+``/benzene/spec`` answers with (:mod:`benzene.mesh.specdoc`), so a Python mesh grades and ingests a
+.NET, Go, or TypeScript service exactly as it does one of its own.
 
 Everything here is optional and additive — install it to join the mesh, leave it out and the rest of
 your service is unchanged. Depends only on ``benzene-core``; the S3 artifact publisher
@@ -36,12 +37,6 @@ from .collector import (
     MeshCollector,
     collector_registry,
 )
-from .descriptor import (
-    MESH_TOPIC,
-    ServiceDescriptor,
-    ServiceInfo,
-    TopicDescriptor,
-)
 from .feeds import (
     HEARTBEAT_TOPIC,
     ISSUES_TOPIC,
@@ -49,9 +44,9 @@ from .feeds import (
     TRACES_TOPIC,
     Heartbeat,
     MeshFeedSender,
+    registration_document,
 )
 from .inbox import S3TraceInbox
-from .interception import DescriptorSource, mesh_interception
 from .issues import (
     CLASSIFICATIONS,
     Issue,
@@ -86,16 +81,19 @@ from .profile import (
     REQUIREMENT_IDS,
     CloudServiceProfileReport,
     RequirementCheck,
+    declare_cloud_service_profile,
     evaluate_cloud_service_profile,
 )
 from .s3_artifacts import S3ArtifactStore, write_artifacts_to_s3
-from .schema import Schema, json_schema
 from .specdoc import (
     is_contract_document,
-    spec_produces,
+    known_members,
+    resolve_schema,
+    spec_entries,
     spec_registration_hash,
     spec_service,
-    spec_topics,
+    spec_service_version,
+    spec_topic_ids,
 )
 from .store import (
     CollectorStore,
@@ -132,7 +130,6 @@ __all__ = [
     "CollectorStore",
     "CloudServiceProbeReport",
     "CloudServiceProfileReport",
-    "DescriptorSource",
     "DuplicateOutboundRegistrationError",
     "EventDeclaration",
     "SendDeclaration",
@@ -141,6 +138,7 @@ __all__ = [
     "RequirementCheck",
     "RequirementProbe",
     "Verdict",
+    "declare_cloud_service_profile",
     "evaluate_cloud_service_profile",
     "probe_cloud_service",
     "HEARTBEAT_TOPIC",
@@ -151,7 +149,6 @@ __all__ = [
     "IssueAggregator",
     "IssueBatch",
     "JsonFileCollectorStore",
-    "MESH_TOPIC",
     "MeshCollector",
     "MeshFeedSender",
     "NullCollectorStore",
@@ -167,26 +164,24 @@ __all__ = [
     "S3CollectorStore",
     "S3TraceInbox",
     "collector_registry",
-    "Schema",
-    "ServiceDescriptor",
-    "ServiceInfo",
     "TRACES_TOPIC",
-    "TopicDescriptor",
     "TraceEvent",
     "TraceExporter",
     "TracePropagatingMessageSender",
     "build_artifacts",
     "is_contract_document",
+    "known_members",
+    "registration_document",
+    "resolve_schema",
+    "spec_entries",
+    "spec_service_version",
+    "spec_topic_ids",
     "spec_registration_hash",
-    "spec_produces",
     "spec_service",
-    "spec_topics",
     "classify",
     "current_traceparent",
     "with_trace_propagation",
     "issue_fingerprint",
-    "json_schema",
-    "mesh_interception",
     "new_span_id",
     "new_trace_id",
     "parse_traceparent",
