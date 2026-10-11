@@ -185,14 +185,11 @@ def successful_from(envelope: Mapping[str, Any]) -> bool:
     success read back as a failure by every peer: a Lambda-to-Lambda invoke returning a failed
     Result, SQS nacking the message, Pub/Sub redelivering it forever, gRPC answering ``Internal``.
 
-    The fallback to the status class covers a sender that predates the member — an older peer, or a
-    port that has not adopted it yet — where deriving from the status is the best available answer.
-    An explicit ``false`` is honoured as a failure, so ``is not None`` rather than truthiness.
+    An envelope without the member is malformed, and section 1.2 says a receiver treats it as
+    unsuccessful — never classified from ``statusCode`` text, which is exactly the reading this
+    function exists to avoid.
     """
-    stated = envelope.get("isSuccessful")
-    if stated is None:
-        return is_successful(str(envelope.get("statusCode") or ""))
-    return bool(stated)
+    return envelope.get("isSuccessful") is True
 
 
 def decode_response(response: Mapping[str, Any]) -> Result[Any]:

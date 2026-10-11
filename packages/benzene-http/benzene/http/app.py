@@ -41,8 +41,9 @@ from benzene.core import (
     redelivers,
     resolve_version,
     select_spec_document,
+    successful_from,
 )
-from benzene.results import Result, Status, is_successful
+from benzene.results import Result, Status
 
 from .routing import HttpRouter
 from .standard import NATIVE_SPEC_TYPE, StandardPaths
@@ -344,13 +345,9 @@ def _to_http_response(envelope: Mapping[str, Any]) -> HttpResponse:
     peer, or an empty body) is passed through untouched rather than guessed at.
     """
     status = envelope.get("statusCode") or ""
-    # isSuccessful is authoritative and MUST be preferred over anything derived from the status
-    # text (section 1.2). It is what distinguishes a health report answered with
-    # service-unavailable - a 503 for the probe, but a body that is the report and not a problem
-    # document - from an ordinary failure at the same status. Falling back to the status class
-    # covers a sender that predates the member.
-    stated = envelope.get("isSuccessful")
-    successful = is_successful(status) if stated is None else bool(stated)
+    # isSuccessful is authoritative (section 1.2): never derived from the status text, and an
+    # envelope without it is malformed and read as unsuccessful.
+    successful = successful_from(envelope)
     http_status = to_http(status, successful)
     headers = dict(envelope.get("headers") or {})
     body = envelope.get("body") or ""

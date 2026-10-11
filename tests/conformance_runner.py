@@ -103,12 +103,7 @@ UNRUN_FIXTURES: dict[str, str] = {
 #: Bindings this port ships that ``transport-metadata-cases.json``'s ``settlementDefaults`` does not
 #: name yet, each with the reason. The fixture README says such a binding "is added here before the
 #: port claims it" - so it is reported, in writing, rather than the fixture edited locally.
-UNNAMED_SETTLEMENT_BINDINGS: dict[str, str] = {
-    "blob-storage": (
-        "the Azure Functions Blob Storage trigger (AzureFunctionsApp.handle_blob): one-shot, a "
-        "failure raises for the host's retry - shipped by this port, not yet listed by the fixture"
-    ),
-}
+UNNAMED_SETTLEMENT_BINDINGS: dict[str, str] = {}
 
 #: Every host class's declared settlement constants, the source of truth the fixture is checked
 #: against. One-way hosts settle (tests/test_settlement.py keeps these true); request/response ones

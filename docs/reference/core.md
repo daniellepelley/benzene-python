@@ -178,8 +178,8 @@ result = decode_response(envelope)
 
 The response envelope carries `isSuccessful`, and wire-contracts §1.2 makes it **authoritative**: a
 receiver MUST prefer it over anything it derives from `statusCode`. `successful_from(envelope)` is
-that rule — it reads the stated member, and falls back to the status class only for a sender that
-predates it (an older peer, or a port that has not adopted it).
+that rule — it reads the stated member, and an envelope without it is malformed and read as
+unsuccessful, never classified from the status text.
 
 This matters for an application-defined status, which is outside the shared vocabulary and so means
 nothing to a receiver classifying by string alone. Every transport binding here reads it, which is

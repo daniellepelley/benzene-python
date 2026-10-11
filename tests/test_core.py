@@ -306,10 +306,10 @@ def test_result_set_refuses_to_contradict_the_vocabulary() -> None:
     assert not Result.set("card-declined", None, successful=False).is_successful
 
 
-def test_decode_response_falls_back_to_the_status_class_for_a_peer_without_is_successful() -> None:
-    # An older peer, or a port that has not adopted the member: deriving from the status is then
-    # the best available answer, and the pre-existing behaviour is unchanged.
-    assert decode_response({"statusCode": Status.CREATED, "body": '{"id": "o-1"}'}).is_successful
+def test_decode_response_reads_an_envelope_without_is_successful_as_unsuccessful() -> None:
+    # wire-contracts §1.2: the member is required, and a receiver never classifies from statusCode
+    # text - so an envelope missing it is malformed and read as a failure, even under a success status.
+    assert not decode_response({"statusCode": Status.CREATED, "body": '{"id": "o-1"}'}).is_successful
     assert not decode_response({"statusCode": Status.CONFLICT, "body": ""}).is_successful
 
 
