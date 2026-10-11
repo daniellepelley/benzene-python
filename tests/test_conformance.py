@@ -16,6 +16,7 @@ from .canonical_handlers import register_all_canonical
 from .conformance_runner import (
     CONFORMANCE_DIR,
     envelope_case_failures,
+    run_client_error_fidelity,
     run_contract_document_cases,
     run_contract_hash_cases,
     run_envelope_cases,
@@ -43,6 +44,14 @@ def test_problem_details_cases_conform() -> None:
     port ships (httpRules). The fixture was vendored here with nothing reading it.
     """
     assert run_problem_details() == []
+
+
+def test_client_error_fidelity_conforms() -> None:
+    """problem-details-cases.json's envelopeCases, read back through every outbound client that can
+    receive a problem document (core-concepts.md §12): the HTTP client over a route-mapped
+    problem+json response, the in-process sender and the Lambda invoke sender each rebuild the
+    Result's errors with message, field and code intact, in order."""
+    assert run_client_error_fidelity() == []
 
 
 def test_grpc_status_mapping_conforms() -> None:

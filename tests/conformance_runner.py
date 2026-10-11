@@ -19,7 +19,7 @@ from dataclasses import make_dataclass
 from pathlib import Path
 from typing import Any
 
-from benzene.aws import AwsLambdaApp, SqsConsumerApp
+from benzene.aws import AwsLambdaApp, LambdaMessageSender, SqsConsumerApp
 from benzene.aws.events import EMBEDDED_HEADERS_KEY
 from benzene.azure import AzureFunctionsApp
 from benzene.codegen_client import contract_hash as codegen_contract_hash
@@ -40,10 +40,13 @@ from benzene.core import (
     ContractInfo,
     HealthCheckResult,
     HealthChecks,
+    InProcessMessageSender,
+    MessageSender,
     MetadataKeys,
     MiddlewarePipeline,
     NoPayload,
     OutboundRegistry,
+    Pipelines,
     Registry,
     SettlementDefaults,
     application_from,
@@ -57,7 +60,15 @@ from benzene.core.envelope import encode_response
 from benzene.gcp import GcpFunctionsApp
 from benzene.grpc import SETTLEMENT_DEFAULTS as GRPC_SETTLEMENT_DEFAULTS
 from benzene.grpc.status import BENZENE_STATUS_TRAILER, from_grpc, to_grpc
-from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths, from_http, to_http
+from benzene.http import (
+    BenzeneHttpApp,
+    HttpMessageSender,
+    HttpReply,
+    HttpRouter,
+    StandardPaths,
+    from_http,
+    to_http,
+)
 from benzene.http.app import _to_http_response, http_problem_response
 from benzene.kafka import KafkaConsumerApp
 from benzene.mesh import (
@@ -1145,6 +1156,150 @@ def _run_health_endpoint(rules: dict) -> list[str]:
     return failures
 
 
+# --- client error fidelity (core-concepts.md §12) ------------------------------------------------
+#
+# envelopeCases pin what a SERVING side puts in a problem document. The same cases, run through each
+# outbound client that can receive one, pin the other half: a client rebuilds the Result's `errors`
+# from that document with `field` and `code` intact (wire-contracts.md §1.3). Every client below is
+# aimed at a host built from the canonical handlers, so the problem document it decodes is the one
+# this port's own serving side wrote - nothing is hand-built.
+#
+# The rest of this port's outbound clients are listed here so the omission is a claim, not an
+# accident: the SNS, SQS, EventBridge, Kinesis, Service Bus, Event Hub, Queue Storage, Event Grid,
+# Pub/Sub, Kafka and RabbitMQ senders, a LambdaMessageSender in "Event" mode and
+# InProcessFanOutSender are one-way - no reply, so no problem document. GrpcMessageSender receives
+# the gRPC error model of wire-contracts.md §4.2, not a problem document (field survives as a
+# BadRequest FieldViolation; §4.2 gives code no slot), tested in tests/test_grpc_transport.py.
+
+
+class _InvokePayload:
+    """A Lambda invoke response's ``Payload`` stream."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+
+class _LoopbackLambda:
+    """A boto3 ``lambda`` client whose ``invoke`` is answered by an in-memory :class:`AwsLambdaApp`
+    - the same ``handle`` a deployed function runs, reached with the invoke Payload verbatim."""
+
+    def __init__(self, host: AwsLambdaApp) -> None:
+        self._host = host
+
+    def invoke(self, **kwargs: Any) -> dict[str, Any]:
+        response = self._host.handle(json.loads(kwargs["Payload"]))
+        return {"StatusCode": 200, "Payload": _InvokePayload(json.dumps(response).encode("utf-8"))}
+
+
+def _route_mapped_http_sender(topics: set[str], content_types: list[str]) -> MessageSender:
+    """An :class:`HttpMessageSender` against a route-mapped :class:`BenzeneHttpApp` - one route per
+    topic - so a failure arrives as the binding's own ``application/problem+json`` response.
+
+    ``content_types`` records each response's content type, so the run can show the failure really
+    did take the problem+json path rather than passing for some other reason.
+    """
+    router = HttpRouter()
+
+    async def unreachable(_request: Any) -> Result:  # the application's registry answers instead
+        raise AssertionError("the route's own handler is never invoked")
+
+    for topic in sorted(topics):
+        router.register("POST", f"/{topic}", topic, unreachable)
+    inbound = BenzeneHttpApp(router, application=_app())
+
+    async def transport(url: str, headers: dict[str, str], body: str) -> HttpReply:
+        response = await inbound.handle("POST", url, headers=headers, body=body)
+        content_types.append(response.headers.get("content-type", ""))
+        return HttpReply(response.status_code, response.body)
+
+    return HttpMessageSender(lambda topic: f"/{topic}", transport=transport)
+
+
+def client_result_failures(result: Result, expected: dict, where: str) -> list[str]:
+    """Hold a client's decoded :class:`Result` to an envelope case's expectation: the status, the
+    success signal and - where the case states them - the errors (message, field and code, in
+    order) or the set of ``errors[].field`` values."""
+    failures: list[str] = []
+    if result.status != expected["statusCode"]:
+        failures.append(f"{where}: status {result.status!r}, expected {expected['statusCode']!r}")
+    if "isSuccessful" in expected and result.is_successful != expected["isSuccessful"]:
+        failures.append(
+            f"{where}: is_successful {result.is_successful}, expected {expected['isSuccessful']}"
+        )
+    want_errors = expected.get("body", {}).get("errors")
+    got_errors = [error.to_payload() for error in result.errors]
+    if want_errors is not None and got_errors != want_errors:
+        failures.append(
+            f"{where}: errors {got_errors}, expected {want_errors} "
+            "(message, field and code intact, in order)"
+        )
+    if "errorFields" in expected:
+        fields = [error.field for error in result.errors]
+        if None in fields or set(fields) != set(expected["errorFields"]):
+            failures.append(
+                f"{where}: error fields {sorted(map(str, fields))}, "
+                f"expected {sorted(expected['errorFields'])}"
+            )
+    return failures
+
+
+def run_client_error_fidelity() -> list[str]:
+    """problem-details-cases.json's ``envelopeCases`` through every outbound client that can receive
+    a problem document (core-concepts.md §12, error fidelity - a Core MUST).
+
+    - ``HttpMessageSender`` against a route-mapped ``BenzeneHttpApp``: the problem arrives as the
+      ``application/problem+json`` body of a native HTTP response (this port ships no HTTP client
+      for the ``/benzene/invoke`` envelope endpoint);
+    - ``InProcessMessageSender``: the failure envelope's body, no wire;
+    - ``LambdaMessageSender`` (``RequestResponse``) against ``AwsLambdaApp``'s direct-invoke source:
+      the failure envelope's body.
+    """
+    failures: list[str] = []
+    data = _load("problem-details-cases.json")
+    cases = [
+        case
+        for case in _cases(data, "envelopeCases", "problem-details.clientFidelity", failures)
+        if not _requirement_unmet(case, "problem-details.clientFidelity", failures)
+    ]
+    content_types: list[str] = []
+    clients: list[tuple[str, MessageSender]] = [
+        (
+            "HttpMessageSender (route-mapped problem+json)",
+            _route_mapped_http_sender({case["request"]["topic"] for case in cases}, content_types),
+        ),
+        (
+            "InProcessMessageSender",
+            InProcessMessageSender(Pipelines().add("conformance", _app()), "conformance"),
+        ),
+        (
+            "LambdaMessageSender",
+            LambdaMessageSender(
+                "conformance", client=_LoopbackLambda(AwsLambdaApp(application=_app()))
+            ),
+        ),
+    ]
+    for client_name, sender in clients:
+        for case in cases:
+            request, expected = case["request"], case["expected"]
+            where = f"problem-details.clientFidelity[{client_name} {case['name']}]"
+            content_types.clear()
+            result = asyncio.run(
+                sender.send_message(request["topic"], request["body"], request["headers"])
+            )
+            failures += client_result_failures(result, expected, where)
+            # The HTTP run proves the problem+json path only if that is what the client was handed.
+            problem_json = ["application/problem+json"]
+            failed = expected.get("isSuccessful") is False
+            if content_types and failed and content_types != problem_json:
+                failures.append(
+                    f"{where}: response content-type {content_types}, expected {problem_json}"
+                )
+    return failures
+
+
 def run_grpc_status_mapping() -> list[str]:
     """grpc-status-mapping.json: the Benzene ↔ gRPC code mapping (wire-contracts §4.2).
 
@@ -1253,6 +1408,7 @@ def run_all() -> list[str]:
         + run_http_mapping()
         + run_envelope_cases()
         + run_problem_details()
+        + run_client_error_fidelity()
         + run_transport_metadata()
         + run_grpc_status_mapping()
         + run_mesh_trace()
@@ -1272,7 +1428,8 @@ if __name__ == "__main__":
         sys.exit(1)
     print(
         "CONFORMANCE PASSED — status vocabulary, HTTP mapping, problem details (+ envelope endpoint "
-        "and health routes), envelope (+ version selection), transport metadata (topic sources, "
+        "and health routes, + error fidelity through every reply-receiving client), envelope "
+        "(+ version selection), transport metadata (topic sources, "
         "metadata and override cases through every shipped binding's hosts and clients, + settlement "
         "defaults), gRPC status mapping, mesh (trace + collector + issues), "
         "contract-document (derivation + naming + benzene:spec + parse/scope/closure), and "

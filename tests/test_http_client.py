@@ -74,6 +74,34 @@ def test_failure_response_falls_back_to_detail_as_one_opaque_message() -> None:
     assert result.messages == ("one, two",)
 
 
+@pytest.mark.parametrize(
+    "reply,status,messages",
+    [
+        # A gateway's HTML error page, an empty body, a JSON body that is not a problem document:
+        # wire-contracts 4.1 says a failure body never fails the call - the reverse HTTP table
+        # still gives the status, with no errors to rebuild.
+        (HttpReply(502, "<html><body>Bad Gateway</body></html>"), "service-unavailable", ()),
+        (HttpReply(404, ""), "not-found", ()),
+        (HttpReply(500, '{"message": "Internal server error"}'), "unexpected-error", ()),
+        (HttpReply(409, '["not", "an", "object"]'), "conflict", ()),
+        # An application/json failure body carrying benzeneStatus is read as a problem document
+        # (the MAY of 4.1) - this client reads any JSON object's errors/detail, whatever its label.
+        (
+            HttpReply(409, '{"benzeneStatus": "conflict", "detail": "already exists"}'),
+            "conflict",
+            ("already exists",),
+        ),
+    ],
+)
+def test_a_failure_body_that_is_not_a_problem_document_never_fails_the_call(
+    reply, status, messages
+) -> None:
+    result = asyncio.run(_sender(reply).send_message("orders:place", {}))
+    assert result.status == status
+    assert not result.is_successful
+    assert result.messages == messages
+
+
 def test_it_forwards_headers_and_the_topic() -> None:
     captured: dict = {}
     asyncio.run(
