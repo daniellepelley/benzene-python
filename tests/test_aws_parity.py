@@ -91,7 +91,7 @@ def test_eventbridge_decoder_lifts_embedded_headers_and_they_win_over_envelope_m
         "account": "123456789012",
         "region": "eu-west-2",
         "time": "2024-01-01T00:00:00Z",
-        "detail": {"id": "o1", "_benzeneHeaders": {"traceparent": "tp", "eventbridge-source": "override"}},
+        "detail": {"id": "o1", "benzene-headers": {"traceparent": "tp", "eventbridge-source": "override"}},
     }
     envelope = eventbridge_envelope(event)
     assert envelope["headers"] == {
@@ -106,7 +106,7 @@ def test_eventbridge_decoder_lifts_embedded_headers_and_they_win_over_envelope_m
     # The reserved key stays in the body verbatim — a request mapper's deserialization ignores it.
     assert json.loads(envelope["body"]) == {
         "id": "o1",
-        "_benzeneHeaders": {"traceparent": "tp", "eventbridge-source": "override"},
+        "benzene-headers": {"traceparent": "tp", "eventbridge-source": "override"},
     }
 
 
@@ -297,7 +297,7 @@ def test_eventbridge_sender_leaves_the_body_verbatim_and_embeds_headers_under_th
     assert entry["DetailType"] == "orders:created"  # topic round-trips as the DetailType
     assert json.loads(entry["Detail"]) == {
         "id": "1",
-        "_benzeneHeaders": {"traceparent": "tp"},
+        "benzene-headers": {"traceparent": "tp"},
     }
 
 
@@ -331,7 +331,7 @@ def test_kinesis_sender_embeds_the_envelope_and_keys_the_shard() -> None:
     assert call["PartitionKey"] == "cust-9"  # taken from the configured header
     assert json.loads(call["Data"]) == {
         "id": "1",
-        "_benzeneHeaders": {"partition-key": "cust-9"},
+        "benzene-headers": {"partition-key": "cust-9"},
     }
 
 

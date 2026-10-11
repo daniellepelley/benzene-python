@@ -6,7 +6,7 @@ Three carrying conventions, matching what each service exposes on the wire:
 - **SNS / SQS** have a native message-attribute channel, so the Benzene topic and headers ride there
   (the ``topic`` attribute plus one attribute per header) — the same shape the inbound decoders read.
 - **EventBridge / Kinesis** have *no* metadata channel, so the sender leaves the domain payload as
-  the wire body and embeds headers *inside* it, under the reserved ``_benzeneHeaders`` key (mirrors
+  the wire body and embeds headers *inside* it, under the reserved ``benzene-headers`` key (mirrors
   .NET's ``Benzene.Clients.Aws.EventBridge`` — see ``docs/specification/transport-bindings.md``
   "EventBridge" for the cross-language contract). The topic travels out-of-band (EventBridge's
   ``DetailType``; Kinesis has no equivalent, so its topic is a caller-supplied convention, not part
@@ -35,7 +35,7 @@ from typing import Any
 from benzene.core import decode_response, encode_body
 from benzene.results import Result, Status
 
-from .events import TOPIC_ATTRIBUTE
+from .events import EMBEDDED_HEADERS_KEY, TOPIC_ATTRIBUTE
 
 
 def _string_attributes(topic: str, headers: dict[str, str] | None) -> dict[str, dict[str, str]]:
@@ -115,13 +115,9 @@ class SqsMessageSender:
         return Result.ok()
 
 
-EMBEDDED_HEADERS_KEY = "_benzeneHeaders"
-"""The reserved key inside a headerless-transport body that carries embedded Benzene wire headers.
-
-Mirrors .NET's ``OutboundEventBridgeContextConverter.EmbeddedHeadersKey`` /
-``EventBridgeMessageHeadersGetter.EmbeddedHeadersKey`` (wire-contracts §2, transport-bindings.md
-"EventBridge"). The inbound ``eventbridge_envelope`` decoder (``events.py``) lifts it back out.
-"""
+# The reserved key inside a headerless-transport body that carries embedded Benzene wire headers,
+# ``benzene-headers`` (wire-contracts §2, transport-bindings.md "EventBridge") - one constant, shared
+# with the inbound ``eventbridge_envelope`` decoder (``events.py``), which reads it back.
 
 
 def _embed_headers(

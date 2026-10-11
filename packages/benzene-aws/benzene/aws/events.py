@@ -19,7 +19,7 @@ import base64
 from typing import Any
 from urllib.parse import urlencode
 
-from benzene.core import encode_body, read_message_metadata
+from benzene.core import DEFAULT_HEADERS_KEY, encode_body, read_message_metadata
 
 TOPIC_ATTRIBUTE = "topic"
 
@@ -125,8 +125,9 @@ def s3_record_envelope(record: dict[str, Any], topic: str = DEFAULT_S3_TOPIC) ->
     return {"topic": topic, "headers": {}, "body": encode_body(body)}
 
 
-#: Must match ``benzene.aws.clients.EMBEDDED_HEADERS_KEY`` — the outbound sender's embedding key.
-EMBEDDED_HEADERS_KEY = "_benzeneHeaders"
+#: The reserved object inside ``detail`` carrying the Benzene wire headers (wire-contracts §2):
+#: ``benzene-headers``. The outbound :class:`~benzene.aws.EventBridgeMessageSender` embeds under it.
+EMBEDDED_HEADERS_KEY = DEFAULT_HEADERS_KEY
 
 
 def eventbridge_envelope(
@@ -136,11 +137,11 @@ def eventbridge_envelope(
 
     Unlike the batch sources an EventBridge delivery is a *single* event (no ``Records`` array): the
     Benzene topic is the ``detail-type`` (falling back to ``default_topic`` when absent) and the body
-    is the ``detail`` object, serialized through the shared wire policy — the reserved
-    ``_benzeneHeaders`` key, when present, is left in the body verbatim (a request mapper's
-    deserialization simply ignores it, same as .NET). EventBridge has no native per-message
-    attributes, so headers are the ``eventbridge-``-prefixed envelope metadata plus any Benzene wire
-    headers lifted from ``_benzeneHeaders`` — embedded headers win on key collision.
+    is the ``detail`` object unchanged, serialized through the shared wire policy — the reserved
+    ``benzene-headers`` member included, so a handler's request type must tolerate it (a dataclass
+    request mapper ignores it; wire-contracts §2). EventBridge has no native per-message attributes,
+    so headers are the ``eventbridge-``-prefixed envelope metadata plus the Benzene wire headers read
+    from ``benzene-headers`` — embedded headers win on key collision.
     """
     detail = event.get("detail")
     topic = event.get("detail-type") or default_topic

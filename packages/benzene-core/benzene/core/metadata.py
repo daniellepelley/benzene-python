@@ -24,14 +24,21 @@ from .envelope import VERSION_HEADER
 #: The default reserved metadata key names (wire-contracts §2). The interop baseline.
 DEFAULT_TOPIC_KEY = "topic"
 DEFAULT_VERSION_KEY = VERSION_HEADER  # "benzene-version"
+#: The object inside an EventBridge ``detail`` that carries the wire headers on a transport with no
+#: per-message metadata (wire-contracts §2). It names a header, so it is spelled like one.
+DEFAULT_HEADERS_KEY = "benzene-headers"
 
 
 @dataclass(frozen=True)
 class MetadataKeys:
-    """The reserved metadata key names — override to opt a service out of the interop defaults."""
+    """The reserved metadata key names — override to opt a service out of the interop defaults.
+
+    ``headers`` is only read by a transport that embeds the headers in the payload (EventBridge).
+    """
 
     topic: str = DEFAULT_TOPIC_KEY
     version: str = DEFAULT_VERSION_KEY
+    headers: str = DEFAULT_HEADERS_KEY
 
 
 DEFAULT_METADATA_KEYS = MetadataKeys()

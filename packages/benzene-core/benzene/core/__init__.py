@@ -70,6 +70,7 @@ from .inprocess import (
 )
 from .mapping import encode_body, to_camel, to_jsonable, to_request
 from .metadata import (
+    DEFAULT_HEADERS_KEY,
     DEFAULT_METADATA_KEYS,
     DEFAULT_TOPIC_KEY,
     DEFAULT_VERSION_KEY,
@@ -152,6 +153,7 @@ __all__ = [
     "Lifetime",
     "MessageHandlingError",
     "MessageSender",
+    "DEFAULT_HEADERS_KEY",
     "DEFAULT_METADATA_KEYS",
     "DEFAULT_TOPIC_KEY",
     "DEFAULT_VERSION_KEY",
