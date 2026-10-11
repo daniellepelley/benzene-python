@@ -14,7 +14,9 @@ Kafka is a queue/stream transport, so the binding follows the same shape as the 
 bindings (transport-bindings §"Kafka"):
 
 - **Topic** — resolved from the record's `topic` header (the reserved metadata key; the cross-port
-  convention of wire-contracts §2), not the physical Kafka topic name.
+  convention of wire-contracts §2), falling back to the Kafka topic the record was consumed from when
+  the header is absent, so a producer that writes no header still routes (`topicSources` in
+  `transport-metadata-cases.json`); the header wins whenever present.
 - **Headers** — the record's other Kafka headers, UTF-8 decoded, become the Benzene headers.
 - **Body** — the record value, decoded as the UTF-8 JSON body.
 - **Scope** — one record is one pipeline invocation and one DI scope (never per batch).

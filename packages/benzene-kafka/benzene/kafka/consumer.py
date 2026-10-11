@@ -1,7 +1,8 @@
 """Kafka inbound binding — a self-hosted consumer (transport-bindings §"Kafka").
 
 A Kafka record carries the Benzene **topic** in its ``topic`` header (the cross-port convention shared
-with SQS/SNS/Pub/Sub/Service Bus, wire-contracts §2); the remaining Kafka headers are the Benzene
+with SQS/SNS/Pub/Sub/Service Bus, wire-contracts §2) — or, when no such header is present, the Kafka
+topic it was consumed from, so a producer that writes no header still routes; the remaining Kafka headers are the Benzene
 headers (UTF-8 decoded), and the record's value is the JSON body. There is **no response channel** —
 one record is one pipeline invocation and one DI scope, and the outcome **settles** it
 (transport-bindings §1, obligation 8).
@@ -74,10 +75,15 @@ def decode_kafka_message(
     """Decode a Kafka record into a Benzene envelope ``{topic, headers, body}``.
 
     The Benzene topic is resolved out of the ``topic`` header (the reserved metadata key,
-    ``keys.topic``); every other
-    header becomes a Benzene header. The record value (bytes) is decoded as the UTF-8 JSON body.
+    ``keys.topic``), falling back to the Kafka topic the record was consumed from
+    (``message.topic()``) when the header is absent, so a producer that writes no header still
+    routes (``topicSources`` in ``transport-metadata-cases.json``); the header wins whenever present.
+    Every other header becomes a Benzene header. The record value (bytes) is decoded as the UTF-8 JSON
+    body.
     """
     topic, headers = read_message_metadata(_decode_headers(message.headers()), keys)
+    if not topic:
+        topic = _consumed_topic(message)
     raw = message.value()
     if raw is None:
         body = ""
@@ -86,6 +92,16 @@ def decode_kafka_message(
     else:
         body = str(raw)
     return {"topic": topic, "headers": headers, "body": body}
+
+
+def _consumed_topic(message: Any) -> str:
+    """The Kafka topic the record was consumed from (``confluent_kafka.Message.topic()``), or ``""``."""
+    topic = getattr(message, "topic", None)
+    if callable(topic):
+        topic = topic()
+    if isinstance(topic, (bytes, bytearray)):
+        return bytes(topic).decode("utf-8", "replace")
+    return "" if topic is None else str(topic)
 
 
 class KafkaConsumerApp:

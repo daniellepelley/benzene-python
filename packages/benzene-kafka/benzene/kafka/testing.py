@@ -26,11 +26,16 @@ if TYPE_CHECKING:
 
 @dataclass
 class FakeKafkaMessage:
-    """A stand-in for a ``confluent_kafka.Message``: ``headers()`` / ``value()`` / ``error()``."""
+    """A stand-in for a ``confluent_kafka.Message``: ``headers()`` / ``value()`` / ``error()`` /
+    ``topic()`` (the Kafka topic it was consumed from — the fallback when no ``topic`` header)."""
 
     _headers: list[tuple[str, bytes]]
     _value: bytes
     _error: Any = None
+    _topic: str = ""
+
+    def topic(self) -> str:
+        return self._topic
 
     def headers(self) -> list[tuple[str, bytes]]:
         return self._headers
@@ -43,12 +48,21 @@ class FakeKafkaMessage:
 
 
 class KafkaMessageBuilder:
-    """Builds a :class:`FakeKafkaMessage` for a Benzene ``topic`` + body, headers as Kafka headers."""
+    """Builds a :class:`FakeKafkaMessage` for a Benzene ``topic`` + body, headers as Kafka headers.
+
+    An empty ``topic`` writes no ``topic`` header — a producer that writes none, whose record routes
+    on the Kafka topic it was consumed from (:meth:`with_kafka_topic`).
+    """
 
     def __init__(self, topic: str) -> None:
         self._topic = topic
+        self._kafka_topic = ""
         self._headers: dict[str, str] = {}
         self._body: str = ""
+
+    def with_kafka_topic(self, kafka_topic: str) -> KafkaMessageBuilder:
+        self._kafka_topic = kafka_topic
+        return self
 
     def with_header(self, key: str, value: str) -> KafkaMessageBuilder:
         self._headers[key] = value
@@ -62,8 +76,11 @@ class KafkaMessageBuilder:
         headers: list[tuple[str, bytes]] = [
             (str(k), str(v).encode("utf-8")) for k, v in self._headers.items()
         ]
-        headers.append((TOPIC_HEADER, self._topic.encode("utf-8")))
-        return FakeKafkaMessage(_headers=headers, _value=self._body.encode("utf-8"))
+        if self._topic:
+            headers.append((TOPIC_HEADER, self._topic.encode("utf-8")))
+        return FakeKafkaMessage(
+            _headers=headers, _value=self._body.encode("utf-8"), _topic=self._kafka_topic
+        )
 
 
 @dataclass

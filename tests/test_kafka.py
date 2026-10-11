@@ -62,6 +62,28 @@ def test_decode_tolerates_absent_headers_and_value() -> None:
     assert envelope == {"topic": "", "headers": {}, "body": ""}
 
 
+def test_decode_falls_back_to_the_consumed_kafka_topic_when_no_topic_header_is_present() -> None:
+    # topicSources (Benzene 0b53dddb): a producer that writes no topic header routes on the Kafka
+    # topic the record was consumed from.
+    message = (
+        KafkaMessageBuilder("").with_kafka_topic("orders:place").with_header("tenant", "acme").build()
+    )
+    envelope = decode_kafka_message(message)
+    assert envelope["topic"] == "orders:place"
+    assert envelope["headers"] == {"tenant": "acme"}
+
+
+def test_the_topic_header_wins_over_the_consumed_kafka_topic() -> None:
+    message = KafkaMessageBuilder("orders:place").with_kafka_topic("orders-stream").build()
+    assert decode_kafka_message(message)["topic"] == "orders:place"
+
+
+def test_a_headerless_record_runs_its_kafka_topics_handler() -> None:
+    message = KafkaMessageBuilder("").with_kafka_topic("orders:place").with_body({"sku": "Z"}).build()
+    result = asyncio.run(KafkaConsumerApp(_app()).handle_message(message))
+    assert result.status == Status.CREATED and result.payload == {"sku": "Z"}
+
+
 # --- consumer dispatch + loop ------------------------------------------------------------------
 
 
