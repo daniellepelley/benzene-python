@@ -22,7 +22,7 @@ from benzene.core import (
     application_from,
     health_interception,
 )
-from benzene.http import StandardPaths
+from benzene.http import HttpRouter, StandardPaths
 from benzene.mesh import (
     MESH_REQUIREMENT_IDS,
     PROFILE_NAME,
@@ -104,12 +104,36 @@ def test_mesh_ids_never_reach_profile_missing() -> None:
 def test_message_only_service_misses_the_http_surfaces() -> None:
     registry = Registry().register("orders:place", _place, request_type=Order)
     report = evaluate_cloud_service_profile(AppDefinition(registry=registry))
-    # Nothing intercepts benzene:healthcheck (R3), there are no standard paths (R7), and with no
-    # ContractInfo benzene:spec has nothing to answer with (R5). R1 (hostable) + R2 (a topic) + R4
-    # (envelope-invocable) still hold.
-    assert report.missing == ["R3", "R5", "R7"]
-    assert set(report.missing).isdisjoint({"R1", "R2", "R4"})
+    # Nothing intercepts benzene:healthcheck (R3), and with no ContractInfo benzene:spec has nothing to
+    # answer with (R5). R1 (hostable) + R2 (a topic) + R4 (envelope-invocable) hold, and so does R7:
+    # with no HTTP surface there are no well-known HTTP surfaces to place.
+    assert report.missing == ["R3", "R5"]
+    assert set(report.missing).isdisjoint({"R1", "R2", "R4", "R7"})
+    assert "no HTTP surface" in report.reason("R7")
     assert "benzene:healthcheck" in report.reason("R3")
+
+
+def test_a_fully_wired_message_only_service_is_conformant() -> None:
+    # No HTTP surface at all: benzene:healthcheck (R3) and benzene:spec (R5) in the pipeline are the
+    # whole of it, and R7 holds trivially - there is no well-known HTTP surface to place.
+    registry = Registry().register("orders:place", _place, request_type=Order)
+    definition = AppDefinition(
+        registry=registry,
+        middleware=[health_interception(HealthChecks().add("core", lambda: True))],
+        contract=ContractInfo("orders"),
+    )
+    report = evaluate_cloud_service_profile(definition)
+    assert report.missing == []
+    assert report.to_profile() == {"name": PROFILE_NAME}
+
+
+def test_an_http_service_without_standard_paths_still_misses_r7() -> None:
+    # A router is an HTTP surface: its well-known surfaces are absent, not trivially placed.
+    router = HttpRouter().register("POST", "/orders", "orders:place", _place, request_type=Order)
+    definition = AppDefinition(router=router)
+    report = evaluate_cloud_service_profile(definition)
+    assert "R7" in report.missing
+    assert "no standard_paths" in report.reason("R7")
 
 
 def test_r3_is_the_health_topic_for_a_message_only_service() -> None:
@@ -225,8 +249,6 @@ def test_disabled_invoke_endpoint_costs_r4() -> None:
 
 def test_router_only_definition_is_hostable() -> None:
     # An HTTP-first composition root may carry only a router; its handlers are the registry.
-    from benzene.http import HttpRouter
-
     router = HttpRouter().register("POST", "/orders", "orders:place", _place, request_type=Order)
     report = evaluate_cloud_service_profile(AppDefinition(router=router))
     assert "R1" not in report.missing  # a router is hostable

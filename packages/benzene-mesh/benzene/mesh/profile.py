@@ -260,20 +260,26 @@ def evaluate_cloud_service_profile(
         )
     )
 
-    # R7 — the well-known surfaces default to the /benzene/ prefix. A relocated (or absent) prefix
-    # accepts the documented degradation for those surfaces.
+    # R7 — the well-known HTTP surfaces the service exposes default to the /benzene/ prefix. A service
+    # with no HTTP surface exposes none, so meets R7 trivially; a relocated (or absent) prefix on an
+    # HTTP service accepts the documented degradation for those surfaces.
     prefix = getattr(paths, "prefix", None) if has_http else None
-    r7 = prefix == _DEFAULT_PREFIX
+    r7 = not has_http_surface or prefix == _DEFAULT_PREFIX
     checks.append(
         RequirementCheck(
             "R7",
             r7,
-            "standard paths under the default /benzene/ prefix"
+            (
+                "standard paths under the default /benzene/ prefix"
+                if has_http_surface
+                else "no HTTP surface: there are no well-known HTTP surfaces to place"
+            )
             if r7
             else (
                 f"standard paths relocated to {prefix!r}"
                 if has_http
-                else "no standard_paths declared: the well-known surfaces are absent"
+                else "the service has an HTTP surface but no standard_paths: the well-known "
+                "surfaces are absent"
             ),
         )
     )
