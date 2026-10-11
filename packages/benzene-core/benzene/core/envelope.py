@@ -223,8 +223,10 @@ def decode_response(response: Mapping[str, Any]) -> Result[Any]:
     *different* status vocabulary on the wire). An empty ``body`` maps to a ``None`` payload; a failure
     body in :func:`error_payload`'s shape (an RFC 9457 problem document) has its ``errors`` member read
     back into the result's ``errors`` tuple, falling back to ``detail`` as a single opaque message when
-    the producer sent no ``errors``; a body that isn't valid JSON becomes ``unexpected-error`` rather
-    than raising, matching this envelope's "never crash the caller" rule everywhere else.
+    the producer sent no ``errors``. A failure body that is not a problem document never fails the
+    call: the peer's status stands, a JSON one riding along as the payload and anything else
+    dropped. Only a *success* body that isn't valid JSON becomes ``unexpected-error`` (rather than
+    raising, matching this envelope's "never crash the caller" rule everywhere else).
 
     The envelope's ``isSuccessful`` decides whether this is a success (:func:`successful_from`),
     never the status text, so an application-defined status carried on a result the sender marked
@@ -246,6 +248,11 @@ def decode_response(response: Mapping[str, Any]) -> Result[Any]:
     try:
         parsed = json.loads(body)
     except (ValueError, TypeError):
+        if not successful:
+            # A failure body that is not a problem document never fails the call (wire-contracts
+            # 4.1): the peer's status stands, with no errors to rebuild. Replacing it with
+            # unexpected-error turned a peer's not-found or conflict into a fault of our own.
+            return Result(status, None, successful=stated)
         return Result.unexpected_error(f"response body is not valid JSON: {body!r}")
 
     if not successful and isinstance(parsed, dict) and _looks_like_problem(parsed):

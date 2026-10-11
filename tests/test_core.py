@@ -313,9 +313,28 @@ def test_decode_response_reads_an_envelope_without_is_successful_as_unsuccessful
     assert not decode_response({"statusCode": Status.CONFLICT, "body": ""}).is_successful
 
 
-def test_decode_response_treats_a_malformed_body_as_unexpected_error_not_a_crash() -> None:
-    result = decode_response({"statusCode": Status.OK, "body": "not json"})
+def test_decode_response_treats_a_malformed_success_body_as_unexpected_error_not_a_crash() -> None:
+    result = decode_response({"statusCode": Status.OK, "isSuccessful": True, "body": "not json"})
     assert result.status == Status.UNEXPECTED_ERROR
+
+
+@pytest.mark.parametrize(
+    "body,payload",
+    [
+        ("<html><body>Not Found</body></html>", None),  # not JSON at all
+        ('{"message": "no order 7"}', {"message": "no order 7"}),  # JSON, but not a problem document
+    ],
+)
+def test_decode_response_keeps_the_peers_status_for_a_failure_body_that_is_not_a_problem(
+    body: str, payload: object
+) -> None:
+    # wire-contracts 4.1: a failure body that is not a problem document never fails the call. A
+    # non-JSON one used to become unexpected-error, replacing the status the peer actually sent.
+    result = decode_response({"statusCode": Status.NOT_FOUND, "isSuccessful": False, "body": body})
+    assert result.status == Status.NOT_FOUND
+    assert not result.is_successful
+    assert result.errors == ()
+    assert result.payload == payload
 
 
 def test_decode_response_defaults_a_missing_status_to_unexpected_error() -> None:
