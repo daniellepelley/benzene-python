@@ -6,9 +6,8 @@ schemas and a content hash), **answers the reserved ``benzene:mesh`` topic** wit
 (:func:`mesh_interception`), **traces every invocation** (:func:`trace_middleware` → one
 :class:`TraceEvent` each), and **reports into a collector** over an outbound client
 (:class:`MeshFeedSender`). The pull side — :class:`MeshPoller` and :func:`probe_cloud_service` —
-reads a service's ``/benzene/spec`` in **either** shape it may answer with (:mod:`benzene.mesh.specdoc`:
-the Contract Document the Cloud Service Profile's R5 names, or this port's native payload), so a Python
-mesh grades and ingests a .NET, Go, or TypeScript service exactly as it does one of its own.
+reads the Contract Document a service's ``/benzene/spec`` answers with (:mod:`benzene.mesh.specdoc`), so
+a Python mesh grades and ingests a .NET, Go, or TypeScript service exactly as it does one of its own.
 
 Everything here is optional and additive — install it to join the mesh, leave it out and the rest of
 your service is unchanged. Depends only on ``benzene-core``; the S3 artifact publisher
@@ -61,7 +60,13 @@ from .issues import (
     classify,
     issue_fingerprint,
 )
-from .outbound import DuplicateOutboundRegistrationError, OutboundDefinition, OutboundRegistry
+from .outbound import (
+    DuplicateOutboundRegistrationError,
+    EventDeclaration,
+    OutboundDefinition,
+    OutboundRegistry,
+    SendDeclaration,
+)
 from .poller import (
     CallableServiceSource,
     HttpServiceSource,
@@ -87,9 +92,8 @@ from .s3_artifacts import S3ArtifactStore, write_artifacts_to_s3
 from .schema import Schema, json_schema
 from .specdoc import (
     is_contract_document,
-    is_native_document,
-    is_spec_document,
     spec_produces,
+    spec_registration_hash,
     spec_service,
     spec_topics,
 )
@@ -130,6 +134,8 @@ __all__ = [
     "CloudServiceProfileReport",
     "DescriptorSource",
     "DuplicateOutboundRegistrationError",
+    "EventDeclaration",
+    "SendDeclaration",
     "PROFILE_NAME",
     "REQUIREMENT_IDS",
     "RequirementCheck",
@@ -171,8 +177,7 @@ __all__ = [
     "TracePropagatingMessageSender",
     "build_artifacts",
     "is_contract_document",
-    "is_native_document",
-    "is_spec_document",
+    "spec_registration_hash",
     "spec_produces",
     "spec_service",
     "spec_topics",

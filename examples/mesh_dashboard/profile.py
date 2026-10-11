@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from benzene.core import AppDefinition, HealthChecks, Registry, ServiceSpec
+from benzene.core import AppDefinition, ContractInfo, HealthChecks, Registry
 from benzene.http import StandardPaths
 from benzene.mesh import (
     CloudServiceProfileReport,
@@ -42,10 +42,8 @@ def build_profiled_definition() -> AppDefinition:
     registry = Registry().register("orders:place", _place)  # request_type inferred from _place
     return AppDefinition(
         registry=registry,
-        standard_paths=StandardPaths(
-            health=HealthChecks().add("order-store", lambda: True),
-            spec=ServiceSpec.derive(registry, service="orders"),
-        ),
+        standard_paths=StandardPaths(health=HealthChecks().add("order-store", lambda: True)),
+        contract=ContractInfo("orders"),  # the self-description: benzene:spec + /benzene/spec
     )
 
 

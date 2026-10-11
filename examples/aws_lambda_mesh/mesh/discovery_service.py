@@ -7,8 +7,8 @@ On each run it:
 1. **discovers** the ``benzene``-tagged service Lambdas — :class:`~benzene.mesh_fleet.AwsLambdaDiscovery`
    (real ``ListFunctions`` + ``ListTags``, filtered by tag);
 2. **interrogates** each discovered function by a real, synchronous **direct Lambda Invoke** on the two
-   reserved topics every service Lambda answers (``ServiceStartUp``'s ``mesh_interception`` /
-   ``health_interception``) — :class:`~benzene.mesh.MeshPoller` over one
+   reserved topics every service Lambda answers (``benzene:spec``, answered from the Contract Document
+   ``ServiceStartUp`` declares, and ``health_interception``'s ``benzene:healthcheck``) — :class:`~benzene.mesh.MeshPoller` over one
    :class:`~benzene.mesh.CallableServiceSource` per discovered function, exactly the seam
    ``benzene.mesh`` ships for a bespoke transport;
 3. **drains the trace inbox** — every :class:`~benzene.mesh.S3TraceInbox` object a service Lambda
@@ -36,9 +36,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from benzene.aws import LambdaMessageSender
-from benzene.core import HEALTH_TOPIC
+from benzene.core import HEALTH_TOPIC, SPEC_TOPIC
 from benzene.mesh import (
-    MESH_TOPIC,
     CallableServiceSource,
     CollectorStore,
     MeshCollector,
@@ -64,7 +63,7 @@ def lambda_service_source(
 ) -> CallableServiceSource:
     """A :class:`~benzene.mesh.CallableServiceSource` that interrogates one Lambda by direct invoke.
 
-    ``spec`` invokes the reserved ``benzene:mesh`` topic (answered by ``mesh_interception``) and
+    ``spec`` invokes the reserved ``benzene:spec`` topic (the service's Contract Document) and
     ``health`` the reserved ``benzene:healthcheck`` topic (``health_interception``) — the same two
     surfaces a Cloud Service Profile service answers over HTTP at ``/benzene/spec``/``/benzene/health``,
     reached here over AWS's own request/response primitive instead (no HTTP endpoint needed).
@@ -72,10 +71,10 @@ def lambda_service_source(
     sender = LambdaMessageSender(function_name, client=client)
 
     async def fetch_spec() -> dict[str, Any]:
-        result = await sender.send_message(MESH_TOPIC, None)
+        result = await sender.send_message(SPEC_TOPIC, None)
         if not isinstance(result.payload, dict):
             detail = "; ".join(result.messages) or result.status
-            raise PollError(f"{function_name}: {MESH_TOPIC} invoke failed: {detail}")
+            raise PollError(f"{function_name}: {SPEC_TOPIC} invoke failed: {detail}")
         return result.payload
 
     async def fetch_health() -> dict[str, Any]:

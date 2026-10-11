@@ -5,8 +5,8 @@ the environment decides its identity, the topic it serves, the sibling it calls 
 reports traces. Each service:
 
 - exposes ``/benzene/spec`` + ``/benzene/health`` (so the mesh collector can **poll** it — identity,
-  topics, health; this fleet declares its outbound side on the pushed descriptor below rather than on
-  the polled spec, which ``ServiceSpec.derive(..., produces=...)`` can equally carry),
+  topics, health, and the send to ``NEXT_TOPIC`` declared on the one outbound registry the Contract
+  Document and the pushed descriptor below both read),
 - runs ``trace_middleware`` and, when ``NEXT_URL`` is set, calls the next service through a
   ``with_trace_propagation``-wrapped HTTP sender (so the ``traceparent`` crosses the hop), and
 - when ``COLLECTOR_URL`` is set, **pushes** its ``ServiceDescriptor`` — ``produces=[NEXT_TOPIC]`` when
@@ -29,19 +29,18 @@ from typing import Any
 
 from benzene.aws import AwsLambdaApp, to_lambda_handler
 from benzene.core import (
-    BenzeneMessageApplication,
+    AppDefinition,
+    ContractInfo,
     HealthChecks,
     MessageSender,
-    MiddlewarePipeline,
+    OutboundRegistry,
     Registry,
-    ServiceSpec,
 )
 from benzene.http import HttpMessageSender, HttpRouter, StandardPaths
 from benzene.mesh import (
     REGISTER_TOPIC,
     TRACES_TOPIC,
     MeshFeedSender,
-    OutboundRegistry,
     QueueTraceExporter,
     ServiceDescriptor,
     ServiceInfo,
@@ -132,18 +131,23 @@ def build_service(
         response_type=FleetReply,
     )
     registry = Registry.from_definitions(router)
-    pipeline = MiddlewarePipeline().use(
-        trace_middleware(exporter, service=config.name, instance_id=config.name)
-    )
-    standard = StandardPaths(
-        # Two named checks so the mesh-ui per-service page shows real per-check health detail.
-        health=HealthChecks().add("core", lambda: True).add("trace-exporter", lambda: True),
-        spec=ServiceSpec.derive(registry, service=config.name),
-    )
-    app = AwsLambdaApp(
-        http_router=router,
-        application=BenzeneMessageApplication(registry, pipeline),
-        standard_paths=standard,
+    # What this service sends (contract-document §3): a one-way send to the next hop, a topic the
+    # next service defines. One declaration feeds the Contract Document and the descriptor alike.
+    outbound = OutboundRegistry()
+    if config.next_topic:
+        outbound.register_send(config.next_topic, FleetRequest)
+    app = AwsLambdaApp.from_definition(
+        AppDefinition(
+            registry=registry,
+            router=router,
+            middleware=[trace_middleware(exporter, service=config.name, instance_id=config.name)],
+            standard_paths=StandardPaths(
+                # Two named checks so the mesh-ui per-service page shows real per-check health.
+                health=HealthChecks().add("core", lambda: True).add("trace-exporter", lambda: True),
+            ),
+            outbound=outbound,
+            contract=ContractInfo(config.name),
+        )
     )
 
     if feeds is None and config.collector_url:
@@ -158,9 +162,6 @@ def build_service(
     if feeds is not None:
         # What this service produces (mesh.md §2.3) — the collector's provider edge exists from this
         # one call, with zero traffic; it does not wait on (or come from) a trace.
-        outbound = OutboundRegistry()
-        if config.next_topic:
-            outbound.register(config.next_topic)
         descriptor = ServiceDescriptor.derive(registry, ServiceInfo(service=config.name), outbound)
         with contextlib.suppress(Exception):  # register is best-effort, never fails startup
             asyncio.run(feeds.register(descriptor))

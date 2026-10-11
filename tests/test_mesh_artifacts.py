@@ -314,8 +314,12 @@ def test_polled_fleet_enriches_topics_and_service_health() -> None:
     # poller folds both into the collector, so the artifacts carry them just like the push path.
     async def spec() -> dict:
         return {
+            "schemaDialect": "openapi-3.0",
             "service": "inventory",
-            "topics": [{"id": "stock:reserve", "requestSchema": _RESERVE_SCHEMA}],
+            "requests": [{"topic": "stock:reserve", "request": _RESERVE_SCHEMA}],
+            "events": [],
+            "sends": [],
+            "components": {"schemas": {}},
         }
 
     async def health() -> dict:

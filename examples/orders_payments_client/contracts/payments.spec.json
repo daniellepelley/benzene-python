@@ -1,10 +1,6 @@
 {
-  "openapi": "3.0.1",
-  "info": {
-    "title": "payments-api",
-    "description": "",
-    "version": ""
-  },
+  "schemaDialect": "openapi-3.0",
+  "service": "payments-api",
   "messageEndpoint": "/benzene/invoke",
   "transports": [
     "api-gateway",
@@ -13,6 +9,8 @@
     "sns",
     "eventbridge"
   ],
+  "contractHash": "sha256:c9ea464d64b78269e2b902bc02de4fec7bdaad66d548ce909383e8259e795f43",
+  "registrationHash": "sha256:3f4102e2eec733b97f6584ffc5f97963f00d4f4b3b698efad43c5c899f2ac56d",
   "requests": [
     {
       "topic": "payments:capture",
@@ -27,11 +25,6 @@
       },
       "response": {
         "$ref": "#/components/schemas/PaymentDto"
-      },
-      "example": {
-        "orderId": "value",
-        "amount": 42.42,
-        "currency": "value"
       }
     },
     {
@@ -43,85 +36,53 @@
         }
       ],
       "request": {
-        "$ref": "#/components/schemas/Void"
+        "type": "object"
       },
       "response": {
         "type": "array",
         "items": {
           "$ref": "#/components/schemas/PaymentDto"
         }
-      },
-      "example": { }
-    },
-    {
-      "topic": "benzene:spec",
-      "reserved": true,
-      "httpMappings": [
-        {
-          "method": "get",
-          "path": "/benzene/spec"
-        }
-      ],
-      "request": {
-        "$ref": "#/components/schemas/SpecRequest"
-      },
-      "response": {
-        "$ref": "#/components/schemas/RawStringMessage"
-      },
-      "example": {
-        "type": "value",
-        "format": "value"
       }
     }
   ],
   "events": [
     {
-      "topic": "shipping:book",
-      "message": {
-        "$ref": "#/components/schemas/OutboundShipmentBook"
-      },
-      "example": {
-        "orderId": "value",
-        "carrier": "value"
-      }
-    },
-    {
       "topic": "payment:captured",
       "message": {
         "$ref": "#/components/schemas/OutboundPaymentCaptured"
-      },
-      "example": {
-        "orderId": "value",
-        "paymentId": "value",
-        "amount": 42.42,
-        "currency": "value"
+      }
+    }
+  ],
+  "sends": [
+    {
+      "topic": "shipping:book",
+      "request": {
+        "$ref": "#/components/schemas/OutboundShipmentBook"
       }
     }
   ],
   "components": {
     "schemas": {
       "CapturePayment": {
-        "required": [
-          "Currency",
-          "OrderId"
-        ],
         "type": "object",
         "properties": {
           "OrderId": {
-            "type": "string",
-            "description": "Not Empty"
+            "type": "string"
           },
           "Amount": {
             "type": "number",
-            "description": "Greater Than 0",
             "format": "double"
           },
           "Currency": {
-            "type": "string",
-            "description": "Not Empty"
+            "type": "string"
           }
         },
-        "additionalProperties": false
+        "required": [
+          "Amount",
+          "Currency",
+          "OrderId"
+        ]
       },
       "OutboundPaymentCaptured": {
         "type": "object",
@@ -143,7 +104,12 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "required": [
+          "Amount",
+          "Currency",
+          "OrderId",
+          "PaymentId"
+        ]
       },
       "OutboundShipmentBook": {
         "type": "object",
@@ -157,7 +123,10 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
+        "required": [
+          "Carrier",
+          "OrderId"
+        ]
       },
       "PaymentDto": {
         "type": "object",
@@ -183,35 +152,13 @@
             "nullable": true
           }
         },
-        "additionalProperties": false
-      },
-      "RawStringMessage": {
-        "type": "object",
-        "properties": {
-          "Content": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "SpecRequest": {
-        "type": "object",
-        "properties": {
-          "Type": {
-            "type": "string",
-            "nullable": true
-          },
-          "Format": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "Void": {
-        "type": "object",
-        "additionalProperties": false
+        "required": [
+          "Amount",
+          "Currency",
+          "Id",
+          "OrderId",
+          "Status"
+        ]
       }
     }
   }

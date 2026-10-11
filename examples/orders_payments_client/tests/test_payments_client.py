@@ -1,4 +1,8 @@
-"""Dogfoods the generated ``payments:capture`` client against a real .NET-produced Contract Document.
+"""Dogfoods the generated ``payments:capture`` client against a .NET-style Contract Document.
+
+``contracts/payments.spec.json`` started life as a real .NET-produced document and was re-cut to the
+spec-0.3.0 shape (``schemaDialect``, ``service``, events and sends, no reserved entries, no
+synthesized examples, both hashes).
 
 Proves ingress -> generated client -> egress the same way the cloud examples' tests dogfood the
 real pipeline and fake only the outbound edge (port-quality-standards §4): the generated method
@@ -13,8 +17,7 @@ from pathlib import Path
 
 import pytest
 from benzene.codegen_client import compute_contract_hash, generate_service_client, parse_document
-from benzene.codegen_client.document import ContractDocument, to_raw_document
-from benzene.codegen_client.schema_closure import reachable_schemas
+from benzene.core import contract_hash
 from benzene.testing import FakeMessageSender
 from orders_payments_client.generated.payments_capture_client import (
     CONTRACT_HASH,
@@ -50,24 +53,19 @@ def test_calling_the_generated_method_sends_the_typed_payload() -> None:
 
 def test_contract_hash_matches_the_expected_topic_scoped_projection() -> None:
     # Recomputed independently from the same source document (not read back off the generated
-    # module) so this proves the embedded CONTRACT_HASH is correct, not merely self-consistent.
+    # module) so this proves the embedded CONTRACT_HASH is correct, not merely self-consistent: the
+    # topic-scoped projection (contract-document §5.3) is one requests[] entry and no events, and
+    # the hash dereferences, so the components need not be narrowed by hand.
+    raw = json.loads(_SPEC_PATH.read_text())
+    (capture,) = [r for r in raw["requests"] if r["topic"] == "payments:capture"]
+    projected = {"requests": [capture], "events": [], "components": raw["components"]}
+    assert contract_hash(projected) == CONTRACT_HASH
+
+
+def test_the_served_hash_is_what_a_default_service_client_embeds() -> None:
     document = _document()
-    request = document.find_request("payments:capture")
-    assert request is not None
-
-    closure = reachable_schemas(document.schemas, request.request, request.response)
-    projected = ContractDocument(
-        openapi=document.openapi,
-        info=document.info,
-        requests=(request,),
-        events=(),
-        schemas=closure,
-        message_endpoint=document.message_endpoint,
-        transports=document.transports,
-    )
-    expected_hash = compute_contract_hash(to_raw_document(projected), topic_scoped=True)
-
-    assert expected_hash == CONTRACT_HASH
+    generated = generate_service_client(document, service_name="Payments")
+    assert generated.contract_hash == document.contract_hash == compute_contract_hash(document)
 
 
 def test_no_reserved_benzene_topic_appears_anywhere_in_the_generated_client() -> None:
@@ -76,10 +74,11 @@ def test_no_reserved_benzene_topic_appears_anywhere_in_the_generated_client() ->
 
 
 def test_no_reserved_benzene_topic_appears_in_a_whole_service_client_either() -> None:
-    # payments.spec.json's requests[] includes benzene:spec (reserved: true) alongside the two
-    # domain topics — the domain-only default (contract-document.md §5.1) must exclude it even
-    # from a service-level (not topic-scoped) generation over the whole document.
-    document = _document()
+    # A producer never lists a benzene: topic, and a generator ignores one it meets anyway
+    # (contract-document §5.1) — even in a service-level generation over the whole document.
+    raw = json.loads(_SPEC_PATH.read_text())
+    raw["requests"].append({"topic": "benzene:spec", "request": {}, "response": {}})
+    document = parse_document(raw)
     generated = generate_service_client(document, service_name="Payments")
     assert "benzene:" not in generated.source
     assert "benzene:spec" not in generated.required_topics

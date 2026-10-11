@@ -5,7 +5,7 @@
 # whole workspace, including the runnable examples under examples/.
 #
 # Local dev (no build needed — PEP 420 namespace packages resolve straight off sys.path):
-#     pip install rfc8785          # the one third-party dep, needed by benzene-codegen-client
+#     pip install rfc8785          # the one third-party dep, needed by benzene-core (contract hashes)
 #     pytest                       # uses the pythonpath below (packages + examples)
 #     python -m tests.conformance_runner
 #

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from benzene.core import BenzeneMessageApplication, HealthChecks, ServiceSpec
+from benzene.core import AppDefinition, ContractInfo, HealthChecks
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
 from benzene.mesh import MeshCollector, collector_registry
 from benzene.mesh_fleet.discovery_adapters import KubernetesDiscovery
@@ -69,12 +69,13 @@ def build_mesh_host(env: Mapping[str, str] | None = None, *, discovery: Any | No
     registry.register(MESH_REFRESH_TOPIC, handle_refresh)
 
     router = HttpRouter().register("POST", "/mesh/refresh", MESH_REFRESH_TOPIC, handle_refresh)
-    standard = StandardPaths(
-        health=HealthChecks().add("collector", lambda: True),
-        spec=ServiceSpec.derive(registry, service="benzene-mesh"),
-    )
-    app: Any = BenzeneHttpApp(
-        router, application=BenzeneMessageApplication(registry), standard_paths=standard
+    app: Any = BenzeneHttpApp.from_definition(
+        AppDefinition(
+            registry=registry,
+            router=router,
+            standard_paths=StandardPaths(health=HealthChecks().add("collector", lambda: True)),
+            contract=ContractInfo("benzene-mesh"),
+        )
     )
     if artifact_dir:
         app = MeshUiApp(app, ui_html=_UI_HTML, artifacts_dir=Path(artifact_dir))

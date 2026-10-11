@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from benzene.core import AppDefinition, HealthChecks, Registry, ServiceSpec
+from benzene.core import AppDefinition, ContractInfo, HealthChecks, Registry
 from benzene.http import StandardPaths
 from benzene.mesh import (
     PROFILE_NAME,
@@ -39,8 +39,8 @@ def _full_definition() -> AppDefinition:
         registry=registry,
         standard_paths=StandardPaths(
             health=HealthChecks().add("core", lambda: True),
-            spec=ServiceSpec.derive(registry, service="orders"),
         ),
+        contract=ContractInfo("orders"),
     )
 
 
@@ -78,8 +78,8 @@ def test_a_relocated_prefix_only_costs_r7() -> None:
         standard_paths=StandardPaths(
             prefix="/_internal",
             health=HealthChecks().add("core", lambda: True),
-            spec=ServiceSpec.derive(registry, service="orders"),
         ),
+        contract=ContractInfo("orders"),
     )
     report = evaluate_cloud_service_profile(definition, mesh_feeds=True, trace_propagation=True)
     assert report.missing == ["R7"]
@@ -101,8 +101,8 @@ def test_disabled_invoke_endpoint_costs_r4() -> None:
         standard_paths=StandardPaths(
             invoke=False,
             health=HealthChecks().add("core", lambda: True),
-            spec=ServiceSpec.derive(registry, service="orders"),
         ),
+        contract=ContractInfo("orders"),
     )
     report = evaluate_cloud_service_profile(definition, mesh_feeds=True, trace_propagation=True)
     assert report.missing == ["R4"]

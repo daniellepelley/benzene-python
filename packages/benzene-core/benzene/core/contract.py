@@ -1,81 +1,66 @@
-"""The Contract Document — the registry projected into the format every client generator parses.
+"""The Contract Document — the one self-description a service derives and serves (contract-document.md).
 
-The Cloud Service Profile's **R5** requires a service to derive a spec document from its handler
-registry and serve it at ``/benzene/spec`` (``?type=benzene&format=json``), and
-``contract-document.md`` defines that document's shape:
+A service projects its handler registry and its outbound declarations into one document::
 
-    {"openapi": "3.0.1", "info": {...}, "messageEndpoint": "...", "transports": [...],
-     "requests": [...], "events": [...], "components": {"schemas": {...}}}
+    {"schemaDialect": "openapi-3.0", "service": "orders", "serviceVersion": "1.4.2",
+     "versionScheme": "semver", "description": "...", "messageEndpoint": "/benzene/invoke",
+     "transports": ["http", "sqs"], "contractHash": "sha256:...", "registrationHash": "sha256:...",
+     "requests": [...], "events": [...], "sends": [...], "components": {"schemas": {...}}}
 
-It is deliberately *not* full OpenAPI — ``openapi`` is a heritage marker naming the schema dialect
-(OpenAPI 3.0 Schema Objects), and there are no ``paths``: a Benzene service is addressed by topic.
-``requests[]`` is one entry per request/response topic and ``events[]`` one per topic the service
-*produces*, each pointing at a schema either inline or by ``$ref`` into ``components.schemas``.
+It is what the reserved ``benzene:spec`` topic answers with (:func:`spec_interception`), what
+``GET /benzene/spec`` serves (through the same pipeline), the profile's R5 document, and the one
+input every language's client generator reads. The schemas are OpenAPI 3.0 Schema Objects
+(:mod:`benzene.core.contract_schema`); the document itself is not an OpenAPI document.
 
-This is the format a .NET, TypeScript, Go, or Python client generator reads — the reason it is
-spec'd at all is that four generators must parse one file. :class:`~benzene.core.ServiceSpec`'s
-``{service, topics}`` payload is this port's own older, native shape; it is still served (the
-``?type=native`` switch on the HTTP surface), but it is not what R5 names and no other port's
-tooling can read it.
+``requests[]`` is one entry per registered handler; ``events[]`` and ``sends[]`` come from an
+:class:`~benzene.core.OutboundRegistry`'s event and send declarations. No ``benzene:`` topic is ever
+listed — the reserved topics' shapes are defined once, by the spec. Both hashes are always present
+and computed over this document (:mod:`benzene.core.contract_hash`).
 
-Two entry points, because a service reaches this document from two places:
-
-* :meth:`ContractDocument.derive` — the **registry** projection. It sees the handlers' declared
-  Python types, so it names each dataclass payload in ``components.schemas`` and refers to it by
-  ``$ref``, which is what lets a generator emit a named type per payload rather than an anonymous
-  one per topic.
-* :meth:`ContractDocument.from_spec` — the projection of an already-derived
-  :class:`~benzene.core.ServiceSpec`. The types are gone by then, so every schema is written inline
-  and the catalogue is empty (§2 allows either) — the point is that a host holding only a
-  ``ServiceSpec`` still serves a conformant Contract Document rather than something no other port
-  can parse.
-
-Emission follows §1's presence column exactly: ``transports`` is omitted when empty rather than
-written as ``[]``, ``info`` writes empty strings rather than going missing, ``messageEndpoint`` is
-absent when the service exposes no such endpoint (consumers feature-detect send capability on it),
-and ``requests``/``events``/``components`` are always present even when empty.
+Derive it **once, at the composition root**: :func:`~benzene.core.application_from` does so for an
+:class:`~benzene.core.AppDefinition` that declares a :class:`ContractInfo`, which is what makes a
+component-name collision fail before the first message is handled, and what makes the topic and the
+HTTP route serve the identical document.
 """
 
 from __future__ import annotations
 
-import dataclasses
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from functools import cached_property
+from typing import Any, Protocol, runtime_checkable
 
 from benzene.results import Result
 
 from .context import Context
+from .contract_hash import RESERVED_TOPIC_PREFIX, contract_hash, registration_hash
+from .contract_schema import Schema, SchemaCatalogue
+from .declarations import OutboundRegistry
 from .pipeline import Middleware, Next
 from .registry import SupportsDefinitions
-from .schema import Schema, json_schema
-from .spec import (
-    SPEC_TOPIC,
-    SPEC_TYPE_NATIVE,
-    ProducesSource,
-    ServiceSpec,
-    SpecSource,
-    outbound_items,
-    resolve_spec,
-    select_spec_document,
-)
 
-#: The ``openapi`` marker every Contract Document carries (contract-document.md §1). A heritage
-#: marker naming the schema-object dialect, not a claim to be an OpenAPI document — §1 is explicit
-#: that a consumer MUST NOT reject a document on this value.
-CONTRACT_OPENAPI = "3.0.1"
+#: The dialect of every schema in the document (contract-document.md §1).
+SCHEMA_DIALECT = "openapi-3.0"
 
-#: The only ``$ref`` form a Contract Document may use (contract-document.md §4).
-SCHEMA_REF_PREFIX = "#/components/schemas/"
+#: The reserved topic a service answers with its Contract Document (contract-document.md §7).
+SPEC_TOPIC = "benzene:spec"
 
-#: The reserved-topic prefix (contract-document.md §5.1) — the half of the reserved-detection rule a
-#: producer can apply without being told.
-RESERVED_TOPIC_PREFIX = "benzene:"
+#: ``benzene:spec``'s default ``type`` and ``format``: this document, as JSON (§7).
+SPEC_TYPE_BENZENE = "benzene"
+SPEC_FORMAT_JSON = "json"
+
+#: A handler declares it returns no payload with ``response_type=NoPayload``: its ``requests[]``
+#: entry then has no ``response`` (§2). An undeclared ``response_type`` (``None``) means a payload of
+#: unconstrained shape — ``{}``.
+NoPayload: type = type(None)
+
+#: The service-version comparison schemes (service-versions.md §2).
+VERSION_SCHEMES = frozenset({"integer", "semver", "lexicographic"})
 
 
 @dataclass(frozen=True)
 class HttpMapping:
-    """One ``httpMappings[]`` pair — a topic's explicit HTTP exposure (contract-document.md §2)."""
+    """One ``httpMappings[]`` pair — a topic's HTTP route (contract-document.md §2)."""
 
     method: str
     path: str
@@ -84,35 +69,65 @@ class HttpMapping:
         return {"method": self.method, "path": self.path}
 
 
+@runtime_checkable
+class SupportsHttpMappings(Protocol):
+    """Anything that knows each ``(topic, version)``'s HTTP routes — e.g. ``benzene.http``'s router."""
+
+    def http_mappings(self) -> Mapping[tuple[str, str], Sequence[HttpMapping]]: ...
+
+
+@runtime_checkable
+class SupportsMessageEndpoint(Protocol):
+    """Anything that knows the HTTP envelope endpoint's path — e.g. ``benzene.http.StandardPaths``."""
+
+    @property
+    def message_endpoint(self) -> str | None: ...
+
+
+@dataclass(frozen=True)
+class ContractInfo:
+    """What a service says about itself that its registrations cannot: the document's identity.
+
+    Declared on :class:`~benzene.core.AppDefinition` (``contract=ContractInfo("orders")``), it turns
+    the self-description on: the document is derived at the composition root and ``benzene:spec``
+    answers with it. ``transports`` lists every transport this service receives messages over —
+    declared, not detected, because no one host sees all of them.
+    """
+
+    service: str
+    service_version: str = ""
+    version_scheme: str = ""
+    description: str = ""
+    transports: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class ContractRequest:
-    """One ``requests[]`` entry: a request/response topic (contract-document.md §2)."""
+    """One ``requests[]`` entry. ``response`` is ``None`` when the handler returns no payload."""
 
     topic: str
     request: Schema = field(default_factory=dict)
-    response: Schema = field(default_factory=dict)
+    response: Schema | None = field(default_factory=dict)
     version: str = ""
-    reserved: bool = False
     http_mappings: tuple[HttpMapping, ...] = ()
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"topic": self.topic}
-        # Absent and empty are not the same thing (§2): absence means the unversioned handler, and a
-        # producer MUST NOT write "version": "" for it.
+        # Absent and empty differ (§2): absence means the unversioned handler, and a producer MUST
+        # NOT write "version": "" for it.
         if self.version:
             payload["version"] = self.version
-        if self.reserved:  # written only when true; its absence also means not-reserved (§2)
-            payload["reserved"] = True
-        if self.http_mappings:  # omitted when empty — an absent array means "no HTTP exposure"
+        if self.http_mappings:  # omitted when empty
             payload["httpMappings"] = [mapping.to_payload() for mapping in self.http_mappings]
         payload["request"] = self.request
-        payload["response"] = self.response
+        if self.response is not None:  # absent means "no payload"; {} means "any payload"
+            payload["response"] = self.response
         return payload
 
 
 @dataclass(frozen=True)
 class ContractEvent:
-    """One ``events[]`` entry: a topic the service produces fire-and-forget (§3)."""
+    """One ``events[]`` entry: an event this service publishes and defines (§3.1)."""
 
     topic: str
     message: Schema = field(default_factory=dict)
@@ -127,15 +142,39 @@ class ContractEvent:
 
 
 @dataclass(frozen=True)
+class ContractSend:
+    """One ``sends[]`` entry: a message to a topic another party defines (§3.2).
+
+    ``response`` is ``None`` for a one-way send.
+    """
+
+    topic: str
+    request: Schema = field(default_factory=dict)
+    response: Schema | None = None
+    version: str = ""
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"topic": self.topic}
+        if self.version:
+            payload["version"] = self.version
+        payload["request"] = self.request
+        if self.response is not None:
+            payload["response"] = self.response
+        return payload
+
+
+@dataclass(frozen=True)
 class ContractDocument:
-    """A service's Contract Document. Build it with :meth:`derive` / :meth:`from_spec`."""
+    """A service's Contract Document. Build it with :meth:`derive`; serve :meth:`to_payload`."""
 
     service: str
-    version: str = ""
+    service_version: str = ""
+    version_scheme: str = ""
     description: str = ""
     requests: tuple[ContractRequest, ...] = ()
     events: tuple[ContractEvent, ...] = ()
-    schemas: dict[str, Schema] = field(default_factory=dict)
+    sends: tuple[ContractSend, ...] = ()
+    schemas: Mapping[str, Schema] = field(default_factory=dict)
     message_endpoint: str | None = None
     transports: tuple[str, ...] = ()
 
@@ -145,172 +184,186 @@ class ContractDocument:
         registry: SupportsDefinitions,
         *,
         service: str,
-        version: str = "",
+        service_version: str = "",
+        version_scheme: str = "",
         description: str = "",
-        produces: ProducesSource | None = None,
+        outbound: OutboundRegistry | None = None,
         message_endpoint: str | None = None,
         transports: Sequence[str] = (),
         http_mappings: Mapping[tuple[str, str], Sequence[HttpMapping]] | None = None,
     ) -> ContractDocument:
-        """Project a handler registry into a Contract Document (entries sorted by topic then version).
+        """Project a handler registry and outbound declarations into a Contract Document.
 
-        ``produces`` declares the topics this service *sends* and becomes ``events[]``, the same
-        three accepted forms as :meth:`~benzene.core.ServiceSpec.derive`. ``http_mappings`` is keyed
-        by ``(topic, version)`` — the same key the registry and an HTTP router agree on — because a
-        route resolves to one handler, not to a topic across all its versions.
-
-        Every declared payload type that derives to a real object schema is named once in
-        ``components.schemas`` and referenced by ``$ref``; anything else (an untyped ``dict``
-        handler, a primitive, an unknown type) is written inline, which §2 allows and which is the
-        honest rendering of "this handler declared no shape".
+        Entries are sorted by topic then version; ``benzene:`` topics are never listed. Every
+        dataclass and serializable enum reachable from an entry is named in ``components.schemas``
+        (contract-document §4.1); two different types claiming one name raise
+        :class:`~benzene.core.ComponentNameCollisionError` here, naming both and the remedy.
+        ``http_mappings`` is keyed by ``(topic, version)`` — a route resolves to one handler.
         """
-        catalogue = _Catalogue()
+        if not service:
+            raise ValueError("A Contract Document needs a service name (contract-document §1).")
+        if version_scheme and version_scheme not in VERSION_SCHEMES:
+            raise ValueError(
+                f"version_scheme {version_scheme!r} is not one of {sorted(VERSION_SCHEMES)} "
+                "(service-versions.md §2)."
+            )
+        catalogue = SchemaCatalogue()
         mappings = http_mappings or {}
-        requests = tuple(
-            sorted(
-                (
-                    ContractRequest(
-                        topic=definition.topic,
-                        request=catalogue.reference(definition.request_type),
-                        response=catalogue.reference(definition.response_type),
-                        version=definition.version,
-                        reserved=is_reserved_topic(definition.topic),
-                        http_mappings=tuple(
-                            mappings.get((definition.topic, definition.version), ())
-                        ),
-                    )
-                    for definition in registry.definitions()
-                ),
-                key=lambda entry: (entry.topic, entry.version),
+
+        requests = [
+            (
+                definition.topic,
+                definition.version,
+                catalogue.schema(definition.request_type, topic=definition.topic),
+                None
+                if definition.response_type is NoPayload
+                else catalogue.schema(definition.response_type, topic=definition.topic),
+                tuple(mappings.get((definition.topic, definition.version), ())),
             )
-        )
-        events = tuple(
-            sorted(
-                (_event_of(item, catalogue) for item in outbound_items(produces)),
-                key=lambda entry: (entry.topic, entry.version),
+            for definition in registry.definitions()
+            if not _reserved(definition.topic)
+        ]
+        events = [
+            (e.topic, e.version, catalogue.schema(e.message_type, topic=e.topic))
+            for e in (outbound.events() if outbound is not None else ())
+            if not _reserved(e.topic)
+        ]
+        sends = [
+            (
+                s.topic,
+                s.version,
+                catalogue.schema(s.request_type, topic=s.topic),
+                None
+                if s.response_type is None or s.response_type is NoPayload
+                else catalogue.schema(s.response_type, topic=s.topic),
             )
-        )
+            for s in (outbound.sends() if outbound is not None else ())
+            if not _reserved(s.topic)
+        ]
+        schemas, rename = catalogue.finish()
+
         return cls(
             service=service,
-            version=version,
+            service_version=service_version,
+            version_scheme=version_scheme,
             description=description,
-            requests=requests,
-            events=events,
-            schemas=catalogue.schemas,
+            requests=tuple(
+                sorted(
+                    (
+                        ContractRequest(
+                            topic=topic,
+                            version=version,
+                            request=rename(request),
+                            response=None if response is None else rename(response),
+                            http_mappings=routes,
+                        )
+                        for topic, version, request, response, routes in requests
+                    ),
+                    key=lambda entry: (entry.topic, entry.version),
+                )
+            ),
+            events=tuple(
+                sorted(
+                    (
+                        ContractEvent(topic=topic, version=version, message=rename(message))
+                        for topic, version, message in events
+                    ),
+                    key=lambda entry: (entry.topic, entry.version),
+                )
+            ),
+            sends=tuple(
+                sorted(
+                    (
+                        ContractSend(
+                            topic=topic,
+                            version=version,
+                            request=rename(request),
+                            response=None if response is None else rename(response),
+                        )
+                        for topic, version, request, response in sends
+                    ),
+                    key=lambda entry: (entry.topic, entry.version),
+                )
+            ),
+            schemas=schemas,
             message_endpoint=message_endpoint,
             transports=tuple(transports),
         )
 
-    @classmethod
-    def from_spec(
-        cls,
-        spec: ServiceSpec,
-        *,
-        version: str = "",
-        description: str = "",
-        message_endpoint: str | None = None,
-        transports: Sequence[str] = (),
-        http_mappings: Mapping[tuple[str, str], Sequence[HttpMapping]] | None = None,
-    ) -> ContractDocument:
-        """Project an already-derived :class:`~benzene.core.ServiceSpec` into a Contract Document.
+    @cached_property
+    def contract_hash(self) -> str:
+        """``contractHash`` (§6.1): over ``requests`` and ``events``."""
+        return contract_hash(self._body())
 
-        The ``ServiceSpec`` carries derived schemas but not the types they came from, so every
-        schema is written inline and ``components.schemas`` is empty. That costs a generator its
-        payload *names*, not any of the contract — which is why a host that can reach the registry
-        should prefer :meth:`derive`.
-        """
-        mappings = http_mappings or {}
-        requests = tuple(
-            ContractRequest(
-                topic=topic.id,
-                request=dict(topic.request_schema),
-                response=dict(topic.response_schema),
-                version=topic.version,
-                reserved=is_reserved_topic(topic.id),
-                http_mappings=tuple(mappings.get((topic.id, topic.version), ())),
-            )
-            for topic in spec.topics
-        )
-        events = tuple(
-            # A produced topic's request schema is the message it sends; a fire-and-forget event
-            # has no response half to carry (§3).
-            ContractEvent(topic=topic.id, message=dict(topic.request_schema), version=topic.version)
-            for topic in spec.produces
-        )
-        return cls(
-            service=spec.service,
-            version=version,
-            description=description,
-            requests=requests,
-            events=events,
-            message_endpoint=message_endpoint,
-            transports=tuple(transports),
-        )
+    @cached_property
+    def registration_hash(self) -> str:
+        """``registrationHash`` (§6.1): over ``requests``, ``events`` and ``sends``."""
+        return registration_hash(self._body())
 
     def to_payload(self) -> dict[str, Any]:
         """This document as Contract Document JSON (contract-document.md §1)."""
-        payload: dict[str, Any] = {
-            "openapi": CONTRACT_OPENAPI,
-            # REQUIRED, and a producer with no description/version writes empty strings rather than
-            # a missing object (§1) — absence would read as "this producer has no info to give".
-            "info": {
-                "title": self.service,
-                "description": self.description,
-                "version": self.version,
-            },
-        }
-        # OPTIONAL and absent when the service exposes no message endpoint: consumers feature-detect
-        # send capability on its presence and must never assume a default path (§1).
+        payload: dict[str, Any] = {"schemaDialect": SCHEMA_DIALECT, "service": self.service}
+        if self.service_version:
+            payload["serviceVersion"] = self.service_version
+        if self.version_scheme:
+            payload["versionScheme"] = self.version_scheme
+        if self.description:
+            payload["description"] = self.description
+        # Absent when there is no envelope endpoint: a consumer feature-detects send capability on
+        # its presence and never assumes a default path.
         if self.message_endpoint is not None:
             payload["messageEndpoint"] = self.message_endpoint
-        if self.transports:  # omitted when empty, never an empty array (§1)
+        if self.transports:  # omitted when empty
             payload["transports"] = list(self.transports)
-        # REQUIRED and always present, possibly empty — unlike the two above.
-        payload["requests"] = [entry.to_payload() for entry in self.requests]
-        payload["events"] = [entry.to_payload() for entry in self.events]
-        payload["components"] = {"schemas": dict(self.schemas)}
+        payload["contractHash"] = self.contract_hash
+        payload["registrationHash"] = self.registration_hash
+        payload.update(self._body())
         return payload
 
-
-#: A Contract Document, or a zero-arg callable returning one (re-derived per request).
-ContractSource = ContractDocument | Callable[[], "ContractDocument"]
-
-
-def is_reserved_topic(topic: str) -> bool:
-    """Whether ``topic`` is a reserved Benzene utility topic by its prefix (§5.1's second half)."""
-    return topic.startswith(RESERVED_TOPIC_PREFIX)
-
-
-def resolve_contract(source: ContractSource | None) -> ContractDocument | None:
-    """The document a :data:`ContractSource` denotes, calling it when it is a callable."""
-    if source is None:
-        return None
-    return source() if callable(source) else source
+    def _body(self) -> dict[str, Any]:
+        return {
+            "requests": [entry.to_payload() for entry in self.requests],
+            "events": [entry.to_payload() for entry in self.events],
+            "sends": [entry.to_payload() for entry in self.sends],
+            "components": {"schemas": dict(self.schemas)},
+        }
 
 
-def spec_interception(
-    spec: SpecSource | None = None,
-    *,
-    contract: ContractSource | None = None,
-    aliases: Iterable[str] = (),
-) -> Middleware:
-    """Middleware that answers ``benzene:spec`` (and any ``aliases``) on any transport.
+def select_spec_document(type: object = None, format: object = None) -> str | None:  # noqa: A002
+    """Why a ``benzene:spec`` request cannot be served, or ``None`` when it asks for this document.
 
-    The request is the optional ``{"type", "format"}`` of wire-contracts §7, and an absent, empty or
-    ``null`` body, or ``{}``, means ``benzene``/``json``: the **Contract Document**. ``contract`` (a
-    :class:`ContractDocument` or a callable returning one) is served verbatim when given — pass the
-    same source the HTTP surface serves for the identical document; otherwise the document is
-    projected from ``spec`` (:meth:`ContractDocument.from_spec`). ``{"type": "native"}`` answers this
-    port's own :class:`~benzene.core.ServiceSpec` payload, and any other type or format is answered
-    ``not-implemented`` — never a different document. Interception is by topic id, version ignored;
-    install it before the message router, exactly like health and mesh interception.
+    An absent or empty ``type``/``format`` means ``benzene``/``json``; values compare
+    case-insensitively. Anything else is answered ``not-implemented`` — never with a different
+    document (contract-document §7).
     """
-    if spec is None and contract is None:
-        raise ValueError(
-            "spec_interception() needs something to serve: pass a ServiceSpec (or a callable "
-            "returning one) as spec=, or a ContractDocument as contract=."
+    kind = str(type or "").strip().lower() or SPEC_TYPE_BENZENE
+    rendering = str(format or "").strip().lower() or SPEC_FORMAT_JSON
+    if kind != SPEC_TYPE_BENZENE:
+        return (
+            f"benzene:spec type {kind!r} is not implemented by this service; it serves "
+            f"{SPEC_TYPE_BENZENE!r} (the Contract Document)"
         )
+    if rendering != SPEC_FORMAT_JSON:
+        return (
+            f"benzene:spec format {rendering!r} is not implemented by this service; it renders "
+            f"{SPEC_FORMAT_JSON!r} only"
+        )
+    return None
+
+
+def spec_interception(document: ContractDocument, *, aliases: Sequence[str] = ()) -> Middleware:
+    """Middleware that answers ``benzene:spec`` (and any ``aliases``) with ``document``.
+
+    The request is the optional ``{"type", "format"}`` of contract-document §7: an absent body,
+    ``null`` or ``{}`` means ``benzene``/``json`` — the document, as ``ok``. An unsupported type or
+    format is answered ``not-implemented``. Interception is by topic id, version ignored.
+
+    Install it **after** any authentication middleware and before the message router, so the topic
+    runs the same pipeline as every other one — :func:`~benzene.core.application_from` does exactly
+    that for an :class:`~benzene.core.AppDefinition` declaring a :class:`ContractInfo`.
+    """
     topics = {SPEC_TOPIC, *aliases}
+    payload = document.to_payload()  # derived once: the document never changes while serving
 
     async def middleware(context: Context, next: Next) -> None:  # noqa: A002 - spec name
         if context.topic not in topics:
@@ -324,84 +377,49 @@ def spec_interception(
                 'benzene:spec takes an optional {"type": ..., "format": ...} object'
             )
             return
-        kind, unsupported = select_spec_document(request.get("type"), request.get("format"))
-        if unsupported is not None:
-            context.result = Result.not_implemented(unsupported)
-            return
-        if kind == SPEC_TYPE_NATIVE:
-            native = resolve_spec(spec)
-            context.result = (
-                Result.ok(native.to_payload())
-                if native is not None
-                else Result.not_implemented(
-                    "benzene:spec type 'native' needs a ServiceSpec: this service serves only "
-                    "its authored Contract Document"
-                )
-            )
-            return
-        document = resolve_contract(contract)
-        if document is None:
-            derived = resolve_spec(spec)
-            assert derived is not None  # one of the two was required above
-            document = ContractDocument.from_spec(derived)
-        context.result = Result.ok(document.to_payload())
+        unsupported = select_spec_document(request.get("type"), request.get("format"))
+        context.result = (
+            Result.not_implemented(unsupported) if unsupported is not None else Result.ok(payload)
+        )
         # Terminal for the reserved topic: it never reaches the router.
 
     return middleware
 
 
-def _event_of(item: Any, catalogue: _Catalogue) -> ContractEvent:
-    """One declared outbound topic as an ``events[]`` entry — a bare topic id carries no schema."""
-    if isinstance(item, str):
-        return ContractEvent(topic=item)
-    return ContractEvent(
-        topic=item.topic, message=catalogue.reference(item.request_type), version=item.version
+def derive_contract(
+    info: ContractInfo,
+    registry: SupportsDefinitions,
+    *,
+    outbound: OutboundRegistry | None = None,
+    router: Any = None,
+    standard_paths: Any = None,
+) -> ContractDocument:
+    """The composition root's one derivation: ``info`` plus everything the app declared.
+
+    ``router`` contributes each topic's ``httpMappings`` when it knows them
+    (:class:`SupportsHttpMappings`), and ``standard_paths`` the ``messageEndpoint``
+    (:class:`SupportsMessageEndpoint`) — both duck-typed, so this stays transport-free.
+    """
+    return ContractDocument.derive(
+        registry,
+        service=info.service,
+        service_version=info.service_version,
+        version_scheme=info.version_scheme,
+        description=info.description,
+        outbound=outbound,
+        message_endpoint=(
+            standard_paths.message_endpoint
+            if isinstance(standard_paths, SupportsMessageEndpoint)
+            else None
+        ),
+        transports=info.transports,
+        http_mappings=router.http_mappings() if isinstance(router, SupportsHttpMappings) else None,
     )
 
 
-class _Catalogue:
-    """Builds ``components.schemas`` while handing back a ``$ref`` (or an inline schema) per type.
+def is_reserved_topic(topic: str) -> bool:
+    """Whether ``topic`` is a reserved Benzene topic, by its ``benzene:`` prefix."""
+    return topic.startswith(RESERVED_TOPIC_PREFIX)
 
-    A type is catalogued once and referenced everywhere it appears, so two topics taking the same
-    payload agree on one named schema — which is the whole reason a generator can emit one type for
-    it. Two *different* types that happen to share a ``__name__`` (the same class name in two
-    modules) get distinct names, since a catalogue keyed by name would otherwise silently give one
-    of them the other's shape.
-    """
 
-    def __init__(self) -> None:
-        self.schemas: dict[str, Schema] = {}
-        self._names: dict[Any, str] = {}
-
-    def reference(self, py_type: Any) -> Schema:
-        derived = json_schema(py_type)
-        if not self._is_nameable(py_type, derived):
-            return derived  # inline: §2 takes a Schema Object here, $ref or not
-        name = self._names.get(py_type)
-        if name is None:
-            name = self._unique(getattr(py_type, "__name__", "Schema"))
-            self._names[py_type] = name
-            self.schemas[name] = derived
-        return {"$ref": SCHEMA_REF_PREFIX + name}
-
-    @staticmethod
-    def _is_nameable(py_type: Any, derived: Schema) -> bool:
-        """Only a declared object payload earns a catalogue entry.
-
-        A ``dict``-typed handler, a primitive, or an unknown type derives to a shape with no name
-        worth publishing — cataloguing it would fill ``components.schemas`` with entries no
-        generator can turn into a meaningful type.
-        """
-        return (
-            isinstance(py_type, type)
-            and dataclasses.is_dataclass(py_type)
-            and derived.get("type") == "object"
-        )
-
-    def _unique(self, name: str) -> str:
-        if name not in self.schemas:
-            return name
-        suffix = 2
-        while f"{name}{suffix}" in self.schemas:
-            suffix += 1
-        return f"{name}{suffix}"
+_reserved = is_reserved_topic

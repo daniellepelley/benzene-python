@@ -1,38 +1,41 @@
-"""The Contract Document a service derives and serves at ``/benzene/spec`` (profile R5).
+"""The Contract Document a service derives and serves (contract-document.md).
 
-``contract-document.md`` is the shape every language's client generator parses; this port used to
-serve its own ``{service, topics}`` payload there instead, which meant a .NET/Go/TypeScript
-generator pointed at a Python service could not read the response at all — and this port's own mesh
-tooling could not read a .NET service's.
-
-The cheapest check that the writer got the shape right is the reader this repo already ships:
-``benzene.codegen_client`` *parses* this format, so a document derived here is fed straight through
-it. Note what that does and does not prove — see ``test_the_fixtures_pin_the_reader_not_the_writer``.
+The conformance runner pins the derivation against the canonical types (``derivationCases``,
+``namingCases``, ``specTopicCases``); these tests cover what the fixtures leave to the port — its
+API (``register_event``/``register_send``, ``NoPayload``, ``@schema_name``), the Python types the
+fixtures do not name (enums, generics, ``datetime``, pydantic), and the presence rules of §1–§3 —
+and feed a derived document through the reader this repo ships, end to end into a generated client.
 """
 
 from __future__ import annotations
 
 import asyncio
+import datetime
+import enum
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any, Generic, TypeVar
 
-from benzene.codegen_client import (
-    compute_contract_hash,
-    generate_service_client,
-    parse_document,
-)
+import pytest
+from benzene.codegen_client import compute_contract_hash, generate_service_client, parse_document
 from benzene.core import (
-    BenzeneMessageApplication,
+    AppDefinition,
+    ComponentNameCollisionError,
     ContractDocument,
+    ContractInfo,
+    DuplicateOutboundRegistrationError,
     HttpMapping,
+    NoPayload,
+    OutboundRegistry,
     Registry,
-    ServiceSpec,
+    application_from,
+    contract_hash,
     message,
+    registration_hash,
+    schema_name,
 )
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths, http_endpoint
 from benzene.results import Result
-
-from .conformance_runner import CONFORMANCE_DIR
 
 
 @dataclass
@@ -47,6 +50,17 @@ class OrderDto:
     sku: str
 
 
+@dataclass
+class OrderPlaced:
+    order_id: str
+
+
+@dataclass
+class TakePayment:
+    order_id: str
+    amount: float
+
+
 @message("orders:place", response_type=OrderDto)
 @http_endpoint("POST", "/orders")
 async def place(request: PlaceOrder) -> Result:
@@ -58,20 +72,372 @@ async def list_orders(request: dict) -> Result:
     return Result.ok([])
 
 
+async def handle(_request: Any) -> Result:
+    return Result.ok()
+
+
 def _router() -> HttpRouter:
     return HttpRouter().add(place).register("GET", "/orders", "orders:list", list_orders)
 
 
-def _app(**standard: object) -> BenzeneHttpApp:
-    router = _router()
-    registry = Registry.from_definitions(router)
-    return BenzeneHttpApp(
-        router,
-        application=BenzeneMessageApplication(registry),
-        standard_paths=StandardPaths(
-            spec=ServiceSpec.derive(registry, service="orders", produces=("order:placed",)),
-            **standard,  # type: ignore[arg-type]
-        ),
+def _outbound() -> OutboundRegistry:
+    return (
+        OutboundRegistry()
+        .register_event("order:placed", OrderPlaced)
+        .register_send("payment:take", TakePayment)
+    )
+
+
+def _derive(registry: Registry, **kwargs: Any) -> dict[str, Any]:
+    return ContractDocument.derive(registry, service="orders", **kwargs).to_payload()
+
+
+# --- §1: the top level -----------------------------------------------------------------------------
+
+
+def test_the_registry_and_outbound_declarations_project_into_one_document() -> None:
+    document = ContractDocument.derive(
+        Registry.from_definitions(_router()),
+        service="orders",
+        service_version="1.4.2",
+        version_scheme="semver",
+        description="Order intake",
+        message_endpoint="/benzene/invoke",
+        transports=("http", "sqs"),
+        outbound=_outbound(),
+        http_mappings={("orders:place", ""): [HttpMapping("POST", "/orders")]},
+    ).to_payload()
+
+    assert list(document)[:9] == [
+        "schemaDialect",
+        "service",
+        "serviceVersion",
+        "versionScheme",
+        "description",
+        "messageEndpoint",
+        "transports",
+        "contractHash",
+        "registrationHash",
+    ]
+    assert document["schemaDialect"] == "openapi-3.0"
+    assert "openapi" not in document and "info" not in document and "tags" not in document
+    assert [r["topic"] for r in document["requests"]] == ["orders:list", "orders:place"]
+    assert [e["topic"] for e in document["events"]] == ["order:placed"]
+    assert [s["topic"] for s in document["sends"]] == ["payment:take"]
+
+    placed = next(r for r in document["requests"] if r["topic"] == "orders:place")
+    assert placed["httpMappings"] == [{"method": "POST", "path": "/orders"}]
+    assert placed["request"] == {"$ref": "#/components/schemas/PlaceOrder"}
+    assert placed["response"] == {"$ref": "#/components/schemas/OrderDto"}
+    schemas = document["components"]["schemas"]
+    assert schemas["PlaceOrder"] == {
+        "type": "object",
+        "properties": {"sku": {"type": "string"}, "quantity": {"type": "integer"}},
+        "required": ["sku"],  # quantity has a default
+    }
+    assert "additionalProperties" not in schemas["PlaceOrder"]  # records carry none (§4.2)
+    # No synthesized examples: only an author-supplied one would be written (§2).
+    assert all("example" not in entry for entry in document["requests"])
+
+
+def test_both_hashes_are_always_present_and_computed_over_the_document() -> None:
+    document = _derive(Registry.from_definitions(_router()), outbound=_outbound())
+    assert document["contractHash"] == contract_hash(document)
+    assert document["registrationHash"] == registration_hash(document)
+    # A send is a dependency, not something a client of this service observes: it moves only the
+    # registration hash.
+    without_sends = _derive(
+        Registry.from_definitions(_router()),
+        outbound=OutboundRegistry().register_event("order:placed", OrderPlaced),
+    )
+    assert without_sends["contractHash"] == document["contractHash"]
+    assert without_sends["registrationHash"] != document["registrationHash"]
+
+
+def test_presence_rules_are_the_specs_and_not_the_convenient_ones() -> None:
+    document = _derive(Registry())
+    # serviceVersion, versionScheme, description, messageEndpoint, transports: absent, never empty.
+    for absent in ("serviceVersion", "versionScheme", "description", "messageEndpoint", "transports"):
+        assert absent not in document
+    # requests/events/sends/components: REQUIRED, always present, possibly empty.
+    assert document["requests"] == [] and document["events"] == [] and document["sends"] == []
+    assert document["components"] == {"schemas": {}}
+
+
+def test_a_service_name_is_required_and_a_version_scheme_must_be_known() -> None:
+    with pytest.raises(ValueError, match="service name"):
+        ContractDocument.derive(Registry(), service="")
+    with pytest.raises(ValueError, match="version_scheme"):
+        ContractDocument.derive(Registry(), service="orders", version_scheme="calver")
+
+
+def test_an_unversioned_entry_omits_version_entirely() -> None:
+    document = _derive(Registry().register("orders:place", place, version="v2"))
+    assert document["requests"][0]["version"] == "v2"
+    unversioned = _derive(Registry.from_definitions(_router()))
+    # A producer MUST NOT write "version": "" (§2).
+    assert all("version" not in entry for entry in unversioned["requests"])
+
+
+def test_benzene_topics_are_never_listed() -> None:
+    registry = Registry.from_definitions(_router()).register("benzene:ping", list_orders)
+    outbound = OutboundRegistry().register_send("benzene:mesh:register", OrderPlaced)
+    document = _derive(registry, outbound=outbound)
+    assert "benzene:ping" not in {r["topic"] for r in document["requests"]}
+    assert document["sends"] == []
+    assert all("reserved" not in entry for entry in document["requests"])
+
+
+# --- §2/§3: response presence, events and sends ------------------------------------------------------
+
+
+def test_response_absent_means_no_payload_and_empty_means_any() -> None:
+    registry = (
+        Registry()
+        .register("orders:cancel", handle, request_type=PlaceOrder, response_type=NoPayload)
+        .register("orders:raw", handle, request_type=PlaceOrder)
+    )
+    entries = {r["topic"]: r for r in _derive(registry)["requests"]}
+    assert "response" not in entries["orders:cancel"]  # declared: returns no payload
+    assert entries["orders:raw"]["response"] == {}  # undeclared: a payload of any shape
+
+
+def test_a_send_without_a_response_type_is_one_way() -> None:
+    outbound = (
+        OutboundRegistry()
+        .register_send("payment:take", TakePayment)
+        .register_send("inventory:reserve", PlaceOrder, OrderDto, version="v2")
+    )
+    sends = {s["topic"]: s for s in _derive(Registry(), outbound=outbound)["sends"]}
+    assert "response" not in sends["payment:take"]
+    assert sends["inventory:reserve"]["response"] == {"$ref": "#/components/schemas/OrderDto"}
+    assert sends["inventory:reserve"]["version"] == "v2"
+
+
+def test_a_topic_version_in_both_events_and_sends_is_a_start_up_error() -> None:
+    outbound = OutboundRegistry().register_event("order:placed", OrderPlaced)
+    with pytest.raises(DuplicateOutboundRegistrationError, match="both an event and a send"):
+        outbound.register_send("order:placed", OrderPlaced)
+    with pytest.raises(DuplicateOutboundRegistrationError, match="already declared as an event"):
+        outbound.register_event("order:placed", OrderPlaced)
+    # A distinct version is a distinct declaration.
+    outbound.register_send("order:placed", OrderPlaced, version="v2")
+
+
+def test_a_kind_less_register_says_which_kinds_exist() -> None:
+    with pytest.raises(TypeError, match="register_event.*register_send"):
+        OutboundRegistry().register("payment:take")
+
+
+# --- §4: derivation and naming -----------------------------------------------------------------------
+
+
+class Colour(str, enum.Enum):
+    RED = "red"
+    BLUE = "blue"
+
+
+class Priority(enum.IntEnum):
+    LOW = 1
+    HIGH = 2
+
+
+class Opaque(enum.Enum):  # no str/int mixin: json.dumps cannot marshal it
+    A = object()
+
+
+T = TypeVar("T")
+
+
+@dataclass
+class Page(Generic[T]):
+    items: list[T]
+    next_cursor: str | None
+
+
+@dataclass
+class Everything:
+    when: datetime.datetime
+    blob: bytes
+    colour: Colour
+    maybe_colour: Colour | None
+    priority: Priority
+    opaque: Opaque
+    anything: Any
+    either: int | str
+    page: Page[OrderDto]
+    labels: dict[str, list[int]] = field(default_factory=dict)
+
+
+def test_the_derivation_table_through_pythons_types() -> None:
+    document = _derive(Registry().register("things:do", handle, request_type=Everything))
+    schemas = document["components"]["schemas"]
+    properties = schemas["Everything"]["properties"]
+    assert properties["when"] == {"type": "string", "format": "date-time"}
+    assert properties["blob"] == {"type": "string", "format": "byte"}
+    # A str/int enum is a named type: hoisted, with its values; nullable, it takes the wrapper.
+    assert properties["colour"] == {"$ref": "#/components/schemas/Colour"}
+    assert schemas["Colour"] == {"type": "string", "enum": ["red", "blue"]}
+    assert properties["maybeColour"] == {
+        "type": "string",
+        "nullable": True,
+        "allOf": [{"$ref": "#/components/schemas/Colour"}],
+    }
+    assert schemas["Priority"] == {"type": "integer", "enum": [1, 2]}
+    # What the marshaler cannot serialize, or cannot describe in one schema, is {}.
+    assert properties["opaque"] == {} and properties["anything"] == {} and properties["either"] == {}
+    # A generic instance is named with its type arguments first, and its parameters bound.
+    assert properties["page"] == {"$ref": "#/components/schemas/OrderDtoPage"}
+    assert schemas["OrderDtoPage"]["properties"]["items"] == {
+        "type": "array",
+        "items": {"$ref": "#/components/schemas/OrderDto"},
+    }
+    assert schemas["OrderDtoPage"]["properties"]["nextCursor"] == {
+        "type": "string",
+        "nullable": True,
+    }
+    assert properties["labels"] == {
+        "type": "object",
+        "additionalProperties": {"type": "array", "items": {"type": "integer"}},
+    }
+    assert "labels" not in schemas["Everything"]["required"]  # it has a default
+
+
+def _item(module: str, field_name: str) -> type:
+    from dataclasses import make_dataclass
+
+    cls = make_dataclass("Item", [(field_name, str)])
+    cls.__module__ = module
+    return cls
+
+
+def test_a_name_collision_fails_naming_both_types_the_topics_and_the_remedy() -> None:
+    registry = (
+        Registry()
+        .register("orders:item", handle, request_type=_item("orders", "sku"))
+        .register("payments:item", handle, request_type=_item("payments", "payment_id"))
+    )
+    with pytest.raises(ComponentNameCollisionError) as raised:
+        _derive(registry)
+    error = raised.value
+    assert error.name == "Item"
+    assert error.types == ("orders.Item", "payments.Item")
+    assert error.topics == ("orders:item", "payments:item")
+    assert "@schema_name" in str(error)
+
+
+def test_the_collision_is_independent_of_registration_order() -> None:
+    orders, payments = _item("orders", "sku"), _item("payments", "payment_id")
+    first = Registry().register("a:1", handle, request_type=orders).register("b:1", handle, request_type=payments)
+    second = Registry().register("b:1", handle, request_type=payments).register("a:1", handle, request_type=orders)
+    errors = []
+    for registry in (first, second):
+        with pytest.raises(ComponentNameCollisionError) as raised:
+            _derive(registry)
+        errors.append(str(raised.value))
+    assert errors[0] == errors[1]
+
+
+def test_a_declared_schema_name_resolves_a_collision() -> None:
+    registry = (
+        Registry()
+        .register("orders:item", handle, request_type=schema_name("OrderItem")(_item("orders", "sku")))
+        .register("payments:item", handle, request_type=schema_name("PaymentItem")(_item("payments", "id")))
+    )
+    assert set(_derive(registry)["components"]["schemas"]) == {"OrderItem", "PaymentItem"}
+
+
+def test_two_identical_schemas_may_share_one_name() -> None:
+    registry = (
+        Registry()
+        .register("a:item", handle, request_type=_item("a", "sku"))
+        .register("b:item", handle, request_type=_item("b", "sku"))
+    )
+    document = _derive(registry)
+    assert set(document["components"]["schemas"]) == {"Item"}
+
+
+def test_a_declared_name_is_not_inherited_and_invalid_characters_are_dropped() -> None:
+    @schema_name("Base")
+    @dataclass
+    class Parent:
+        a: str
+
+    @dataclass
+    class Child(Parent):
+        b: str = ""
+
+    Weird = type("Wéird<Name>", (), {})
+    Weird = dataclass(Weird)
+    registry = (
+        Registry()
+        .register("p:1", handle, request_type=Parent)
+        .register("c:1", handle, request_type=Child)
+        .register("w:1", handle, request_type=Weird)
+    )
+    assert set(_derive(registry)["components"]["schemas"]) == {"Base", "Child", "WirdName"}
+    with pytest.raises(ValueError):
+        schema_name("<>")
+
+
+def test_the_collision_fails_at_the_composition_root_before_any_message() -> None:
+    registry = (
+        Registry()
+        .register("orders:item", handle, request_type=_item("orders", "sku"))
+        .register("payments:item", handle, request_type=_item("payments", "id"))
+    )
+    with pytest.raises(ComponentNameCollisionError):
+        application_from(AppDefinition(registry=registry, contract=ContractInfo("shop")))
+
+
+def test_a_pydantic_model_derives_to_the_open_schema() -> None:
+    # Recorded gap (self-description-design Q11, deferred): this derivation reads dataclasses, so a
+    # pydantic payload publishes {} until a pydantic schema source lands.
+    base_model: Any = pytest.importorskip("pydantic").BaseModel
+
+    class Model(base_model):
+        name: str
+
+    document = _derive(Registry().register("m:1", handle, request_type=Model))
+    assert document["requests"][0]["request"] == {}
+
+
+# --- the reader this repo ships is the writer's cheapest end-to-end check ----------------------------
+
+
+def test_the_derived_document_parses_and_generates_a_client() -> None:
+    raw = _derive(
+        Registry.from_definitions(_router()),
+        message_endpoint="/benzene/invoke",
+        outbound=_outbound(),
+        transports=("http", "sqs"),
+        http_mappings={("orders:place", ""): [HttpMapping("POST", "/orders")]},
+    )
+    parsed = parse_document(raw)
+    assert parsed.topics() == ("orders:list", "orders:place")
+    assert parsed.message_endpoint == "/benzene/invoke"
+    assert parsed.transports == ("http", "sqs")
+    assert [s.topic for s in parsed.sends] == ["payment:take"]
+    assert set(parsed.schemas) == {"PlaceOrder", "OrderDto", "OrderPlaced", "TakePayment"}
+
+    generated = generate_service_client(parsed, service_name="Orders")
+    assert generated.required_topics == ("orders:list", "orders:place")
+    assert "class PlaceOrder" in generated.source
+    # A default client embeds the served contractHash: the drift check compares exactly these.
+    assert generated.contract_hash == raw["contractHash"] == compute_contract_hash(raw)
+
+
+# --- the served surface ----------------------------------------------------------------------------
+
+
+def _app(**contract: Any) -> BenzeneHttpApp:
+    return BenzeneHttpApp.from_definition(
+        AppDefinition(
+            router=_router(),
+            standard_paths=StandardPaths(),
+            outbound=_outbound(),
+            contract=ContractInfo("orders", **contract),
+        )
     )
 
 
@@ -81,217 +447,27 @@ def _get(app: BenzeneHttpApp, query: str = "") -> dict:
     return json.loads(response.body)
 
 
-# --- the projection (contract-document.md §§1-3) --------------------------------------------------
+def test_the_topic_and_the_route_serve_the_identical_document() -> None:
+    app = _app(transports=("http", "sqs"))
+    over_http = _get(app)
+    envelope = {"topic": "benzene:spec", "headers": {}, "body": ""}
+    via_invoke = asyncio.run(app.handle("POST", "/benzene/invoke", body=json.dumps(envelope)))
+    assert json.loads(json.loads(via_invoke.body)["body"]) == over_http
+    assert over_http["transports"] == ["http", "sqs"]
+    assert over_http["messageEndpoint"] == "/benzene/invoke"
 
 
-def test_the_registry_projects_into_a_contract_document() -> None:
-    document = ContractDocument.derive(
-        Registry.from_definitions(_router()),
-        service="orders",
-        version="1.0.0",
-        message_endpoint="/benzene/invoke",
-        produces=("order:placed",),
-        http_mappings={("orders:place", ""): [HttpMapping("POST", "/orders")]},
-    ).to_payload()
-
-    assert document["openapi"] == "3.0.1"
-    assert document["info"] == {"title": "orders", "description": "", "version": "1.0.0"}
-    assert document["messageEndpoint"] == "/benzene/invoke"
-    assert [r["topic"] for r in document["requests"]] == ["orders:list", "orders:place"]
-    assert [e["topic"] for e in document["events"]] == ["order:placed"]
-
-    placed = next(r for r in document["requests"] if r["topic"] == "orders:place")
-    assert placed["httpMappings"] == [{"method": "POST", "path": "/orders"}]
-    # A declared dataclass payload is named once in the catalogue and referenced by $ref, so a
-    # generator can emit one named type per payload rather than one anonymous type per topic.
-    assert placed["request"] == {"$ref": "#/components/schemas/PlaceOrder"}
-    assert placed["response"] == {"$ref": "#/components/schemas/OrderDto"}
-    schemas = document["components"]["schemas"]
-    assert schemas["PlaceOrder"]["properties"]["sku"] == {"type": "string"}
-    assert schemas["PlaceOrder"]["required"] == ["sku"]  # quantity has a default
-
-
-def test_an_untyped_handler_writes_its_schema_inline_rather_than_naming_nothing() -> None:
-    document = ContractDocument.derive(
-        Registry.from_definitions(_router()), service="orders"
-    ).to_payload()
-    listing = next(r for r in document["requests"] if r["topic"] == "orders:list")
-    # §2 takes a Schema Object inline or by $ref; a `dict`-typed handler has no name worth
-    # publishing, and cataloguing it would fill components.schemas with entries meaning nothing.
-    assert listing["request"] == {} and listing["response"] == {}
-    assert "dict" not in document["components"]["schemas"]
-
-
-def test_presence_rules_are_the_specs_and_not_the_convenient_ones() -> None:
-    document = ContractDocument.derive(Registry(), service="").to_payload()
-    # transports: OPTIONAL, omitted when empty — never an empty array (§1).
-    assert "transports" not in document
-    # messageEndpoint: absent when the service exposes none — consumers feature-detect on it (§1).
-    assert "messageEndpoint" not in document
-    # info: REQUIRED; a producer with neither title nor version writes empty strings (§1).
-    assert document["info"] == {"title": "", "description": "", "version": ""}
-    # requests/events/components: REQUIRED, always present, possibly empty.
-    assert document["requests"] == [] and document["events"] == []
-    assert document["components"] == {"schemas": {}}
-
-
-def test_an_unversioned_entry_omits_version_entirely() -> None:
-    registry = Registry().register("orders:place", place, version="v2")
-    document = ContractDocument.derive(registry, service="orders").to_payload()
-    assert document["requests"][0]["version"] == "v2"
-
-    unversioned = ContractDocument.derive(
-        Registry.from_definitions(_router()), service="orders"
-    ).to_payload()
-    # Absent and empty are not the same thing (§2): a producer MUST NOT write "version": "".
-    assert all("version" not in entry for entry in unversioned["requests"])
-
-
-def test_a_reserved_topic_carries_the_flag_and_a_domain_topic_carries_nothing() -> None:
-    registry = Registry.from_definitions(_router()).register("benzene:ping", list_orders)
-    document = ContractDocument.derive(registry, service="orders").to_payload()
-    entries = {r["topic"]: r for r in document["requests"]}
-    assert entries["benzene:ping"]["reserved"] is True
-    # Never written as false — its absence also means not-reserved (§2).
-    assert "reserved" not in entries["orders:place"]
-
-
-# --- the reader this repo already ships is the writer's cheapest check ----------------------------
-
-
-def test_the_derived_document_parses_with_this_repos_own_contract_document_reader() -> None:
-    raw = ContractDocument.derive(
-        Registry.from_definitions(_router()),
-        service="orders",
-        message_endpoint="/benzene/invoke",
-        produces=("order:placed",),
-        transports=("http", "sqs"),
-        http_mappings={("orders:place", ""): [HttpMapping("POST", "/orders")]},
-    ).to_payload()
-
-    parsed = parse_document(raw)
-    assert parsed.topics() == ("orders:list", "orders:place")
-    assert parsed.message_endpoint == "/benzene/invoke"
-    assert parsed.transports == ("http", "sqs")
-    assert set(parsed.schemas) == {"PlaceOrder", "OrderDto"}
-    placed = parsed.find_request("orders:place")
-    assert placed is not None
-    assert placed.http_mappings[0].method == "POST"
-    assert not placed.is_reserved()
-
-    # And the whole point of the format: a client generator can consume it end to end.
-    generated = generate_service_client(parsed, service_name="Orders")
-    assert generated.required_topics == ("orders:list", "orders:place")
-    assert "PlaceOrder" in generated.source  # the named catalogue becomes a named generated type
-    assert generated.contract_hash.startswith("sha256:")
-    assert generated.contract_hash == compute_contract_hash(raw, topic_scoped=False)
-
-
-def test_the_fixtures_pin_the_reader_not_the_writer() -> None:
-    """What ``conformance/contract-*-cases.json`` actually pins, stated so nobody overclaims it.
-
-    Every case in both files starts from an **input document** and asserts what a consumer must make
-    of it — parse/validate cases, topic-scope projections, schema closures, exact hash values. None
-    starts from a producer's input: there is no fixture saying "a registry shaped like this must emit
-    that document", so this port's projection is checked only against the format's own presence
-    rules (§1-§3, the tests above) and by surviving a conformant reader (the test above this one).
-
-    This asserts that reading of the fixtures rather than describing it, so a re-vendor that *does*
-    add producer-side cases fails here instead of quietly leaving them unimplemented.
-    """
-    document_cases = json.loads((CONFORMANCE_DIR / "contract-document-cases.json").read_text())
-    hash_cases = json.loads((CONFORMANCE_DIR / "contract-hash-cases.json").read_text())
-
-    groups = ["parseCases", "topicScopeCases", "schemaClosureCases"]
-    assert [group for group in document_cases if isinstance(document_cases[group], list)] == groups
-    for group in groups:
-        assert all("documentRef" in case for case in document_cases[group])
-    assert all("document" in case for case in hash_cases["cases"])
-
-
-# --- the served surface (R5, the ?type= switch) ---------------------------------------------------
-
-
-def test_benzene_spec_serves_the_contract_document_by_default() -> None:
-    document = _get(_app())
-    assert document["openapi"] == "3.0.1"
-    assert document["info"]["title"] == "orders"
-    assert {r["topic"] for r in document["requests"]} == {"orders:place", "orders:list"}
-    assert [e["topic"] for e in document["events"]] == ["order:placed"]
-    # The host folds in what only it knows: its message endpoint and each topic's routes.
-    assert document["messageEndpoint"] == "/benzene/invoke"
-    placed = next(r for r in document["requests"] if r["topic"] == "orders:place")
-    assert placed["httpMappings"] == [{"method": "POST", "path": "/orders"}]
-    assert placed["request"]["properties"]["sku"] == {"type": "string"}  # inline, from the spec
-
-
-def test_the_native_shape_stays_reachable_under_type_native() -> None:
-    document = _get(_app(), "type=native")
-    assert document["service"] == "orders"
-    assert {t["id"] for t in document["topics"]} == {"orders:place", "orders:list"}
-    assert [t["id"] for t in document["produces"]] == ["order:placed"]
+def test_the_message_endpoint_is_absent_when_invoke_is_off() -> None:
+    app = BenzeneHttpApp.from_definition(
+        AppDefinition(
+            router=_router(), standard_paths=StandardPaths(invoke=False), contract=ContractInfo("orders")
+        )
+    )
+    assert "messageEndpoint" not in _get(app)
 
 
 def test_an_unsupported_type_or_format_is_not_implemented() -> None:
-    # The R5 spelling is ?type=benzene&format=json. Anything this port does not render is answered
-    # not-implemented, never with a different document under a name that does not describe it
-    # (wire-contracts §7) - a caller asking for AsyncAPI must not be handed a Contract Document.
-    assert _get(_app(), "type=benzene&format=json")["openapi"] == "3.0.1"
-    assert _get(_app(), "type=Benzene")["openapi"] == "3.0.1"  # compared case-insensitively
-    for query in ("type=asyncapi", "format=yaml", "type=benzene&format=yaml"):
+    for query in ("type=asyncapi", "type=native", "format=yaml", "type=benzene&format=yaml"):
         response = asyncio.run(_app().handle("GET", "/benzene/spec", query))
         assert response.status_code == 501, query
-        problem = json.loads(response.body)
-        assert problem["benzeneStatus"] == "not-implemented"
-
-
-def test_declared_transports_reach_the_served_document() -> None:
-    assert _get(_app(transports=("http", "sqs")))["transports"] == ["http", "sqs"]
-    assert "transports" not in _get(_app())
-
-
-def test_an_authored_contract_document_is_served_verbatim() -> None:
-    # ContractDocument.derive sees the handlers' declared types, so an authored document is how a
-    # service gets named component schemas rather than inline ones.
-    router = _router()
-    registry = Registry.from_definitions(router)
-    app = BenzeneHttpApp(
-        router,
-        application=BenzeneMessageApplication(registry),
-        standard_paths=StandardPaths(
-            spec=ServiceSpec.derive(registry, service="orders"),
-            contract=ContractDocument.derive(
-                registry, service="orders", message_endpoint="/benzene/invoke"
-            ),
-        ),
-    )
-    document = _get(app)
-    assert set(document["components"]["schemas"]) == {"PlaceOrder", "OrderDto"}
-    # …and ?type=native still answers the native payload alongside it.
-    assert _get(app, "type=native")["service"] == "orders"
-
-
-def test_the_spec_surface_stays_off_when_no_source_is_wired() -> None:
-    router = _router()
-    app = BenzeneHttpApp(
-        router,
-        application=BenzeneMessageApplication(Registry.from_definitions(router)),
-        standard_paths=StandardPaths(),
-    )
-    assert asyncio.run(app.handle("GET", "/benzene/spec")).status_code == 404
-
-
-def test_an_authored_contract_alone_enables_the_surface() -> None:
-    # `contract` without `spec` is a service that only serves R5's document; the surface must come up
-    # for it rather than 404-ing because the older `spec` source happened to be the enabling switch.
-    router = _router()
-    registry = Registry.from_definitions(router)
-    app = BenzeneHttpApp(
-        router,
-        application=BenzeneMessageApplication(registry),
-        standard_paths=StandardPaths(contract=ContractDocument.derive(registry, service="orders")),
-    )
-    assert _get(app)["info"]["title"] == "orders"
-    # …and ?type=native is honestly answered "not implemented here" rather than quietly given the
-    # other document under a name that does not describe it.
-    assert asyncio.run(app.handle("GET", "/benzene/spec", "type=native")).status_code == 501
+        assert json.loads(response.body)["benzeneStatus"] == "not-implemented"

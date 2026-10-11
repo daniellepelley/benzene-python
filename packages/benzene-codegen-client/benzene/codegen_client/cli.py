@@ -3,8 +3,8 @@
     benzene-codegen service --spec payments.spec.json --service Payments --out payments_client.py
     benzene-codegen topic   --spec payments.spec.json --topic payments:capture --out payments_capture_client.py
 
-Exits non-zero on an unknown flag (argparse's own behaviour), an unknown topic (§5.2 fail-loud), or
-an unparseable Contract Document.
+Exits non-zero on an unknown flag (argparse's own behaviour), an unknown topic (§5.2 fail-loud), an
+unparseable Contract Document, or one whose ``schemaDialect`` this generator does not know (§1).
 
 **Registration/wiring (parity checklist row 9):** this port has no DI-container convention the way
 .NET's ``Add{Service}ServiceClient()`` extension has one to hook into (``dependencies.py`` is a
@@ -25,11 +25,10 @@ from pathlib import Path
 from .document import ContractDocument, ContractDocumentError, parse_document
 from .generator import (
     GeneratedClient,
-    TopicNotFoundError,
     generate_service_client,
     generate_topic_client,
 )
-from .topic_scope import UnknownTopicsError
+from .topic_scope import TopicNotFoundError, UnknownTopicsError
 
 
 def _load_document(spec_path: str) -> ContractDocument:
@@ -66,7 +65,6 @@ def _cmd_service(args: argparse.Namespace) -> int:
             document,
             service_name=args.service,
             topics=topics,
-            include_reserved=args.include_reserved,
         )
     except UnknownTopicsError as exc:
         print(f"benzene-codegen: {exc}", file=sys.stderr)
@@ -96,8 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     service = subparsers.add_parser("service", help="Generate a service-level client (one class, one method per topic).")
     service.add_argument("--spec", required=True, help="Path to the Contract Document (.spec.json).")
     service.add_argument("--service", required=True, help="Service name, used exactly for the client class name.")
-    service.add_argument("--topics", default=None, help="Comma-separated topic include-list (default: every domain topic).")
-    service.add_argument("--include-reserved", action="store_true", help="Include reserved benzene:* topics in the default scope.")
+    service.add_argument("--topics", default=None, help="Comma-separated topic include-list (default: every topic in the document).")
     service.add_argument("--out", default=None, help="Output file path (default: stdout).")
     service.set_defaults(func=_cmd_service)
 

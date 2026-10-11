@@ -23,11 +23,7 @@ import contextlib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from benzene.core import (
-    BenzeneMessageApplication,
-    HealthChecks,
-    ServiceSpec,
-)
+from benzene.core import AppDefinition, ContractInfo, HealthChecks
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
 from benzene.mesh import (
     HEARTBEAT_TOPIC,
@@ -84,12 +80,13 @@ def build_mesh_host(
     poller = MeshPoller(collector, sources)
     # The host is itself a profile-conformant service: /benzene/health reports the collector is up and
     # /benzene/spec describes the mesh API — so the ALB health check and any peer can see it.
-    standard = StandardPaths(
-        health=HealthChecks().add("collector", lambda: True),
-        spec=ServiceSpec.derive(registry, service="benzene-mesh-host"),
-    )
-    app = BenzeneHttpApp(
-        router, application=BenzeneMessageApplication(registry), standard_paths=standard
+    app = BenzeneHttpApp.from_definition(
+        AppDefinition(
+            registry=registry,
+            router=router,
+            standard_paths=StandardPaths(health=HealthChecks().add("collector", lambda: True)),
+            contract=ContractInfo("benzene-mesh-host"),
+        )
     )
     return MeshHost(app=app, collector=collector, poller=poller)
 

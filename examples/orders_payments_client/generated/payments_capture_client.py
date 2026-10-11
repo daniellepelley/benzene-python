@@ -28,7 +28,7 @@ class PaymentDto:
 
 REQUIRED_TOPICS: tuple[str, ...] = ('payments:capture',)
 
-CONTRACT_HASH = 'sha256:1520b2c06e9f4095f5cd993cd2a4f5ffe3b71dc0ce64f60d5e895cb269934584'
+CONTRACT_HASH = 'sha256:c4e418ca398cedf7da425d7b27eac893bae2225dd22b952c6265fb72f3829031'
 
 class PaymentsCaptureClient:
     """Self-contained client for topic 'payments:capture' only."""

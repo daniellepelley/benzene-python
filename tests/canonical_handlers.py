@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from benzene.core import Handler, Registry, message
-from benzene.mesh import OutboundRegistry
+from benzene.core import Handler, OutboundRegistry, Registry, message
 from benzene.results import BenzeneError, ProblemDetails, Result, Status, is_successful
 
 
@@ -132,8 +131,71 @@ async def panic(request: dict) -> Result:
 
 
 @dataclass
-class LogRequest:
+class LogEntry:
     message: str  # required — no default
+
+
+# --- the canonical payload types of the contract-document cases (conformance/README.md) ----------
+#
+# Every property is always emitted, so every property is required: a nullable field has no default
+# and is dumped as None. GreetRequest and GreetResponse above are the canonical ones too.
+
+
+@dataclass
+class Greeted:
+    greeting: str
+
+
+@dataclass
+class LookupRequest:
+    key: str
+
+
+@dataclass
+class LookupResponse:
+    value: str
+
+
+@dataclass
+class ShapesChild:
+    name: str
+
+
+@dataclass
+class ShapesRequest:
+    count: int
+    ratio: float
+    active: bool
+    tags: list[str]
+    labels: dict[str, str]
+    note: str | None
+    child: ShapesChild
+    nullable_child: ShapesChild | None  # wire name nullableChild
+
+
+@dataclass
+class TreeNode:
+    name: str
+    parent: TreeNode | None
+    children: list[TreeNode]
+
+
+#: The canonical payload types by their fixed names (conformance/README.md "Canonical payload
+#: types"). The class names already are those names, so no declared name is needed.
+CANONICAL_PAYLOAD_TYPES: dict[str, type] = {
+    cls.__name__: cls
+    for cls in (
+        GreetRequest,
+        GreetResponse,
+        Greeted,
+        LogEntry,
+        LookupRequest,
+        LookupResponse,
+        ShapesRequest,
+        ShapesChild,
+        TreeNode,
+    )
+}
 
 
 def register_canonical(registry: Registry) -> Registry:
@@ -142,9 +204,9 @@ def register_canonical(registry: Registry) -> Registry:
 
 
 def register_canonical_outbound(outbound: OutboundRegistry) -> OutboundRegistry:
-    """Register the one canonical outbound topic (``conformance:log``, no handler anywhere) —
-    what ``ServiceDescriptor.produces`` derives from in the descriptor fixture (mesh.md §2.3)."""
-    return outbound.register("conformance:log", request_type=LogRequest)
+    """Register the descriptor fixture's one outbound topic: the one-way send ``conformance:log``
+    (no handler anywhere) — what ``ServiceDescriptor.produces`` derives from (mesh.md §2.3)."""
+    return outbound.register_send("conformance:log", LogEntry)
 
 
 def register_canonical_with_problem(registry: Registry) -> Registry:

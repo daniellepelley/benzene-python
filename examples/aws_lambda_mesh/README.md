@@ -26,7 +26,8 @@ Both dogfood the same transport-agnostic `benzene.mesh` core (`MeshPoller`, `Mes
 Each of the six services is **one Lambda**, tagged `benzene=true` for discovery, and:
 
 - answers a **direct Lambda invoke** on the two reserved topics the mesh interrogates —
-  `benzene:mesh` (the derived `ServiceDescriptor`, via `benzene.mesh.mesh_interception`) and
+  `benzene:spec` (its Contract Document, derived at the composition root from the handlers and the
+  event/send declarations in `service/domain.py`'s `SERVICE_EVENTS`/`SERVICE_SENDS`) and
   `benzene:healthcheck` (the health aggregate, via `benzene.core.health_interception`) — the AWS
   analogue of TS's `useSpec`/`useHealthCheck` reserved topics and .NET's `spec`/`healthcheck` invoke
   handling. No HTTP round trip needed for interrogation;
@@ -52,7 +53,7 @@ interrogate → drain → publish:
   paginated, filtered by the `benzene` tag);
 - **interrogate** — one `benzene.mesh.CallableServiceSource` per discovered function
   (`mesh/discovery_service.py`'s `lambda_service_source`), backed by `benzene.aws.LambdaMessageSender`
-  invoking `benzene:mesh` and `benzene:healthcheck` on each — fed into a real
+  invoking `benzene:spec` and `benzene:healthcheck` on each — fed into a real
   `benzene.mesh.MeshPoller`/`MeshCollector`, the same transport-agnostic core every Benzene mesh uses;
 - **drain** — every trace batch pushed into the trace inbox (above) since the last pass
   (`benzene.mesh.S3TraceInbox.drain`), merged into the same collector this pass just polled;
@@ -116,7 +117,7 @@ follows (`benzene.aws.clients`).
 bug: **`registry.json`** reflects *discovery-time* identity — the Lambda **function names**
 Terraform assigns (`benzene-python-awsmesh-orders`, …). The **catalog** (`manifest.json`,
 `services/{name}.json`, `topics.json`, …) reflects *interrogation-time* identity — each service's own
-declared `service` field from its `benzene:mesh` response (`orders`, `payments`, …), exactly as
+declared `service` field from its `benzene:spec` response (`orders`, `payments`, …), exactly as
 `MeshPoller` already resolves it for every other discovery mechanism in this port
 (`spec.get("service") or source.name`). A function could be renamed in Terraform without the mesh
 identity changing, or vice versa — the two are deliberately decoupled.
@@ -177,7 +178,7 @@ pytest examples/aws_lambda_mesh/tests -q
 `create_test_host(...).build_aws()` (the same in-memory AWS test harness every AWS example in this repo
 uses), faking only the outbound `MessageSender` — proving ingress -> handler -> egress over the *native*
 event shapes each service actually receives (API Gateway, SQS, SNS, EventBridge), and that the two
-reserved topics (`benzene:mesh` / `benzene:healthcheck`) really do answer a direct invoke.
+reserved topics (`benzene:spec` / `benzene:healthcheck`) really do answer a direct invoke.
 `tests/test_mesh.py` drives the real `run_mesh_aggregation` against a fake `Discovery` and a fake
 `boto3` Lambda client that routes `invoke()` straight to each service's real, in-memory `AwsLambdaApp` —
 proving discover -> interrogate -> collector -> S3 catalog end to end, with no cloud account. It also

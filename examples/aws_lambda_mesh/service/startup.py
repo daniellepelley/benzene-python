@@ -25,15 +25,15 @@ from benzene.core import (
     AppDefinition,
     BenzeneStartUp,
     Container,
+    ContractInfo,
     MessageSender,
+    OutboundRegistry,
     Registry,
     Scope,
-    ServiceSpec,
     health_interception,
 )
 from benzene.http import HttpRouter, StandardPaths
 from benzene.mesh import (
-    OutboundRegistry,
     QueueTraceExporter,
     ServiceDescriptor,
     ServiceInfo,
@@ -46,9 +46,11 @@ from .domain import (
     ORDER_PLACED_TOPIC,
     PAYMENT_CAPTURED_TOPIC,
     PAYMENTS_CAPTURE_TOPIC,
-    SERVICE_PRODUCES,
+    SERVICE_EVENTS,
+    SERVICE_SENDS,
     SHIPMENT_DISPATCHED_TOPIC,
     SHIPPING_BOOK_TOPIC,
+    Message,
     health_checks,
     make_book_shipment,
     make_capture_payment,
@@ -126,15 +128,16 @@ class ServiceStartUp(BenzeneStartUp):
 
         checks = health_checks(name)
         outbound = OutboundRegistry()
-        for topic in SERVICE_PRODUCES[name]:
-            outbound.register(topic)
+        for topic in SERVICE_EVENTS[name]:
+            outbound.register_event(topic, Message)
+        for topic in SERVICE_SENDS[name]:
+            outbound.register_send(topic, Message)
         descriptor = ServiceDescriptor.derive(registry, ServiceInfo(service=name), outbound)
         standard = StandardPaths(
             # /benzene/invoke, /benzene/health, /benzene/spec over HTTP (API Gateway) — plus, via the
             # two interceptors below, the *same* benzene:mesh / benzene:healthcheck topics answer a
             # direct Lambda invoke too, which is how this example's mesh actually interrogates.
             health=checks,
-            spec=ServiceSpec.derive(registry, service=name),
         )
         exporter = services.get_service(QueueTraceExporter)
         middleware = [
@@ -147,5 +150,10 @@ class ServiceStartUp(BenzeneStartUp):
             health_interception(checks),
         ]
         return AppDefinition(
-            registry=registry, router=router, middleware=middleware, standard_paths=standard
+            registry=registry,
+            router=router,
+            middleware=middleware,
+            standard_paths=standard,
+            outbound=outbound,
+            contract=ContractInfo(name),
         )

@@ -1,82 +1,36 @@
-"""The contractHash algorithm (contract-document.md §6).
+"""The Contract Document hashes, for generated clients (contract-document.md §6).
 
-    contractHash = "sha256:" + lowercase-hex(sha256(canonicalJSON(normalize(document))))
+The algorithm lives in ``benzene-core`` (:mod:`benzene.core.contract_hash`) — the service that serves
+a document and the client generated from it hash with the same code, so a drift check compares two
+values of one function over one projection. This module applies it to what the generator emits:
 
-``canonicalJSON`` is RFC 8785 (JCS) via the `rfc8785 <https://pypi.org/project/rfc8785/>`_ PyPI
-package — per §6.3, JCS is used precisely so no port hand-writes its own canonicalizer's ordering/
-number-formatting/escaping rules, which is what makes the hash comparable *across* ports.
+- a default service-level client embeds the document's whole-service ``contractHash``;
+- an include-list client (§5.2) hashes ``{listed requests, every event}``;
+- a topic-scoped client (§5.3) hashes ``{one request, no events}``.
 
-This module operates on the raw JSON ``dict`` shape of a Contract Document (or a projection of
-one), not the parsed :class:`~benzene.codegen_client.document.ContractDocument` model — that is
-exactly the shape ``contract-hash-cases.json`` hands a conformant implementation, and it is also
-what :func:`benzene.codegen_client.document.to_raw_document` produces for this generator's own
-embedded hashes.
+Each is recomputed over its own projection rather than copied from the provider's document — a hash
+is only comparable with the identically scoped projection (§6.4).
 """
 
 from __future__ import annotations
 
-import copy
-import hashlib
+from collections.abc import Mapping
 from typing import Any
 
-import rfc8785
+from benzene.core.contract_hash import contract_hash, registration_hash
 
-from .document import is_reserved_topic
+from .document import ContractDocument, to_raw_document
 
-_PREFIX = "sha256:"
-
-
-def normalize(document: dict[str, Any], *, topic_scoped: bool = False) -> dict[str, Any]:
-    """§6.2's ``normalize()``: strip ``example``/``messageEndpoint``/``transports``/``reserved``.
-
-    ``topic_scoped=True`` selects §5.3's topic-scoped ``normalize()`` behaviour: a reserved
-    ``requests[]`` entry survives (with only its ``reserved`` flag stripped) rather than being
-    removed entirely — set only when hashing a document that is already a single-topic projection
-    that explicitly asked for that (possibly reserved) topic.
-    """
-    root = copy.deepcopy(document)
-    root.pop("messageEndpoint", None)
-    root.pop("transports", None)
-
-    requests = root.get("requests")
-    if isinstance(requests, list):
-        surviving: list[Any] = []
-        for entry in requests:
-            if not isinstance(entry, dict):
-                surviving.append(entry)
-                continue
-
-            entry.pop("example", None)
-
-            # §6.2: reserved-ness (flag OR the §5.1 `benzene:` prefix rule) MUST be evaluated
-            # before the `reserved` flag itself is stripped.
-            reserved_by_flag = bool(entry.get("reserved", False))
-            is_reserved = reserved_by_flag or is_reserved_topic(entry.get("topic", ""))
-            entry.pop("reserved", None)
-
-            if is_reserved and not topic_scoped:
-                continue  # whole-service projection: drop the entry entirely
-
-            surviving.append(entry)
-        root["requests"] = surviving
-
-    events = root.get("events")
-    if isinstance(events, list):
-        for entry in events:
-            if isinstance(entry, dict):
-                entry.pop("example", None)
-
-    return root
+__all__ = ["compute", "compute_registration", "contract_hash", "registration_hash"]
 
 
-def canonical_json(document: dict[str, Any]) -> bytes:
-    """RFC 8785 (JCS) canonicalization of ``document``, as UTF-8 bytes."""
-    return rfc8785.dumps(document)
+def compute(document: ContractDocument | Mapping[str, Any]) -> str:
+    """``contractHash`` of a raw document or a parsed (possibly projected) one."""
+    raw = to_raw_document(document) if isinstance(document, ContractDocument) else document
+    return contract_hash(raw)
 
 
-def compute(document: dict[str, Any], *, topic_scoped: bool = False) -> str:
-    """The full §6.2 pipeline: ``normalize`` -> ``canonicalJSON`` (JCS) -> SHA-256."""
-    normalized = normalize(document, topic_scoped=topic_scoped)
-    canonical = canonical_json(normalized)
-    digest = hashlib.sha256(canonical).hexdigest()
-    return f"{_PREFIX}{digest}"
+def compute_registration(document: ContractDocument | Mapping[str, Any]) -> str:
+    """``registrationHash`` of a raw document or a parsed (possibly projected) one."""
+    raw = to_raw_document(document) if isinstance(document, ContractDocument) else document
+    return registration_hash(raw)

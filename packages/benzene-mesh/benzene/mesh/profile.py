@@ -185,19 +185,16 @@ def evaluate_cloud_service_profile(
         )
     )
 
-    # R5 — derived spec exposed (a /benzene/spec source is wired). Either source satisfies it: a
-    # ServiceSpec is projected into the Contract Document R5 names, and an authored ContractDocument
-    # is that document already.
-    r5 = has_http and (
-        getattr(paths, "spec", None) is not None or getattr(paths, "contract", None) is not None
-    )
+    # R5 — the Contract Document is derived (the composition root declares a ContractInfo, so
+    # benzene:spec answers with it) and /benzene/spec routes to it.
+    r5 = has_http and bool(getattr(paths, "spec", False)) and definition.contract is not None
     checks.append(
         RequirementCheck(
             "R5",
             r5,
             "derived spec provisioned"
             if r5
-            else "no ServiceSpec or ContractDocument on standard_paths (/benzene/spec)",
+            else "no ContractInfo on the AppDefinition, or /benzene/spec turned off (contract=, standard_paths.spec)",
         )
     )
 

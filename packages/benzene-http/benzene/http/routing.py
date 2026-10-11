@@ -16,7 +16,13 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from benzene.core import Handler, HandlerDefinition, definition_of, infer_request_type
+from benzene.core import (
+    Handler,
+    HandlerDefinition,
+    HttpMapping,
+    definition_of,
+    infer_request_type,
+)
 
 _HTTP_ROUTES_ATTR = "_benzene_http_routes"
 
@@ -159,6 +165,21 @@ class HttpRouter:
 
     def endpoints(self) -> list[HttpEndpoint]:
         return list(self._endpoints)
+
+    def http_mappings(self) -> dict[tuple[str, str], list[HttpMapping]]:
+        """This router's routes as Contract Document ``httpMappings``, keyed by ``(topic, version)``.
+
+        A route resolves to one handler, so the key is the registry's own ``(topic, version)`` and
+        not the topic alone — a topic served at two versions on two routes must not advertise both
+        routes on both entries. What :func:`~benzene.core.derive_contract` reads
+        (:class:`~benzene.core.SupportsHttpMappings`).
+        """
+        mappings: dict[tuple[str, str], list[HttpMapping]] = {}
+        for endpoint in self._endpoints:
+            mappings.setdefault((endpoint.topic, endpoint.version), []).append(
+                HttpMapping(method=endpoint.method, path=endpoint.path)
+            )
+        return mappings
 
     def definitions(self) -> list[HandlerDefinition]:
         return list(self._definitions.values())

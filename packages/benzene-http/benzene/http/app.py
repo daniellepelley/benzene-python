@@ -28,10 +28,10 @@ from urllib.parse import parse_qsl
 
 from benzene.core import (
     REQUEST_RESPONSE,
+    SPEC_TOPIC,
     AppDefinition,
     BenzeneMessageApplication,
     Container,
-    HttpMapping,
     MiddlewarePipeline,
     Registry,
     SettlementDefaults,
@@ -40,13 +40,12 @@ from benzene.core import (
     error_payload,
     redelivers,
     resolve_version,
-    select_spec_document,
     successful_from,
 )
 from benzene.results import Result, Status
 
 from .routing import HttpRouter
-from .standard import NATIVE_SPEC_TYPE, StandardPaths
+from .standard import StandardPaths
 from .status import to_http
 
 
@@ -204,36 +203,22 @@ class BenzeneHttpApp:
                 status_code, {"content-type": "application/json"}, json.dumps(report.to_payload())
             )
 
-        # R5 — /benzene/spec: the HTTP route for the benzene:spec topic, whose request is the ?type=
-        # and ?format= query (wire-contracts §7): the Contract Document by default or for
-        # type=benzene — the shape every language's client generator parses — this port's native
-        # {service, topics} payload for type=native, and not-implemented for anything else, never a
-        # different document. JSON is the only format this port renders.
-        if (
-            (std.spec is not None or std.contract is not None)
-            and verb == "GET"
-            and path == std.spec_path
-        ):
+        # R5 — /benzene/spec: the HTTP route for the benzene:spec topic (contract-document §7). The
+        # type and format query parameters are copied onto the topic's request, and it runs through
+        # the pipeline like every other message - the same authentication, the same answer as the
+        # topic (the Contract Document, or not-implemented -> 501), and 404 when no benzene:spec
+        # handler is installed.
+        if std.spec and verb == "GET" and path == std.spec_path:
             query = dict(parse_qsl(query_string or ""))
-            kind, unsupported = select_spec_document(query.get("type"), query.get("format"))
-            if unsupported is not None:
-                return self._error(Status.NOT_IMPLEMENTED, unsupported)
-            if kind == NATIVE_SPEC_TYPE:
-                spec = std.resolved_spec()
-                document = None if spec is None else spec.to_payload()
-                if document is None:
-                    return self._error(
-                        Status.NOT_IMPLEMENTED,
-                        "benzene:spec type 'native' needs StandardPaths(spec=...): this service "
-                        "serves only an authored Contract Document",
-                    )
-            else:
-                contract = std.resolved_contract(_http_mappings(self._router))
-                document = None if contract is None else contract.to_payload()
-            if document is not None:
-                return HttpResponse(
-                    200, {"content-type": "application/json"}, json.dumps(document)
-                )
+            request = {key: query[key] for key in ("type", "format") if key in query}
+            response = await self._application.handle(
+                {
+                    "topic": SPEC_TOPIC,
+                    "headers": {k.lower(): v for k, v in headers.items()},
+                    "body": json.dumps(request) if request else "",
+                }
+            )
+            return _to_http_response(response)
 
         return None
 
@@ -318,21 +303,6 @@ def http_problem_response(result: Result[Any]) -> HttpResponse:
         headers={"content-type": "application/problem+json"},
         body=json.dumps(payload),
     )
-
-
-def _http_mappings(router: HttpRouter) -> dict[tuple[str, str], list[HttpMapping]]:
-    """This host's routes as a Contract Document ``httpMappings`` table, keyed by (topic, version).
-
-    A route resolves to one handler, so the key is the registry's own ``(topic, version)`` and not
-    the topic alone — a topic served at two versions on two routes must not advertise both routes on
-    both entries. Registration order is preserved, which is also the order the router matches in.
-    """
-    mappings: dict[tuple[str, str], list[HttpMapping]] = {}
-    for endpoint in router.endpoints():
-        mappings.setdefault((endpoint.topic, endpoint.version), []).append(
-            HttpMapping(method=endpoint.method, path=endpoint.path)
-        )
-    return mappings
 
 
 def _to_http_response(envelope: Mapping[str, Any]) -> HttpResponse:

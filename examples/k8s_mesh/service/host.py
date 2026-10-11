@@ -22,24 +22,15 @@ from benzene.core import MessageSender, build_application, use_instance
 from benzene.http import BenzeneHttpApp
 from benzene.mesh import (
     MeshFeedSender,
-    OutboundRegistry,
     QueueTraceExporter,
     ServiceDescriptor,
     ServiceInfo,
 )
 
 from ..envelope_client import EnvelopeHttpMessageSender
-from .domain import PAYMENT_TAKE_TOPIC, SHIPMENT_BOOK_TOPIC, NullMessageSender
+from .domain import NullMessageSender
 from .reporting import MeshReporter
 from .startup import ServiceStartUp
-
-# What each service calls downstream (mesh.md §2.3) — orders -> payments -> shipping (terminal). This
-# is what puts provider edges in the mesh's graph; nothing here is derived from tracing a live call.
-_OUTBOUND_TOPICS: dict[str, tuple[str, ...]] = {
-    "orders": (PAYMENT_TAKE_TOPIC,),
-    "payments": (SHIPMENT_BOOK_TOPIC,),
-    "shipping": (),
-}
 
 
 @dataclass
@@ -69,12 +60,12 @@ def build_service_host(env: Mapping[str, str] | None = None) -> ServiceHost:
     if collector_url:
         exporter = scope.get_service(QueueTraceExporter)
         feeds = MeshFeedSender(EnvelopeHttpMessageSender(collector_url))
+        # What each service sends downstream - orders -> payments -> shipping (terminal) - is declared
+        # on the startup's outbound registry (definition.outbound): that is what puts provider edges in
+        # the mesh's graph; nothing here is derived from tracing a live call.
         # ServiceStartUp.configure always sets registry (it's the router-derived registry, never left
         # None) — assert rather than silently deriving from an empty Registry.
         assert definition.registry is not None
-        outbound = OutboundRegistry()
-        for topic in _OUTBOUND_TOPICS.get(name, ()):
-            outbound.register(topic)
         descriptor = ServiceDescriptor.derive(
             definition.registry,
             ServiceInfo(
@@ -82,7 +73,7 @@ def build_service_host(env: Mapping[str, str] | None = None) -> ServiceHost:
                 instance_id=instance_id,
                 placement={"platform": "kubernetes", "zone": "in-cluster"},
             ),
-            outbound,
+            definition.outbound,
         )
         reporter = MeshReporter(feeds, descriptor, exporter, instance_id=instance_id)
 

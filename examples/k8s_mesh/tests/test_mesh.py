@@ -31,7 +31,14 @@ class _FakeDiscovery:
 
 def _fake_source(name: str, healthy: bool = True):
     async def spec() -> dict:
-        return {"service": name, "topics": [{"id": f"{name}:topic", "requestSchema": {}, "responseSchema": {}}]}
+        return {
+            "schemaDialect": "openapi-3.0",
+            "service": name,
+            "requests": [{"topic": f"{name}:topic", "request": {}, "response": {}}],
+            "events": [],
+            "sends": [],
+            "components": {"schemas": {}},
+        }
 
     async def health() -> dict:
         return {"isHealthy": healthy, "healthChecks": {}}

@@ -1,11 +1,11 @@
-"""Payload-schema derivation — a Python type → the JSON Schema 2020-12 subset (mesh.md section 2).
+"""Payload-schema derivation for the mesh descriptor — a Python type → the JSON Schema 2020-12 subset
+(mesh.md section 2).
 
-Projects a handler's declared request/response type into a small, fixed subset of JSON Schema, so a
-consumer of the registry can show — and another service can check — the exact shape each topic accepts
-and returns. Two registry projections use it: the mesh :class:`~benzene.mesh.ServiceDescriptor` and the
-profile's derived spec document (:class:`~benzene.core.ServiceSpec`), which is why it lives in
-``benzene.core`` — it is a projection of the registry's types, not a mesh-only concern. The mapping is
-the spec's *schema derivation* table, read through Python's type system:
+Projects a handler's declared request/response type into a small, fixed subset of JSON Schema for the
+mesh :class:`~benzene.mesh.ServiceDescriptor`, which keeps this dialect until it is retired. The
+Contract Document's schemas are derived separately, in the OpenAPI 3.0 dialect it declares, with
+named components (:mod:`benzene.core.contract_schema`). The mapping is mesh.md's *schema derivation*
+table, read through Python's type system:
 
 ======================  =========================================================
 Python type             JSON Schema

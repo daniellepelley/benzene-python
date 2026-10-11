@@ -42,16 +42,30 @@ SERVICE_TOPICS: dict[str, tuple[str, ...]] = {
     "analytics": (PAYMENT_CAPTURED_TOPIC, SHIPMENT_DISPATCHED_TOPIC),
 }
 
-#: Every topic a service *sends* (mirrors the ``sender.send_message`` calls below), keyed by service
-#: name — what ``startup.py`` projects into each service's :class:`~benzene.mesh.OutboundRegistry`, so
-#: the mesh's provider edges are declared (mesh.md §2.3) rather than waiting on a trace to prove them.
-SERVICE_PRODUCES: dict[str, tuple[str, ...]] = {
-    "orders": (PAYMENTS_CAPTURE_TOPIC, ORDER_PLACED_TOPIC),
-    "payments": (SHIPPING_BOOK_TOPIC, PAYMENT_CAPTURED_TOPIC),
+#: What each service puts on the wire (mirrors the ``sender.send_message`` calls below), split by who
+#: owns the contract (contract-document §3): an **event** is a topic the service publishes and
+#: defines; a **send** is a command to a topic the next service defines. ``startup.py`` declares both
+#: on each service's :class:`~benzene.core.OutboundRegistry`, so the mesh's provider edges are declared
+#: rather than waiting on a trace to prove them.
+SERVICE_EVENTS: dict[str, tuple[str, ...]] = {
+    "orders": (ORDER_PLACED_TOPIC,),
+    "payments": (PAYMENT_CAPTURED_TOPIC,),
     "shipping": (SHIPMENT_DISPATCHED_TOPIC,),
     "inventory": (),
     "notifications": (),
     "analytics": (),
+}
+SERVICE_SENDS: dict[str, tuple[str, ...]] = {
+    "orders": (PAYMENTS_CAPTURE_TOPIC,),
+    "payments": (SHIPPING_BOOK_TOPIC,),
+    "shipping": (),
+    "inventory": (),
+    "notifications": (),
+    "analytics": (),
+}
+#: Both kinds together: what the mesh descriptor's single ``produces`` list carries.
+SERVICE_PRODUCES: dict[str, tuple[str, ...]] = {
+    name: SERVICE_SENDS[name] + SERVICE_EVENTS[name] for name in SERVICE_EVENTS
 }
 
 

@@ -43,20 +43,31 @@ SERVICE_TOPICS: dict[str, tuple[str, ...]] = {
     "analytics": (PAYMENT_CAPTURED_TOPIC, SHIPMENT_DISPATCHED_TOPIC),
 }
 
-#: Every topic a service *sends* (mirrors the ``sender.send_message`` calls below), keyed by service
-#: name — what ``startup.py`` declares on each service's :class:`~benzene.core.ServiceSpec`, so the
-#: ``/benzene/spec`` document the mesh pulls carries this estate's provider edges (mesh.md §2.3)
-#: rather than showing every topic with consumers and no producer. Same shape and role as
-#: ``examples/aws_lambda_mesh``'s ``SERVICE_PRODUCES`` (which declares it via an
-#: :class:`~benzene.mesh.OutboundRegistry`, because that example pushes a descriptor; this one is
-#: pull-only and needs no ``benzene.mesh`` dependency to say the same thing).
-SERVICE_PRODUCES: dict[str, tuple[str, ...]] = {
-    "orders": (PAYMENT_TAKE_TOPIC, ORDER_PLACED_TOPIC),
-    "payments": (SHIPMENT_BOOK_TOPIC, PAYMENT_CAPTURED_TOPIC),
+#: What each service puts on the wire (mirrors the ``sender.send_message`` calls below), split by who
+#: owns the contract (contract-document §3): an **event** is a topic the service publishes and
+#: defines (the Event Hub / Event Grid fan-outs); a **send** is a command to a topic the next service
+#: defines (the Service Bus queues). ``startup.py`` declares both on each service's
+#: :class:`~benzene.core.OutboundRegistry`, so the ``/benzene/spec`` document the mesh pulls carries
+#: this estate's provider edges rather than showing every topic with consumers and no producer.
+SERVICE_EVENTS: dict[str, tuple[str, ...]] = {
+    "orders": (ORDER_PLACED_TOPIC,),
+    "payments": (PAYMENT_CAPTURED_TOPIC,),
     "shipping": (SHIPMENT_DISPATCHED_TOPIC,),
     "inventory": (),
     "notifications": (),
     "analytics": (),
+}
+SERVICE_SENDS: dict[str, tuple[str, ...]] = {
+    "orders": (PAYMENT_TAKE_TOPIC,),
+    "payments": (SHIPMENT_BOOK_TOPIC,),
+    "shipping": (),
+    "inventory": (),
+    "notifications": (),
+    "analytics": (),
+}
+#: Both kinds together: every topic a service produces onto (a provider edge in the mesh graph).
+SERVICE_PRODUCES: dict[str, tuple[str, ...]] = {
+    name: SERVICE_SENDS[name] + SERVICE_EVENTS[name] for name in SERVICE_EVENTS
 }
 
 

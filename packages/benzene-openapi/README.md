@@ -2,7 +2,7 @@
 
 An **OpenAPI 3.1** document derived from a [Benzene Python](https://github.com/daniellepelley/benzene-python)
 handler registry — a sibling projection to the JSON Schema this port already derives and to the Cloud
-Service Profile's `ServiceSpec`. Depends on `benzene-core` (schemas + registry) and `benzene-http` (the
+Service Profile's Contract Document. Depends on `benzene-core` (schemas + registry) and `benzene-http` (the
 `/benzene/invoke` base and the status mapping).
 
 ```bash

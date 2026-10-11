@@ -36,11 +36,13 @@ Each of the six services is **one Function App**, tagged `benzene = "true"` for 
 - sends its produced topics over the transport Terraform wires for it (Service Bus / Event Hub / Event
   Grid) via a small per-topic outbound router (`service/host.py`'s `TopicRoutingMessageSender`) — a
   single POST to `/orders` therefore genuinely cascades through the whole estate on a real deploy;
-- **declares** those produced topics on its spec document (`service/domain.py`'s `SERVICE_PRODUCES`,
-  passed to `ServiceSpec.derive(..., produces=...)` in `service/startup.py`) — a handler registration
-  makes a service a topic's *consumer* (mesh.md §2.3), so without this declaration the pulled catalog
-  would show every topic with consumers and no producer. Declared, never inferred from the send call
-  sites; same shape and role as `examples/aws_lambda_mesh`'s `SERVICE_PRODUCES`.
+- **declares** what it puts on the wire on its Contract Document (`service/domain.py`'s
+  `SERVICE_EVENTS` — the fan-outs it publishes and defines — and `SERVICE_SENDS` — the commands it
+  sends to topics the next service defines — declared on the `OutboundRegistry` in
+  `service/startup.py`) — a handler registration makes a service a topic's *consumer*, so without
+  these declarations the pulled catalog would show every topic with consumers and no producer.
+  Declared, never inferred from the send call sites; same shape and role as
+  `examples/aws_lambda_mesh`'s.
 
 The **mesh Function** (`mesh/function_app.py`, **not** tagged for discovery — it never interrogates
 itself) runs on a **Timer trigger** (default every 5 minutes; Azure Functions Python has no long-lived
@@ -82,17 +84,12 @@ example's work touched:
   content_settings=ContentSettings(content_type="application/json"))`) instead of files or S3 objects.
   Purely additive — `artifacts.py`, `store.py`, and `s3_artifacts.py` are untouched. Unit tests:
   `tests/test_mesh_blob_artifacts.py`.
-- **`ServiceSpec.derive(..., produces=...)`** (`packages/benzene-core/benzene/core/spec.py`) — the
-  pull path's half of the declared producer/consumer graph. `ServiceDescriptor` (the *push* path) has
-  carried `produces` since the graph became declared rather than trace-derived, and `MeshPoller`
-  already reads `spec["produces"]` — but the derived spec document a pull-based mesh interrogates had
-  no way to express it, so any pull-only estate (this one) could only ever report consumers. `derive`
-  now takes an optional outbound declaration — an outbound registry, outbound definitions, or bare
-  topic ids, so a service can declare what it sends without taking a `benzene.mesh` dependency (R5 is
-  meant to be reachable on `benzene.core` alone) — and `to_payload` emits `produces` when there is
-  one, omitting it entirely when there isn't (omit, don't null). Purely additive: the field is absent
-  from every existing caller's document, byte for byte. Unit tests: `tests/test_wellknown.py`,
-  `tests/test_mesh_poller.py`.
+- **The Contract Document's `events` and `sends`** (`packages/benzene-core/benzene/core/contract.py`,
+  `declarations.py`) — the pull path's half of the declared producer/consumer graph: `MeshPoller`
+  reads `events` ∪ `sends` as the topics a polled service produces, so a pull-only estate (this one)
+  reports providers as well as consumers. The declarations live in `benzene.core`, so a service
+  declares what it sends without a `benzene.mesh` dependency (R5 is reachable on `benzene.core`
+  alone). Unit tests: `tests/test_wellknown.py`, `tests/test_mesh_poller.py`.
 
 The two Azure-SDK ones are optional-dependency (the `[eventhub]` extra on `benzene-azure`, the
 `[azure]` extra on `benzene-mesh`), lazily imported, and constructor-injectable — exactly the convention every other Azure

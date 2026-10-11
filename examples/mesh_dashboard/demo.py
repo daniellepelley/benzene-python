@@ -216,8 +216,8 @@ def build_demo_mesh(collector: MeshCollector | None = None) -> DashboardMesh:
     }
     # What each service calls (mesh.md §2.3) — this alone is what puts provider edges in the graph.
     outbound: dict[str, OutboundRegistry] = {
-        "orders": OutboundRegistry().register(RESERVE_STOCK),
-        "inventory": OutboundRegistry().register(SEND_NOTIFICATION),
+        "orders": OutboundRegistry().register_send(RESERVE_STOCK),
+        "inventory": OutboundRegistry().register_send(SEND_NOTIFICATION),
         "notifications": OutboundRegistry(),
     }
     for name, registry in registries.items():

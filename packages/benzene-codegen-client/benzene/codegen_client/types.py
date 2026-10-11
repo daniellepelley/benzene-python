@@ -72,8 +72,12 @@ def get_type_name(schema: Any, catalogue: dict[str, Any] | None = None) -> str:
 
     nullable = bool(schema.get("nullable"))
     schema_type = schema.get("type")
+    wrapped = _wrapped_reference(schema)
 
-    if isinstance(schema.get("oneOf"), list) and schema["oneOf"]:
+    if wrapped is not None:
+        # §4.2's nullable wrapper {"type", "nullable": true, "allOf": [<T>]}: T itself, nullable.
+        result = get_type_name(wrapped, catalogue)
+    elif isinstance(schema.get("oneOf"), list) and schema["oneOf"]:
         result = _oneof_type_name(schema["oneOf"], catalogue)
     elif schema_type == "array":
         result = f"list[{get_type_name(schema.get('items'), catalogue)}]"
@@ -97,6 +101,19 @@ def get_type_name(schema: Any, catalogue: dict[str, Any] | None = None) -> str:
     if nullable and result != "Any":
         result = f"{result} | None"
     return result
+
+
+def _wrapped_reference(schema: dict[str, Any]) -> Any | None:
+    """The one ``allOf`` member of a nullable wrapper with no members of its own, else ``None``."""
+    members = schema.get("allOf")
+    if (
+        schema.get("nullable") is True
+        and isinstance(members, list)
+        and len(members) == 1
+        and not schema.get("properties")
+    ):
+        return members[0]
+    return None
 
 
 def _oneof_type_name(members: list[Any], catalogue: dict[str, Any] | None) -> str:

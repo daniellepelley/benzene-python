@@ -4,7 +4,7 @@ Boots the real app from ``ServiceStartUp`` (the same composition root ``service/
 through the shared AWS test harness (``create_test_host(...).build_aws()``), faking only the outbound
 edge (``FakeMessageSender``) — proving ingress -> handler -> egress over the *native* AWS event shapes
 (API Gateway, SQS, SNS, EventBridge) each service actually receives in deployment, plus the two reserved
-topics (``benzene:mesh`` / ``benzene:healthcheck``) the mesh's direct-invoke interrogation depends on.
+topics (``benzene:spec`` / ``benzene:healthcheck``) the mesh's direct-invoke interrogation depends on.
 No cloud, no network: the same test the CI gate runs.
 """
 
@@ -182,6 +182,20 @@ def test_benzene_mesh_topic_answers_a_direct_invoke_with_the_service_descriptor(
     assert result.is_successful
     assert result.payload["service"] == "shipping"
     assert {t["id"] for t in result.payload["topics"]} == {SHIPPING_BOOK_TOPIC}
+
+
+def test_benzene_spec_topic_answers_a_direct_invoke_with_the_contract_document() -> None:
+    # What the mesh actually interrogates: the Contract Document, with its events and sends declared.
+    host, _ = make_host("shipping")
+
+    result = host.send_invoke("benzene:spec")
+
+    assert result.is_successful
+    assert result.payload["schemaDialect"] == "openapi-3.0"
+    assert result.payload["service"] == "shipping"
+    assert {r["topic"] for r in result.payload["requests"]} == {SHIPPING_BOOK_TOPIC}
+    assert [e["topic"] for e in result.payload["events"]] == ["shipment:dispatched"]
+    assert result.payload["sends"] == []
 
 
 def test_benzene_healthcheck_topic_answers_a_direct_invoke_healthy() -> None:

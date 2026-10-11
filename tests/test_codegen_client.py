@@ -14,19 +14,20 @@ from typing import Any
 
 import pytest
 from benzene.codegen_client import (
+    UnknownSchemaDialectError,
     UnknownTopicsError,
     generate_service_client,
     generate_topic_client,
     parse_document,
 )
 from benzene.codegen_client.cli import main as cli_main
-from benzene.codegen_client.generator import TopicNotFoundError
 from benzene.codegen_client.naming import (
     class_name,
     default_method_name,
     field_name,
     topic_identifier,
 )
+from benzene.codegen_client.topic_scope import TopicNotFoundError
 
 _CONFORMANCE_DIR = Path(__file__).resolve().parent.parent / "conformance"
 _PAYMENTS_SPEC = (
@@ -38,14 +39,59 @@ _PAYMENTS_SPEC = (
 )
 
 
+#: allOf inheritance, a oneOf union alias, and collections of named types - shapes the emitter has
+#: to turn into importable Python. A test document of this port's own, not a conformance fixture.
+_CLOSURE_DOCUMENT: dict[str, Any] = {
+    "schemaDialect": "openapi-3.0",
+    "service": "closure",
+    "requests": [
+        {"topic": "closure:compose", "request": {"$ref": "#/components/schemas/D"}},
+        {
+            "topic": "closure:collections",
+            "request": {"$ref": "#/components/schemas/MapWrapper"},
+            "response": {"$ref": "#/components/schemas/ListWrapper"},
+        },
+        {
+            "topic": "closure:nullable",
+            "request": {
+                "type": "object",
+                "nullable": True,
+                "allOf": [{"$ref": "#/components/schemas/G"}],
+            },
+        },
+    ],
+    "events": [],
+    "sends": [],
+    "components": {
+        "schemas": {
+            "D": {"oneOf": [{"$ref": "#/components/schemas/E"}, {"$ref": "#/components/schemas/F"}]},
+            "E": {
+                "allOf": [
+                    {"$ref": "#/components/schemas/G"},
+                    {"type": "object", "properties": {"x": {"type": "string"}}},
+                ]
+            },
+            "F": {"type": "object"},
+            "G": {"type": "object", "properties": {"y": {"type": "string"}}},
+            "MapWrapper": {
+                "type": "object",
+                "additionalProperties": {"$ref": "#/components/schemas/Item"},
+            },
+            "Item": {"type": "object", "properties": {"tag": {"type": "string"}}},
+            "ListWrapper": {"type": "array", "items": {"$ref": "#/components/schemas/ListItem"}},
+            "ListItem": {"type": "object"},
+        }
+    },
+}
+
+
 def _closure_document():
-    data = json.loads((_CONFORMANCE_DIR / "contract-document-cases.json").read_text())
-    return parse_document(data["documents"]["closure"])
+    return parse_document(_CLOSURE_DOCUMENT)
 
 
-def _reserved_document():
+def _canonical_document():
     data = json.loads((_CONFORMANCE_DIR / "contract-document-cases.json").read_text())
-    return parse_document(data["documents"]["reserved"])
+    return parse_document(data["documents"]["canonical"])
 
 
 def _payments_document():
@@ -133,17 +179,47 @@ def test_topic_client_with_collections_generates_valid_python() -> None:
 
 
 def test_service_client_include_list_fails_loud_on_unknown_topic() -> None:
-    document = _reserved_document()
+    document = _canonical_document()
     with pytest.raises(UnknownTopicsError) as excinfo:
-        generate_service_client(document, service_name="Orders", topics=("not-a-real-topic",))
+        generate_service_client(document, service_name="Conformance", topics=("not-a-real-topic",))
     assert excinfo.value.unknown_topics == ["not-a-real-topic"]
-    assert "orders:create" in excinfo.value.valid_topics
+    assert "conformance:greet" in excinfo.value.valid_topics
 
 
-def test_service_client_include_list_admits_a_reserved_topic_by_name() -> None:
-    document = _reserved_document()
-    generated = generate_service_client(document, service_name="Orders", topics=("benzene:spec",))
-    assert generated.required_topics == ("benzene:spec",)
+def test_a_default_service_client_embeds_the_served_contract_hash() -> None:
+    # The drift check compares a client's embedded hash with the served one, so a default client
+    # (no include-list) must embed exactly the document's contractHash (contract-document §6.4).
+    document = _canonical_document()
+    generated = generate_service_client(document, service_name="Conformance")
+    assert generated.contract_hash == document.contract_hash
+
+
+def test_an_absent_response_types_the_method_as_returning_no_payload() -> None:
+    generated = generate_topic_client(_closure_document(), topic="closure:compose")
+    assert "-> Result[None]:" in generated.source
+
+
+def test_a_nullable_wrapper_types_as_the_wrapped_class_or_none() -> None:
+    generated = generate_topic_client(_closure_document(), topic="closure:nullable")
+    assert "request: G | None" in generated.source
+    ast.parse(generated.source)
+
+
+def test_an_unknown_schema_dialect_is_rejected() -> None:
+    with pytest.raises(UnknownSchemaDialectError):
+        parse_document({**_CLOSURE_DOCUMENT, "schemaDialect": "json-schema-2020-12"})
+    legacy = {k: v for k, v in _CLOSURE_DOCUMENT.items() if k != "schemaDialect"}
+    with pytest.raises(UnknownSchemaDialectError, match="predates spec-0.3.0"):
+        parse_document({**legacy, "openapi": "3.0.1"})
+
+
+def test_cli_rejects_an_unknown_dialect_and_has_no_include_reserved(tmp_path: Path) -> None:
+    spec = tmp_path / "legacy.spec.json"
+    spec.write_text(json.dumps({**_CLOSURE_DOCUMENT, "schemaDialect": "openapi-3.1"}))
+    with pytest.raises(SystemExit):
+        cli_main(["service", "--spec", str(spec), "--service", "X"])
+    with pytest.raises(SystemExit):
+        cli_main(["service", "--spec", str(_PAYMENTS_SPEC), "--service", "X", "--include-reserved"])
 
 
 def test_topic_client_unknown_topic_fails_loud() -> None:

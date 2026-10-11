@@ -9,11 +9,13 @@ A conforming service exposes a small set of well-known HTTP paths under a ``/ben
   handler, so ``invoke_topics`` restricts which topics it serves.
 - ``/benzene/health`` (R3) — the **health report**: the ``{isHealthy, healthChecks}`` report, 200
   when healthy and 503 when not, the report as the body either way.
-- ``/benzene/spec`` (R5) — the **derived spec document**: what the service serves, projected from its
-  registry. ``?type=``/``?format=`` are the ``benzene:spec`` request (wire-contracts §7): the Contract
-  Document (contract-document.md — the format every language's client generator parses) by default or
-  for ``type=benzene``, this port's native :class:`~benzene.core.ServiceSpec` payload for
-  ``type=native``, and ``501 not-implemented`` for any other type or a format other than ``json``.
+- ``/benzene/spec`` (R5) — the HTTP route for the ``benzene:spec`` topic: ``GET`` copies its ``type``
+  and ``format`` query parameters onto a ``benzene:spec`` request and runs it **through the
+  pipeline**, so it answers exactly what the topic answers — the Contract Document, or
+  ``501 not-implemented`` for a type or format the service does not serve — under the same
+  authentication as every other topic (contract-document §7). The document itself is derived at the
+  composition root (``AppDefinition(contract=ContractInfo(...))``); a service that declares none has
+  no ``benzene:spec`` handler, and the route answers 404.
 
 :class:`StandardPaths` is the one config object that turns these on; :class:`~benzene.http.BenzeneHttpApp`
 reads it and serves the surfaces ahead of ordinary routing. The prefix is configurable per deployment
@@ -23,51 +25,28 @@ service that moves these paths documents the move.
 
 from __future__ import annotations
 
-from collections.abc import Container, Mapping, Sequence
+from collections.abc import Container
 from dataclasses import dataclass
 
-from benzene.core import (
-    SPEC_TYPE_BENZENE,
-    SPEC_TYPE_NATIVE,
-    ContractDocument,
-    ContractSource,
-    HealthChecks,
-    HttpMapping,
-    ServiceSpec,
-    SpecSource,
-    resolve_contract,
-)
+from benzene.core import HealthChecks
 
 #: The default well-known path prefix (design-principles §5.2).
 DEFAULT_PREFIX = "/benzene"
-
-#: ``?type=`` on ``/benzene/spec`` selecting this port's native ``{service, topics}`` payload — a port
-#: extension type (wire-contracts §7). Absent or ``benzene`` selects the Contract Document, which is
-#: what R5 names (``?type=benzene&format=json``): a generator that follows the profile's documented
-#: path and asks for nothing gets the parseable document, not a port-native shape only this port can
-#: read. Any other type is answered ``not-implemented``, never with a different document.
-NATIVE_SPEC_TYPE = SPEC_TYPE_NATIVE
-
-#: The ``?type=`` value that names the Contract Document explicitly (the R5 spelling).
-CONTRACT_SPEC_TYPE = SPEC_TYPE_BENZENE
 
 
 @dataclass
 class StandardPaths:
     """Which well-known surfaces to expose, and under which prefix.
 
-    ``invoke`` needs nothing but the application (it is on by default). ``health`` and ``spec`` are
-    each enabled by supplying their source — a :class:`~benzene.core.HealthChecks` and a
-    :class:`~benzene.core.ServiceSpec` (or a callable returning one, re-derived per request) — and are
-    simply absent (their path 404s) when not supplied, matching the spec's "declined → no output".
+    ``invoke`` and ``spec`` need nothing but the application (both are on by default); ``health`` is
+    enabled by supplying a :class:`~benzene.core.HealthChecks`, and is simply absent (its path 404s)
+    when not supplied, matching the spec's "declined → no output".
 
-    ``spec`` enables the surface; what it *answers with* depends on ``?type=``. Left alone, the
-    Contract Document is projected from the ``ServiceSpec`` (schemas inline, no named catalogue) with
-    this host's own knowledge folded in — the message endpoint and each topic's HTTP routes. Supply
-    ``contract`` — most usefully ``ContractDocument.derive(registry, ...)``, which sees the handlers'
-    declared types and so can *name* each payload in ``components.schemas`` — to serve an authored
-    document instead; it is then emitted exactly as given, message endpoint and HTTP mappings
-    included, because a document you built is not one this host should be editing.
+    ``spec`` routes ``GET /benzene/spec`` to the ``benzene:spec`` topic. What answers it is the
+    pipeline's: :func:`~benzene.core.application_from` installs the answer for an
+    :class:`~benzene.core.AppDefinition` that declares ``contract=ContractInfo(...)``, and the
+    document then carries this host's ``messageEndpoint`` (:attr:`message_endpoint`) and each
+    topic's HTTP routes.
 
     ``invoke_topics`` restricts which topics ``/benzene/invoke`` reaches (transport-bindings §1, D21):
     anything supporting ``in`` — a set of topic ids, or your own object whose ``__contains__`` applies
@@ -85,12 +64,7 @@ class StandardPaths:
     invoke: bool = True
     invoke_topics: Container[str] | None = None
     health: HealthChecks | None = None
-    spec: SpecSource | None = None
-    contract: ContractSource | None = None
-    #: Every transport this host receives messages over (contract-document.md §1's ``transports``).
-    #: Declared, not detected: an HTTP host cannot see the queues and topics the same service is also
-    #: wired to, and a half-true list is worse than the absent one a consumer knows to feature-detect.
-    transports: tuple[str, ...] = ()
+    spec: bool = True
 
     @property
     def invoke_path(self) -> str:
@@ -104,29 +78,11 @@ class StandardPaths:
     def spec_path(self) -> str:
         return f"{self.prefix}/spec"
 
-    def resolved_spec(self) -> ServiceSpec | None:
-        """The current spec document, calling the source if it is a callable."""
-        return self.spec() if callable(self.spec) else self.spec
+    @property
+    def message_endpoint(self) -> str | None:
+        """The Contract Document's ``messageEndpoint``: the envelope endpoint, when it is on.
 
-    def resolved_contract(
-        self, http_mappings: Mapping[tuple[str, str], Sequence[HttpMapping]] | None = None
-    ) -> ContractDocument | None:
-        """The Contract Document to serve at ``/benzene/spec``, or ``None`` when R5 is not wired.
-
-        An authored ``contract`` wins as-is. Otherwise the document is projected from the
-        ``ServiceSpec`` — one source of truth, so ``?type=benzene`` and ``?type=native`` can never
-        describe two different topic sets — with ``messageEndpoint``, ``transports`` and the caller's
-        ``http_mappings`` folded in, since those are the host's knowledge and not the registry's.
+        Absent when ``invoke`` is off — a consumer feature-detects send capability on its presence
+        (contract-document §1). Read by :func:`~benzene.core.derive_contract`.
         """
-        authored = resolve_contract(self.contract)
-        if authored is not None:
-            return authored
-        spec = self.resolved_spec()
-        if spec is None:
-            return None
-        return ContractDocument.from_spec(
-            spec,
-            message_endpoint=self.invoke_path if self.invoke else None,
-            transports=self.transports,
-            http_mappings=http_mappings,
-        )
+        return self.invoke_path if self.invoke else None

@@ -5,8 +5,8 @@ outside-in counterpart: point it at a running service's base URL and it reports,
 **tri-state** verdict — ``satisfied`` / ``not-satisfied`` / ``inconclusive`` — always with a reason.
 It only speaks the language-neutral HTTP surfaces (``/benzene/spec``, ``/benzene/health``,
 ``/benzene/invoke``), so it audits a Go, Node, or .NET service exactly as it audits a Python one —
-including reading either shape ``/benzene/spec`` answers with (:mod:`benzene.mesh.specdoc`): the
-Contract Document R5 names, or this port's native payload. It depends on nothing else in the port.
+including reading the Contract Document ``/benzene/spec`` answers with (:mod:`benzene.mesh.specdoc`).
+It depends on nothing else in the port.
 
 A black-box probe genuinely cannot verify everything a service-side self-check can, so — matching the
 profile spec (cloud-service-profile.md §5) — two things stay ``inconclusive`` by design and are never
@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from .specdoc import is_spec_document, spec_topics
+from .specdoc import is_contract_document, spec_topics
 
 #: The default well-known path prefix (design-principles §5.2).
 DEFAULT_PREFIX = "/benzene"
@@ -196,10 +196,10 @@ async def probe_cloud_service(
         _surface_verdict(
             "R5",
             spec,
-            is_spec_document,
-            present="/benzene/spec returns a derived spec document",
-            malformed="/benzene/spec returned neither a Contract Document ({openapi, info, "
-            "requests, events, components}) nor a native {service, topics} one",
+            is_contract_document,
+            present="/benzene/spec returns a Contract Document",
+            malformed="/benzene/spec did not return a Contract Document "
+            '({schemaDialect: "openapi-3.0", service, requests, events, sends, components})',
         )
     )
 

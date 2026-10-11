@@ -5,7 +5,7 @@ the poller is the *pull* side, mirroring the .NET Mesh Host: it reaches out to a
 timer, reads each service's well-known surfaces (``/benzene/spec`` + ``/benzene/health`` — exposed by
 :class:`~benzene.http.StandardPaths`), and folds the result into the same collector. A service needs no
 egress wiring to appear in the mesh; it only has to be *pollable* — in any language, since
-:mod:`benzene.mesh.specdoc` reads either shape ``/benzene/spec`` answers with.
+:mod:`benzene.mesh.specdoc` reads the Contract Document every port's ``/benzene/spec`` answers with.
 
     poller = MeshPoller(collector, [
         HttpServiceSource("orders", "https://orders.svc"),
@@ -14,8 +14,8 @@ egress wiring to appear in the mesh; it only has to be *pollable* — in any lan
     await poller.poll_once()                 # one sweep; call on a timer for a live fleet
     fleet = collector.query_fleet({})        # now reflects both services
 
-Pull covers identity, topics, health, **and the declared producer/consumer graph** — a polled spec's
-``produces`` folds into the collector exactly like ``topics`` does (mesh.md §4), so the graph exists
+Pull covers identity, topics, health, **and the declared producer/consumer graph** — a polled
+document's ``events`` and ``sends`` fold into the collector as ``produces``, exactly like ``topics`` does (mesh.md §4), so the graph exists
 whether a fleet is pulled or pushed to. Traces still feed invocation/error stats, never graph
 membership. A source that is down is recorded as a failed :class:`PollResult` and never breaks the
 sweep of the rest of the fleet.
@@ -24,16 +24,15 @@ sweep of the rest of the fleet.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import urllib.error
 import urllib.request
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from .collector import MeshCollector
-from .specdoc import spec_produces, spec_service, spec_topics
+from .specdoc import spec_produces, spec_registration_hash, spec_service, spec_topics
 
 #: A GET fetch: a URL → ``(status_code, body_text)``. Injectable so a test drives it with no network.
 HttpGet = Callable[[str], Awaitable[tuple[int, str]]]
@@ -139,48 +138,29 @@ class MeshPoller:
             health = await source.fetch_health()
         except Exception as exc:  # a down/unreachable service must not break the sweep
             return PollResult(source.name, ok=False, error=str(exc))
-        # Read whichever shape the service serves: the Contract Document every port's /benzene/spec
-        # now answers with, or this port's native {service, topics} payload. Reading only the latter
-        # is what made a pulled .NET/Go/TypeScript service fold into the collector as an empty
-        # catalogue - present in the fleet, contributing no topics and no graph edges.
+        # The Contract Document every port's /benzene/spec answers with. Its producers are events and
+        # sends together; its served registrationHash is the drift signal - never a hash recomputed
+        # here over some other projection, which would compare two different things.
         service = spec_service(spec, source.name)
-        topics = spec_topics(spec)
-        produces = spec_produces(spec)
-        descriptor_hash = _spec_hash(service, topics, produces)
+        registration_hash = spec_registration_hash(spec)
         self._collector.ingest_register(
             {
                 "service": service,
-                "topics": topics,
-                "produces": produces,
-                "descriptorHash": descriptor_hash,
+                "topics": spec_topics(spec),
+                "produces": spec_produces(spec),
+                "descriptorHash": registration_hash,
             }
         )
-        # Carry the same hash on the heartbeat so the collector can match the running instance against
-        # the registered contract (drift detection); the poller polls one instance per source.
+        # The poller polls one instance per source, and reads its hash off the same document.
         self._collector.ingest_heartbeat(
             {
                 "service": service,
                 "instanceId": source.name,
                 "health": health,
-                "descriptorHash": descriptor_hash,
+                "descriptorHash": registration_hash,
             }
         )
         return PollResult(service, ok=True)
-
-
-def _spec_hash(service: str, topics: Sequence[Any], produces: Sequence[Any]) -> str:
-    """A content hash over the polled contract, so the collector can still detect drift from a pull.
-
-    Canonical JSON (sorted keys, no whitespace) over the service name + topics + produces, matching the
-    descriptor hash's shape (``"sha256:" + hex``) even though a spec carries no hash of its own.
-    """
-    canonical = json.dumps(
-        {"service": service, "topics": list(topics), "produces": list(produces)},
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _stdlib_get(*, timeout: float = 10.0) -> HttpGet:

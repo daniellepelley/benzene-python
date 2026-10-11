@@ -1,11 +1,9 @@
 # Conformance Fixtures
 
-**Status: DRAFT v0.1**
-
 Language-neutral test fixtures for the contracts in [wire-contracts.md](../wire-contracts.md) and
 the behaviors in [core-concepts.md](../core-concepts.md). Every Benzene implementation runs the
 same fixtures through its own runner; an implementation that passes them (plus the live-interop
-tests described in [porting-guide.md §3](../porting-guide.md#3-conformance-testing)) is conformant.
+tests described in the [porting guide](../../guides/porting-guide.md#3-conformance-testing)) is conformant.
 API shape is explicitly not part of conformance.
 
 The .NET runner lives at `test/Benzene.Conformance.Test/` and is the reference for how a runner
@@ -46,27 +44,29 @@ writes the new tag into `SPEC_VERSION`, and lands all three in one change.
 | `mesh-trace-cases.json` | TraceEvent behavior: traceparent join/reject rules and the invocation→semantic-status mapping (mesh §3) — required for ports that implement mesh |
 | `mesh-collector-cases.json` | Collector ingest, validation, derivation, and degradation behavior (mesh §4–6) — required for ports that implement a collector |
 | `mesh-issue-cases.json` | Issue-feed collector behavior: `benzene:mesh:issues` ingest, fingerprint delta-merge, liveness/feed-absence derivation (mesh §4.1) — required only for collectors claiming the issue feed |
-| `mesh-service-version-cases.json` | Service-version identity: the catalog keyed by `(service, serviceVersion)`, so two releases side by side are two entries (mesh §2.4, §4) — required only for collectors claiming service-version identity |
-| `mesh-version-order-cases.json` | Service-version **order**: the declared comparison schemes, the not-orderable outcome, and parse rejection (mesh §2.5) — required only for ports that order service versions |
-| `contract-document-cases.json` | Contract Document parse/validate, topic-scope projection, and schema-closure behavior (contract-document.md §§1-5) — required for ports that ship a client generator |
-| `contract-hash-cases.json` | Exact `contractHash` values for the normalization + canonicalization + hash pipeline (contract-document.md §6) — required for ports that ship a client generator |
+| `mesh-service-version-cases.json` | Service-version identity: the catalog keyed by `(service, serviceVersion)`, so two releases side by side are two entries (service-versions.md §1, mesh §4) — required only for collectors claiming service-version identity |
+| `mesh-version-order-cases.json` | Service-version **order**: the declared comparison schemes, the not-orderable outcome, and parse rejection (service-versions.md §2) — required only for ports that order service versions |
+| `contract-document-cases.json` | The contract document: derivation from the canonical registrations with exact hashes, the naming rules, the `benzene:spec` request (producer groups); parse, topic scope and schema closure (client-generator groups) (contract-document.md) |
+| `contract-hash-cases.json` | Exact `contractHash` and `registrationHash` values for the projection, canonicalization and hash pipeline (contract-document.md §6) — the cases without a projection are required of every contract-document producer; the projection cases, of a client generator |
 
-Which fixtures a given conformance claim requires
-([cloud-service-profile.md](../cloud-service-profile.md) §5):
+Which fixtures a given conformance claim requires. A claim is made per level — **Core**, **per
+binding**, the **Profile**, and **per module** — and a port claims only what it implements.
 
-| Claim | Required fixtures |
-|---|---|
-| Benzene Core | `status-vocabulary.json`, the mapping tables for each protocol the port binds, `envelope-cases.json`, `transport-metadata-cases.json` for each metadata-carrying transport the port binds and its `settlementDefaults` for every one-way binding the port ships, and `problem-details-cases.json`'s `registry` and `envelopeCases` groups |
-| HTTP binding conformance | additionally `problem-details-cases.json`'s `httpRules` group — required only for each HTTP binding a port ships (the same conditional shape as `transport-metadata-cases.json` above); a port with no HTTP binding is unaffected. Within it, `envelopeEndpoint` applies to a port that serves the envelope over HTTP, and `healthEndpoint` to a port that also ships health checks |
-| Cloud Service Profile support | Core, plus `mesh-descriptor-cases.json` and `mesh-trace-cases.json` |
-| Collector implementations | additionally `mesh-collector-cases.json` (collector-only; not part of the profile) |
-| Issue-feed collectors | additionally `mesh-issue-cases.json` (optional feed, mesh §4.1; a collector without it stays collector-conformant) |
-| Service-version-aware collectors | additionally `mesh-service-version-cases.json` (mesh §2.4; a collector without it stays collector-conformant, because a descriptor that omits `serviceVersion` keys exactly as it always did) |
-| Service-version **ordering** | additionally `mesh-version-order-cases.json` (mesh §2.5; a port implementing §2.4 identity without §2.5 ordering stays service-version conformant) |
-| Client-generation conformance | `contract-document-cases.json` and `contract-hash-cases.json` — required only for a port that ships a client generator (contract-document.md); a port that never generates clients from the Contract Document is unaffected by these two fixtures, the same conditional shape as the collector fixtures above |
+| Level | Claim | Required fixtures |
+|---|---|---|
+| Core | Benzene Core | `status-vocabulary.json`, the mapping tables for each protocol the port binds, `envelope-cases.json`, and `problem-details-cases.json`'s `registry` and `envelopeCases` groups |
+| Per binding | each metadata-carrying binding (queues, topics, streams) | `transport-metadata-cases.json` for that binding, and its row in `settlementDefaults` (every one-way binding the port ships) |
+| Per binding | each HTTP binding | `problem-details-cases.json`'s `httpRules` group. Within it, `envelopeEndpoint` applies to a port that serves the envelope over HTTP, and `healthEndpoint` to a port that also ships health checks |
+| Profile | Cloud Service Profile support | Core, plus `mesh-descriptor-cases.json` and `mesh-trace-cases.json` |
+| Per module | Mesh collector | `mesh-collector-cases.json` (not part of the profile) |
+| Per module | Mesh issue feed | `mesh-issue-cases.json` (optional feed, mesh §4.1; a collector without it stays collector-conformant) |
+| Per module | Service versions — *Provisional* | `mesh-service-version-cases.json` (identity) and `mesh-version-order-cases.json` (order), [service-versions.md](../service-versions.md); a collector without the module stays collector-conformant, because a descriptor that omits `serviceVersion` keys exactly as it always did |
+| Profile | Contract-document producer (R5) | `contract-document-cases.json`'s `derivationCases`, `namingCases`, `specTopicCases`, and `specHttpCases` for a port with an HTTP binding; `contract-hash-cases.json`'s cases without a `projection` |
+| Per module | Client generator | `contract-document-cases.json`'s `parseCases`, `topicScopeCases` and `schemaClosureCases`, and every case in `contract-hash-cases.json` |
 
-At Core level the mesh fixtures apply only to ports that implement the optional mesh module
-(mesh.md §7); a port without mesh skips them and remains Core-conformant.
+MCP and claim check (both *Provisional*) have no fixtures yet. At Core level the mesh fixtures apply
+only to ports that implement the optional mesh module; a port without mesh skips them and remains
+Core-conformant.
 
 ## Canonical handlers
 
@@ -88,18 +88,40 @@ verify the router's `not-found` / `validation-error` behavior.
 each list the checks to register — a name and the status (`ok`, `warning` or `failed`) the check
 reports — in place of any the runner would otherwise register.
 
-## Canonical outbound registration
+## Canonical outbound declarations
 
-`mesh-descriptor-cases.json` additionally registers one **outbound** record (mesh.md §2.3) — no
-handler, since nothing here receives:
+`mesh-descriptor-cases.json` registers one **outbound** record (mesh.md §2.3), with no handler:
 
 | Topic | Request body | Response |
 |---|---|---|
 | `conformance:log` | `{ "message": string }` | none declared |
 
-This is what populates `ServiceDescriptor.produces` for the fixture; it is never sent, and no
-handler answers it in any other fixture file — it exists purely to give every runner one shared,
-concrete outbound registration to derive a `produces` entry from.
+`contract-document-cases.json`'s `derivationCases` declare the canonical outbound of the contract
+document instead (contract-document.md §3): the **event** `conformance:greeted`, the one-way **send**
+`conformance:log`, and the **send** `conformance:lookup`, which expects a reply. None is ever sent.
+
+## Canonical payload types
+
+The contract-document cases use payload types with fixed names, so that the canonical document's
+component keys match across ports. A runner declares its types with exactly these names (by its
+port's declared-name mechanism, contract-document.md §4.1 rule 5, where its default name would
+differ). Every property is a string, and **every property is always emitted** — a nullable one as
+`null` when unset — so every property is `required` (contract-document.md §4.2). A runner configures
+its types and marshaler so: in TypeScript a nullable property is `T | null`, not optional; in .NET
+nulls are written; in Python the field has no default and `None` is dumped; in Go the field has no
+`omitempty`.
+
+| Type | Shape | Used by |
+|---|---|---|
+| `GreetRequest` | `{ name }` | `conformance:greet` request |
+| `GreetResponse` | `{ greeting }` | `conformance:greet` response |
+| `Greeted` | `{ greeting }` | event `conformance:greeted` |
+| `LogEntry` | `{ message }` | send `conformance:log` (one-way) |
+| `LookupRequest` | `{ key }` | send `conformance:lookup` |
+| `LookupResponse` | `{ value }` | send `conformance:lookup` reply |
+| `ShapesRequest` | `{ count: integer, ratio: number, active: boolean, tags: string[], labels: map of string, note: nullable string, child: ShapesChild, nullableChild: nullable ShapesChild }` | `conformance:shapes`, a handler with no response payload |
+| `ShapesChild` | `{ name }` | nested in `ShapesRequest` |
+| `TreeNode` | `{ name, parent: nullable TreeNode, children: TreeNode[] }` | `conformance:tree`, a handler with no response payload |
 
 ## Status mapping case format
 
@@ -210,7 +232,7 @@ case to its own native message before decoding it.
 - `expected.headersExclude` lists keys that must **not** appear as headers — a metadata key the
   binding consumed as routing information must not also leak into the header dictionary.
 - `expected.version`, where present, is the resolved payload version.
-- `benzene-version` is the one version header (wire-contracts §2, tier A): every port resolves it,
+- `benzene-version` is the one version header (wire-contracts §2, Core): every port resolves it,
   so the version cases here run unconditionally.
 
 `defaultMetadataKeys` names the keys themselves, and `topicSources` records where each binding
@@ -229,7 +251,7 @@ Bindings whose `source` is not `metadata` are listed deliberately: EventBridge r
 require a `topic` attribute (transport-bindings §1), and the metadata cases do not apply to them.
 
 `defaultMetadataKeys.headers` is the EventBridge embedded-headers key, `benzene-headers`
-(wire-contracts §2, tier D); only a port with an EventBridge binding asserts it.
+(wire-contracts §2, Binding: EventBridge); only a port with an EventBridge binding asserts it.
 
 **Settlement defaults.** `settlementDefaults.bindings` records each one-way binding's **shape** —
 `queue`, `one-shot` (a single delivery with no per-message ack, such as an asynchronous function
@@ -284,7 +306,7 @@ collections).
   `mesh-collector-cases.json`, applied to the keying rule alone. The cases pin that two declared
   versions of one service are two catalog entries rather than one overwriting the other, that this
   still holds when the two versions carry **identical** contracts (a version is an entity, not a
-  shape — mesh §2.4, so a collector keying on `descriptorHash` instead of on `serviceVersion`
+  shape — service-versions.md §1, so a collector keying on `descriptorHash` instead of on `serviceVersion`
   fails here), that re-registering one version leaves the other's topics intact, and that a
   descriptor omitting `serviceVersion` keys exactly as it did before the rule existed. That last
   case is why this fixture is separate: it is the compatibility guarantee that lets an existing
@@ -297,34 +319,54 @@ collections).
 
 ## Contract Document and contract hash case formats
 
-Both files pin [contract-document.md](../contract-document.md). Every case group in
-`contract-document-cases.json` shares a `documents` map at the top of the file, keyed by id;
-each case references one document by `documentRef` rather than repeating it. `expectedTopics` and
-`expectedComponents` are compared as **sets** — order-independent, no duplicates expected either
-side — unlike the positional array comparisons used elsewhere in this directory, since a topic
-scope or a schema closure is a membership question, not a sequence.
+Both files pin [contract-document.md](../contract-document.md). `contract-document-cases.json` keeps
+shared documents in a `documents` map, which cases reference by `documentRef`. Topic, event, send and
+component lists in expectations compare as **sets**.
 
-- **`parseCases`** — each gives a `documentRef` (and, for the fail-loud case, `options`) and an
-  `expected` (subset-matched: `openapi`, and per-entry `requests[]`/`events[]` rows keyed by
-  `topic`, asserting `versionPresent`/`version`/`reserved` as applicable) or an `expectedError`
-  (asserting the failure's `unknownTopics` and `validTopics` sets, contract-document.md §5.2).
-  `versionPresent: false` asserts the field is genuinely **absent**, not an empty string
-  (contract-document.md §2's absent-means-unversioned rule).
-- **`topicScopeCases`** — each gives a `documentRef`, `options` (`topics`/`includeReserved`, both
-  optional, contract-document.md §5.2), and the resulting `expectedTopics` set of surviving
-  `requests[]` topic ids.
+**Producer groups** — every contract-document producer:
+
+- **`derivationCases`** — each lists `registrations` (handlers in `requests`, event declarations in
+  `events`, send declarations in `sends`, each naming a canonical payload type) and an `expected`
+  document. The runner registers exactly those, with no HTTP mappings, derives its document, and
+  compares each entry — matched by topic and version — exactly on `topic`, `version`, `request`,
+  `response` and `message`, after applying contract-document.md §6.2 steps 3–4 to its own schemas
+  (dereferenced, annotations removed, `required` sorted), so hoisting and naming differences do not
+  fail it; other members (`example`) are not compared. A `response` absent from an expected entry
+  MUST be absent from the derived one.
+  It also asserts that every component key is valid (§4.1 rule 3) and every `$ref` resolves, and
+  that the document's `contractHash` and `registrationHash` equal the expected values exactly.
+- **`namingCases`** — each gives `types` (two distinct types, keyed by a qualified name, with their
+  shapes), optional `declaredNames`, and `registrations`. `expected.error: "component-name-collision"`
+  means derivation fails before any message is handled and the failure names `expected.name`;
+  `expected.componentNames` means derivation succeeds and the components include those keys. These
+  cases presuppose that the port hoists registered payload types (§4.1 rule 1); a port that inlines
+  them has no names to collide, and records the group as a gap in its capability matrix.
+- **`specTopicCases`** — each sends `request` as the body of a `benzene:spec` envelope (`null`
+  means an absent body). `expected.statusCode` is compared exactly; `expected.document` is subset-matched
+  against the response body. **`specHttpCases`** (ports with an HTTP binding) send `GET` to `path`
+  and assert `expected.httpStatus` and, where given, `expected.document`.
+
+**Client-generator groups:**
+
+- **`parseCases`** — each gives a `documentRef` (and, for the fail-loud case, `options`) and either
+  an `expected` (subset-matched; per-entry rows keyed by `topic` and `version` assert `versionPresent`/`version`
+  and `responsePresent`, where "present: false" means the member is genuinely **absent**) or an
+  `expectedError` (`kind`: `unknown-schema-dialect`, or `unknown-topics` with the `unknownTopics`
+  and `validTopics` sets, contract-document.md §5.2). A `benzene:` entry is ignored, not listed.
+- **`topicScopeCases`** — each gives a `documentRef`, `options` (`topics`, optional), and the
+  `expectedTopics` set of surviving `requests[]` topics; where given, `expectedEvents` and
+  `expectedSends` are the sets that pass through unchanged.
 - **`schemaClosureCases`** — each gives a `documentRef`, a `topic`, and the `expectedComponents`
-  set: every `components.schemas` key reachable from that topic's request and response by the walk
-  of contract-document.md §5.3. Includes a `$ref` cycle case and an `allOf`/`oneOf` reach case, per
-  that section's normative walk.
+  set reachable by contract-document.md §5.3's walk, including a `$ref` cycle and an
+  `allOf`/`oneOf` reach case.
 
-`contract-hash-cases.json` lists `cases`, each an input `document` (already in whatever projection
-the case is about — a whole-service document, or one already topic-scoped per §5.3) and the exact
-`expectedHash` a conformant `normalize` → `canonicalJSON` (RFC 8785/JCS) → SHA-256 pipeline
-(contract-document.md §6.2) MUST produce. Two cases are deliberately **not already normalized**
-(one carries `example`/`messageEndpoint`/`transports`, one carries reserved entries) specifically so
-their `expectedHash` — identical to the minimal case's — proves an implementation performs the
-strip, not merely hashes its input verbatim.
+`contract-hash-cases.json` lists `cases`, each a `document` and the exact `expectedContractHash` and
+`expectedRegistrationHash` (contract-document.md §6.2). A case with a `projection` first projects the
+document — `{"kind":"topic","topic":…}` is §5.3's topic-scoped projection, `{"kind":"include-list",
+"topics":[…]}` §5.2's include-list projection — and expects the hashes of that projection; only a
+client generator runs those. Several cases are deliberately decorated,
+reordered, renamed, hoisted or annotated, and expect the same values as a plain case — proving an
+implementation performs every normalization step rather than hashing its input verbatim.
 
 ## Mapping table format
 

@@ -4,7 +4,7 @@ Fakes the two external edges only: a fake :class:`~benzene.mesh_fleet.Discovery`
 ``ListFunctions``/``ListTags`` call, and a fake ``boto3`` Lambda client routes ``invoke()`` straight to
 each service's real, in-memory :class:`~benzene.aws.AwsLambdaApp` (built from the *actual*
 ``ServiceStartUp`` composition root, exactly as ``service/host.py`` builds it for deployment) — so the
-interrogation exercises the real ``benzene:mesh``/``benzene:healthcheck`` handling, not a stub. A fake
+interrogation exercises the real ``benzene:spec``/``benzene:healthcheck`` handling, not a stub. A fake
 ``boto3`` S3 client captures what gets published, matching ``tests/test_mesh_s3_artifacts.py``'s pattern
 one level up (that file tests ``S3ArtifactStore`` itself; this proves the example wires it correctly end
 to end) — proving discover -> poll -> collector -> S3 catalog without a single real AWS call.
@@ -151,7 +151,7 @@ def test_run_mesh_aggregation_discovers_and_interrogates_all_six_services() -> N
     called = {name for name, _ in lambda_client.invoked_topics}
     assert called == {e.address for e in endpoints}
     assert {topic for _, topic in lambda_client.invoked_topics} == {
-        "benzene:mesh",
+        "benzene:spec",
         "benzene:healthcheck",
     }
 
@@ -186,7 +186,8 @@ def test_run_mesh_aggregation_publishes_registry_and_full_catalog_to_s3() -> Non
     assert {s["name"] for s in registry["services"]} == {e.address for e in endpoints}
 
     # manifest.json (and the rest of the catalog) reflect INTERROGATION-time identity: each service's
-    # own descriptor "service" field (the plain domain name), read off the benzene:mesh response —
+    # own Contract Document "service" field (the plain domain name), read off the benzene:spec
+    # response —
     # not necessarily the same string as the function name that was invoked to get it.
     manifest = s3.puts["mesh/manifest.json"]
     manifest_services = {s["name"]: s for s in manifest["services"]}

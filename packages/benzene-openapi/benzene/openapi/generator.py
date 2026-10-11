@@ -1,9 +1,8 @@
 """OpenAPI 3.1 generation from the handler registry — a sibling projection to the derived spec.
 
-The port already derives three documents from the same registry: the Cloud Service Profile's
-:class:`~benzene.core.ContractDocument` (served at ``/benzene/spec``), this port's native
-:class:`~benzene.core.ServiceSpec` payload (``/benzene/spec?type=native``), and the mesh
-:class:`~benzene.mesh.ServiceDescriptor` — all of which embed the per-topic JSON Schema that
+The port already derives two documents from the same registry: the Cloud Service Profile's
+:class:`~benzene.core.ContractDocument` (served at ``/benzene/spec``, in the OpenAPI 3.0 dialect) and
+the mesh :class:`~benzene.mesh.ServiceDescriptor`, which embeds the per-topic JSON Schema that
 :func:`benzene.core.json_schema` derives from a handler's declared request/response type. This module
 adds a further projection of that *same* registry: a standard **OpenAPI 3.1** document, so the contract
 a service serves can be browsed, diffed, and fed to the OpenAPI tooling ecosystem (Swagger UI, code
@@ -20,13 +19,13 @@ the single invoke base the wire binding actually multiplexes them through.
 
 **Schemas are reused, never re-derived.** Every operation's ``requestBody`` and success response
 ``$ref`` a component in ``components.schemas`` whose value is exactly :func:`benzene.core.json_schema`
-of the topic's request/response type — the same 2020-12 subset the spec and descriptor embed (OpenAPI
+of the topic's request/response type — the same 2020-12 subset the descriptor embeds (OpenAPI
 3.1 adopts the 2020-12 dialect, so the schemas drop in unchanged). Failure responses map the Benzene
 failure statuses to HTTP codes through the port's own :func:`benzene.http.to_http` table and share one
 ``BenzeneProblem`` component: the RFC 9457 problem document this port actually emits
 (:func:`benzene.core.error_payload` plus §4.1's HTTP additions), served as ``application/problem+json``.
 
-**Deterministic output.** As with :class:`~benzene.core.ServiceSpec`, the document is built in a stable
+**Deterministic output.** As with :class:`~benzene.core.ContractDocument`, the document is built in a stable
 order — topics sorted by ``(id, version)``, paths and component-schema keys sorted lexicographically,
 responses ordered by HTTP code — so the same registry always yields an identical, diff-friendly dict.
 """
@@ -113,7 +112,7 @@ def openapi_document(
     paths_config = server_paths or StandardPaths()
     invoke_base = paths_config.invoke_path
 
-    # Topics sorted by (id, version) — the same ordering ServiceSpec.derive uses (spec.py).
+    # Topics sorted by (id, version) — the same ordering ContractDocument.derive uses.
     definitions = sorted(registry.definitions(), key=lambda d: (d.topic, d.version))
 
     paths: dict[str, Any] = {}

@@ -20,11 +20,12 @@ from benzene.core import (
     AppDefinition,
     BenzeneStartUp,
     Container,
+    ContractInfo,
     HealthChecks,
     MessageSender,
+    OutboundRegistry,
     Registry,
     Scope,
-    ServiceSpec,
 )
 from benzene.http import HttpRouter, StandardPaths
 from benzene.mesh import QueueTraceExporter, trace_middleware
@@ -33,6 +34,10 @@ from .domain import (
     ORDER_CREATE_TOPIC,
     PAYMENT_TAKE_TOPIC,
     SHIPMENT_BOOK_TOPIC,
+    BookShipmentRequest,
+    PaymentTaken,
+    ShipmentBooked,
+    TakePaymentRequest,
     make_book_shipment,
     make_create_order,
     make_take_payment,
@@ -54,6 +59,13 @@ class ServiceStartUp(BenzeneStartUp):
         exporter = services.get_service(QueueTraceExporter)
 
         router = HttpRouter()
+        # What each service sends (contract-document §3): a command to a topic the next service
+        # defines, so a send, not an event. Read by the Contract Document and the mesh descriptor.
+        outbound = OutboundRegistry()
+        if name == "orders":
+            outbound.register_send(PAYMENT_TAKE_TOPIC, TakePaymentRequest, PaymentTaken)
+        elif name == "payments":
+            outbound.register_send(SHIPMENT_BOOK_TOPIC, BookShipmentRequest, ShipmentBooked)
         if name == "payments":
             router.register("POST", "/payments", PAYMENT_TAKE_TOPIC, make_take_payment(downstream))
         elif name == "shipping":
@@ -68,12 +80,16 @@ class ServiceStartUp(BenzeneStartUp):
             # through — "one endpoint serves every topic, routed by the envelope's topic", exactly
             # like .NET's POST /benzene-message.
             health=HealthChecks().add("self", lambda: True),
-            spec=ServiceSpec.derive(registry, service=name),
         )
         # trace_middleware installed OUTERMOST so it times the whole invocation (including the
         # /benzene/invoke path, which runs through this same pipeline) and joins/starts the W3C
         # trace the mesh's Fleet plane later derives consumer edges from.
         middleware = [trace_middleware(exporter, service=name, instance_id=name)]
         return AppDefinition(
-            registry=registry, router=router, middleware=middleware, standard_paths=standard
+            registry=registry,
+            router=router,
+            middleware=middleware,
+            standard_paths=standard,
+            outbound=outbound,
+            contract=ContractInfo(name),
         )

@@ -1,25 +1,35 @@
 """The Cloud Service Profile's well-known HTTP surfaces (profile R3/R4/R5/R7).
 
 `/benzene/invoke` (the wire-envelope endpoint), `/benzene/health` (the health aggregate), and
-`/benzene/spec` (the derived spec document), under a configurable `/benzene/` prefix, plus the
-transport-neutral `benzene:spec` interception the HTTP `/benzene/spec` surface mirrors.
+`/benzene/spec` (the Contract Document, through the pipeline), under a configurable `/benzene/`
+prefix, plus the transport-neutral `benzene:spec` interception the HTTP route reaches.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, make_dataclass
 
 import pytest
 from benzene.core import (
     SPEC_TOPIC,
+    AppDefinition,
     BenzeneMessageApplication,
+    ComponentNameCollisionError,
+    Context,
+    ContractDocument,
+    ContractInfo,
     HealthCheckResult,
     HealthChecks,
+    Middleware,
     MiddlewarePipeline,
+    Next,
+    OutboundRegistry,
     Registry,
-    ServiceSpec,
+    application_from,
+    contract_hash,
+    registration_hash,
     spec_interception,
 )
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
@@ -178,82 +188,104 @@ def test_health_absent_when_no_checks_supplied() -> None:
 
 # --- R5: /benzene/spec --------------------------------------------------------------------------
 
-def test_spec_derives_topics_and_schemas_from_the_registry() -> None:
+
+def _spec_app(*middleware: Middleware, outbound: OutboundRegistry | None = None) -> BenzeneHttpApp:
     router, registry = _router_and_registry()
-    spec = ServiceSpec.derive(registry, service="greeter")
-    app = BenzeneHttpApp(
-        router, application=BenzeneMessageApplication(registry), standard_paths=StandardPaths(spec=spec)
+    return BenzeneHttpApp.from_definition(
+        AppDefinition(
+            registry=registry,
+            router=router,
+            middleware=list(middleware),
+            standard_paths=StandardPaths(),
+            outbound=outbound,
+            contract=ContractInfo("greeter", service_version="1.2.0", version_scheme="semver"),
+        )
     )
 
-    # ?type=native is where this port's own {service, topics} payload lives now; the bare path
-    # answers the Contract Document (covered below).
-    response = asyncio.run(app.handle("GET", "/benzene/spec", "type=native"))
+
+def test_spec_serves_the_contract_document_derived_at_the_composition_root() -> None:
+    response = asyncio.run(_spec_app().handle("GET", "/benzene/spec"))
     assert response.status_code == 200
     doc = json.loads(response.body)
-    assert doc["service"] == "greeter"
-    topics = {t["id"]: t for t in doc["topics"]}
-    assert "say:hello" in topics
-    # payload schema is projected from the request dataclass (wire naming policy)
-    assert topics["say:hello"]["requestSchema"]["properties"]["name"] == {"type": "string"}
-
-
-def test_spec_declares_the_topics_a_service_produces() -> None:
-    # A handler registration makes a service that topic's *consumer* (mesh.md §2.3); what it *sends*
-    # is declared, never inferred — and the derived spec document carries it, so a mesh that pulls
-    # /benzene/spec (rather than being pushed a descriptor) can see provider edges at all.
-    _, registry = _router_and_registry()
-    spec = ServiceSpec.derive(registry, service="greeter", produces=("greet:sent", "audit:log"))
-
-    doc = spec.to_payload()
-    assert [t["id"] for t in doc["produces"]] == ["audit:log", "greet:sent"]  # sorted by id
-    assert doc["produces"][0]["requestSchema"] == {}  # a bare topic id declares no schema
-    assert [t["id"] for t in doc["topics"]] == ["say:hello"]  # the consumed side is untouched
-
-
-def test_spec_omits_produces_when_a_service_declares_none() -> None:
-    # Omit, don't null (nor an empty array) — an undeclared outbound side leaves the field absent, so
-    # the document a service without one serves is unchanged from before `produces` existed.
-    _, registry = _router_and_registry()
-    assert "produces" not in ServiceSpec.derive(registry, service="greeter").to_payload()
-
-
-def test_spec_accepts_an_outbound_definition_with_its_schema() -> None:
-    # The richer form: anything shaped like benzene.mesh's OutboundDefinition (topic/version/types) —
-    # its payload schema is derived exactly the way a registered topic's is.
-    @dataclass(frozen=True)
-    class _Outbound:
-        topic: str
-        version: str = ""
-        request_type: type | None = None
-        response_type: type | None = None
-
-    _, registry = _router_and_registry()
-    spec = ServiceSpec.derive(
-        registry, service="greeter", produces=[_Outbound("greet:sent", "v2", Greet)]
+    assert doc["schemaDialect"] == "openapi-3.0"
+    assert (doc["service"], doc["serviceVersion"], doc["versionScheme"]) == (
+        "greeter",
+        "1.2.0",
+        "semver",
     )
-
-    produced = spec.to_payload()["produces"][0]
-    assert produced["id"] == "greet:sent"
-    assert produced["version"] == "v2"
-    assert produced["requestSchema"]["properties"]["name"] == {"type": "string"}
-
-
-def test_spec_rejects_a_bare_string_of_produced_topics() -> None:
-    # A str is iterable: accepting one silently would declare one topic per character.
-    _, registry = _router_and_registry()
-    with pytest.raises(TypeError, match="single string"):
-        ServiceSpec.derive(registry, service="greeter", produces="greet:sent")
+    assert doc["messageEndpoint"] == "/benzene/invoke"  # the host's envelope endpoint
+    (entry,) = doc["requests"]
+    assert entry["topic"] == "say:hello"
+    assert entry["httpMappings"] == [{"method": "POST", "path": "/greet"}]  # the host's routes
+    # payload schema is projected from the request dataclass (wire naming policy), named once
+    assert entry["request"] == {"$ref": "#/components/schemas/Greet"}
+    assert doc["components"]["schemas"]["Greet"]["properties"]["name"] == {"type": "string"}
+    assert doc["contractHash"] == contract_hash(doc)
+    assert doc["registrationHash"] == registration_hash(doc)
 
 
-def test_spec_source_may_be_a_callable_redrived_each_request() -> None:
-    router, registry = _router_and_registry()
-    app = BenzeneHttpApp(
-        router,
-        application=BenzeneMessageApplication(registry),
-        standard_paths=StandardPaths(spec=lambda: ServiceSpec.derive(registry, service="greeter")),
+def test_spec_carries_the_declared_events_and_sends() -> None:
+    # A handler registration makes a service that topic's *consumer*; what it puts on the wire is
+    # declared, never inferred — an event it defines, or a send to a topic another party defines.
+    outbound = OutboundRegistry().register_event("greet:sent", Greet).register_send("audit:log")
+    doc = json.loads(asyncio.run(_spec_app(outbound=outbound).handle("GET", "/benzene/spec")).body)
+    assert [e["topic"] for e in doc["events"]] == ["greet:sent"]
+    assert [s["topic"] for s in doc["sends"]] == ["audit:log"]
+    assert "response" not in doc["sends"][0]  # one-way
+    assert [r["topic"] for r in doc["requests"]] == ["say:hello"]  # the consumed side is untouched
+
+
+@pytest.mark.parametrize(
+    ("query", "status"),
+    [("type=benzene&format=json", 200), ("type=BENZENE", 200), ("type=asyncapi", 501), ("format=yaml", 501)],
+)
+def test_spec_copies_the_query_onto_the_benzene_spec_request(query: str, status: int) -> None:
+    response = asyncio.run(_spec_app().handle("GET", "/benzene/spec", query))
+    assert response.status_code == status
+
+
+def test_spec_runs_through_the_pipeline_and_its_authentication() -> None:
+    # contract-document §7: GET /benzene/spec MUST go through the pipeline, so the same middleware
+    # that guards every topic guards the self-description (it lists the service's sends).
+    async def deny_without_a_key(context: Context, next: Next) -> None:  # noqa: A002
+        if context.headers.get("x-api-key") != "secret":
+            context.result = Result.unauthorized("no key")
+            return
+        await next()
+
+    app = _spec_app(deny_without_a_key)
+    assert asyncio.run(app.handle("GET", "/benzene/spec")).status_code == 401
+    allowed = asyncio.run(app.handle("GET", "/benzene/spec", headers={"x-api-key": "secret"}))
+    assert allowed.status_code == 200
+
+
+def test_spec_is_absent_when_the_service_declares_no_contract() -> None:
+    # Declined -> no output: with no ContractInfo there is no benzene:spec handler to route to.
+    assert asyncio.run(_app(StandardPaths()).handle("GET", "/benzene/spec")).status_code == 404
+
+
+def test_a_component_name_collision_fails_building_the_app() -> None:
+    # contract-document §4.1: before the first message, naming both types and the remedy.
+    def item(module: str, field_name: str) -> type:
+        cls = make_dataclass("Item", [(field_name, str)])
+        cls.__module__ = module
+        return cls
+
+    async def handle(_request: object) -> Result:
+        return Result.ok()
+
+    registry = (
+        Registry()
+        .register("orders:item", handle, request_type=item("orders", "sku"))
+        .register("payments:item", handle, request_type=item("payments", "payment_id"))
     )
-    doc = json.loads(asyncio.run(app.handle("GET", "/benzene/spec", "type=native")).body)
-    assert doc["service"] == "greeter"
+    definition = AppDefinition(registry=registry, contract=ContractInfo("shop"))
+    with pytest.raises(ComponentNameCollisionError) as raised:
+        application_from(definition)
+    message = str(raised.value)
+    assert "orders.Item" in message and "payments.Item" in message
+    assert "orders:item" in message and "payments:item" in message
+    assert "@schema_name" in message
 
 
 # --- R7: prefix convention ----------------------------------------------------------------------
@@ -274,56 +306,43 @@ def test_standard_surfaces_do_not_shadow_ordinary_routes() -> None:
 
 # --- the transport-neutral benzene:spec interception (core) --------------------------------------
 
-def _spec_topic_app(**kwargs) -> BenzeneMessageApplication:
+def _document() -> ContractDocument:
     _, registry = _router_and_registry()
-    pipeline = MiddlewarePipeline().use(spec_interception(**kwargs))
+    return ContractDocument.derive(registry, service="greeter", message_endpoint="/benzene/invoke")
+
+
+def _spec_topic_app() -> BenzeneMessageApplication:
+    _, registry = _router_and_registry()
+    pipeline = MiddlewarePipeline().use(spec_interception(_document()))
     return BenzeneMessageApplication(registry, pipeline)
 
 
-def _ask_spec(app: BenzeneMessageApplication, body: str) -> dict:
-    return asyncio.run(app.handle({"topic": SPEC_TOPIC, "headers": {}, "body": body}))
+def _ask_spec(app: BenzeneMessageApplication, body: str | None) -> dict:
+    envelope: dict = {"topic": SPEC_TOPIC, "headers": {}}
+    if body is not None:
+        envelope["body"] = body
+    return asyncio.run(app.handle(envelope))
 
 
-@pytest.mark.parametrize("body", ["", "null", "{}", '{"type": "benzene", "format": "json"}'])
-def test_spec_topic_answers_the_contract_document_by_default(body: str) -> None:
-    # wire-contracts §7: absent, empty, null and {} all mean type benzene / format json.
-    _, registry = _router_and_registry()
-    response = _ask_spec(_spec_topic_app(spec=ServiceSpec.derive(registry, service="greeter")), body)
+@pytest.mark.parametrize(
+    "body", [None, "", "null", "{}", '{"type": "benzene", "format": "json"}', '{"type": "Benzene"}']
+)
+def test_spec_topic_answers_the_contract_document_by_default(body: str | None) -> None:
+    # contract-document §7: absent, empty, null and {} all mean type benzene / format json.
+    response = _ask_spec(_spec_topic_app(), body)
     assert response["statusCode"] == "ok"
-    document = json.loads(response["body"])
-    assert document["openapi"] == "3.0.1"
-    assert document["info"]["title"] == "greeter"
-    assert [r["topic"] for r in document["requests"]] == ["say:hello"]
+    assert json.loads(response["body"]) == _document().to_payload()
 
 
-def test_spec_topic_serves_an_authored_contract_verbatim() -> None:
-    from benzene.core import ContractDocument
-
-    _, registry = _router_and_registry()
-    contract = ContractDocument.derive(registry, service="greeter", message_endpoint="/benzene/invoke")
-    response = _ask_spec(_spec_topic_app(contract=contract), "")
-    assert json.loads(response["body"]) == contract.to_payload()
-
-
-def test_spec_topic_native_is_this_ports_extension_type() -> None:
-    _, registry = _router_and_registry()
-    app = _spec_topic_app(spec=ServiceSpec.derive(registry, service="greeter"))
-    response = _ask_spec(app, '{"type": "Native"}')  # compared case-insensitively
-    assert response["statusCode"] == "ok"
-    assert json.loads(response["body"])["service"] == "greeter"
-
-
-@pytest.mark.parametrize("body", ['{"type": "asyncapi"}', '{"format": "yaml"}'])
+@pytest.mark.parametrize("body", ['{"type": "native"}', '{"type": "asyncapi"}', '{"format": "yaml"}'])
 def test_spec_topic_answers_an_unsupported_type_or_format_not_implemented(body: str) -> None:
-    _, registry = _router_and_registry()
-    response = _ask_spec(_spec_topic_app(spec=ServiceSpec.derive(registry, service="greeter")), body)
+    response = _ask_spec(_spec_topic_app(), body)
     assert response["statusCode"] == "not-implemented"
     assert response["isSuccessful"] is False
 
 
-def test_spec_interception_needs_something_to_serve() -> None:
-    with pytest.raises(ValueError, match="needs something to serve"):
-        spec_interception()
+def test_spec_topic_rejects_a_request_that_is_not_an_object() -> None:
+    assert _ask_spec(_spec_topic_app(), '"benzene"')["statusCode"] == "bad-request"
 
 
 def test_benzene_ping_is_answered_ok_with_no_payload_without_registration() -> None:

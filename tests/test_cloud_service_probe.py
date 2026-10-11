@@ -14,11 +14,10 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from benzene.core import (
-    BenzeneMessageApplication,
+    AppDefinition,
+    ContractInfo,
     HealthChecks,
-    MiddlewarePipeline,
     Registry,
-    ServiceSpec,
 )
 from benzene.http import BenzeneHttpApp, HttpRouter, StandardPaths
 from benzene.mesh import (
@@ -55,16 +54,14 @@ def _profiled_app() -> BenzeneHttpApp:
     router = HttpRouter().register("POST", "/orders", "orders:place", _place, request_type=Order)
     registry = Registry.from_definitions(router)
     descriptor = ServiceDescriptor.derive(registry, ServiceInfo(service="orders"))
-    application = BenzeneMessageApplication(
-        registry, MiddlewarePipeline([mesh_interception(descriptor)])
-    )
-    return BenzeneHttpApp(
-        router,
-        application=application,
-        standard_paths=StandardPaths(
-            health=HealthChecks().add("core", lambda: True),
-            spec=ServiceSpec.derive(registry, service="orders"),
-        ),
+    return BenzeneHttpApp.from_definition(
+        AppDefinition(
+            registry=registry,
+            router=router,
+            middleware=[mesh_interception(descriptor)],
+            standard_paths=StandardPaths(health=HealthChecks().add("core", lambda: True)),
+            contract=ContractInfo("orders"),
+        )
     )
 
 
@@ -127,13 +124,17 @@ def _reason(report, requirement_id: str) -> str:
 
 # --- grading a service this port did not build (the point of a language-neutral probe) ------------
 
-#: What a .NET service actually answers at /benzene/spec: the Contract Document (R5,
-#: contract-document.md), including its reserved framework topics. Written out literally rather than
+#: What a .NET service answers at /benzene/spec: the Contract Document (R5, contract-document.md),
+#: here with a stray benzene: entry a consumer must ignore. Written out literally rather than
 #: produced by this port, so the test would still fail if this port's own emitter drifted.
 _DOTNET_CONTRACT_DOCUMENT = {
-    "openapi": "3.0.1",
-    "info": {"title": "payments-api", "description": "", "version": "2.1.0"},
+    "schemaDialect": "openapi-3.0",
+    "service": "payments-api",
+    "serviceVersion": "2.1.0",
+    "versionScheme": "semver",
     "messageEndpoint": "/benzene/invoke",
+    "contractHash": "sha256:" + "1" * 64,
+    "registrationHash": "sha256:" + "2" * 64,
     "transports": ["api-gateway", "sqs"],
     "requests": [
         {
@@ -142,9 +143,11 @@ _DOTNET_CONTRACT_DOCUMENT = {
             "request": {"$ref": "#/components/schemas/CapturePayment"},
             "response": {"$ref": "#/components/schemas/PaymentDto"},
         },
-        {"topic": "benzene:spec", "reserved": True, "request": {}, "response": {}},
+        # A producer must not list a benzene: topic; a consumer that meets one ignores it.
+        {"topic": "benzene:spec", "request": {}, "response": {}},
     ],
     "events": [{"topic": "payment:captured", "message": {"$ref": "#/components/schemas/Captured"}}],
+    "sends": [],
     "components": {
         "schemas": {
             "CapturePayment": {"type": "object", "properties": {"orderId": {"type": "string"}}},
@@ -172,10 +175,8 @@ def _foreign_service_client():
     return call
 
 
-def test_a_contract_document_service_grades_the_same_as_a_native_one() -> None:
-    # The README's claim is that this probe "grades any port's service the same way". It did not:
-    # R2 read `topics` and R5 required a {service, topics} document, so the reference implementation
-    # of the format R5 actually names came back with R2 unsatisfied and R5 malformed.
+def test_a_foreign_contract_document_service_grades_the_same_as_this_ports() -> None:
+    # The probe grades any port's service the same way: R2 reads requests[], R5 the document shape.
     report = asyncio.run(probe_cloud_service("http://payments", http=_foreign_service_client()))
     assert report.not_satisfied == []
     assert report.verdict("R5") is Verdict.SATISFIED
@@ -185,5 +186,23 @@ def test_a_contract_document_service_grades_the_same_as_a_native_one() -> None:
 def test_the_probes_topic_count_ignores_the_reserved_framework_topics() -> None:
     report = asyncio.run(probe_cloud_service("http://payments", http=_foreign_service_client()))
     reason = next(p.reason for p in report.probes if p.id == "R2")
-    # benzene:spec is in requests[] and is not an application topic (§5.1's flag-or-prefix rule).
+    # benzene:spec is in requests[] and is not an application topic: a consumer ignores it.
     assert reason == "spec lists 1 application topic(s)"
+
+
+def test_a_pre_dialect_document_does_not_satisfy_r5() -> None:
+    # A consumer MUST reject a document whose schemaDialect it does not know (contract-document §1);
+    # the openapi/info shape producers wrote before spec-0.3.0 has none.
+    legacy = {
+        "openapi": "3.0.1",
+        "info": {"title": "payments-api"},
+        "requests": [{"topic": "payments:capture", "request": {}, "response": {}}],
+        "events": [],
+        "components": {"schemas": {}},
+    }
+
+    async def call(method: str, url: str, body: str | None) -> tuple[int, str]:
+        return (200, json.dumps(legacy)) if urlsplit(url).path == "/benzene/spec" else (404, "")
+
+    report = asyncio.run(probe_cloud_service("http://payments", http=call))
+    assert report.verdict("R5") is Verdict.NOT_SATISFIED

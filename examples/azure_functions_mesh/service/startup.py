@@ -20,11 +20,12 @@ from benzene.core import (
     AppDefinition,
     BenzeneStartUp,
     Container,
+    ContractInfo,
     HealthChecks,
     MessageSender,
+    OutboundRegistry,
     Registry,
     Scope,
-    ServiceSpec,
 )
 from benzene.http import HttpRouter, StandardPaths
 
@@ -33,9 +34,11 @@ from .domain import (
     ORDER_PLACED_TOPIC,
     PAYMENT_CAPTURED_TOPIC,
     PAYMENT_TAKE_TOPIC,
-    SERVICE_PRODUCES,
+    SERVICE_EVENTS,
+    SERVICE_SENDS,
     SHIPMENT_BOOK_TOPIC,
     SHIPMENT_DISPATCHED_TOPIC,
+    Message,
     health_checks,
     make_book_shipment,
     make_create_order,
@@ -115,10 +118,20 @@ class ServiceStartUp(BenzeneStartUp):
             # pull-based interrogation surface (HttpServiceSource GETs /benzene/spec + /benzene/health,
             # exactly as examples/k8s_mesh's mesh does).
             health=checks,
-            # The registry gives the topics this service *consumes* (a handler registration is a
-            # consumer, mesh.md §2.3); SERVICE_PRODUCES declares what it *sends*, so the pulled spec
-            # document carries this estate's provider edges too. Declared, never inferred from the
-            # send call sites (mesh.md §2.3) — domain.py's map is the one place they're written down.
-            spec=ServiceSpec.derive(registry, service=name, produces=SERVICE_PRODUCES[name]),
         )
-        return AppDefinition(registry=registry, router=router, standard_paths=standard)
+        # The registry gives the topics this service *consumes*; its event and send declarations
+        # what it puts on the wire, so the pulled Contract Document carries this estate's provider
+        # edges too. Declared, never inferred from the send call sites (contract-document §3.3) —
+        # domain.py's maps are the one place they're written down.
+        outbound = OutboundRegistry()
+        for topic in SERVICE_EVENTS[name]:
+            outbound.register_event(topic, Message)
+        for topic in SERVICE_SENDS[name]:
+            outbound.register_send(topic, Message)
+        return AppDefinition(
+            registry=registry,
+            router=router,
+            standard_paths=standard,
+            outbound=outbound,
+            contract=ContractInfo(name),
+        )

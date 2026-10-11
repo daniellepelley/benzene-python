@@ -130,8 +130,9 @@ def test_http_standard_paths_answer_health_and_spec() -> None:
     spec = host.send_http("GET", "/benzene/spec")
     assert spec.status_code == 200
     body = json.loads(spec.body)
-    # R5's Contract Document: the service name is info.title and the topics are requests[].topic.
-    assert body["info"]["title"] == "shipping"
+    # R5's Contract Document: the service name is `service` and the topics are requests[].topic.
+    assert body["schemaDialect"] == "openapi-3.0"
+    assert body["service"] == "shipping"
     assert {r["topic"] for r in body["requests"]} == {SHIPMENT_BOOK_TOPIC}
 
 

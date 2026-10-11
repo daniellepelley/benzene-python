@@ -16,9 +16,8 @@ import pytest
 from benzene.core import (
     AppDefinition,
     BenzeneStartUp,
+    ContractInfo,
     HealthChecks,
-    Registry,
-    ServiceSpec,
 )
 from benzene.http import HttpRouter, StandardPaths
 from benzene.results import Result
@@ -53,14 +52,13 @@ class GreeterStartUp(BenzeneStartUp):
     def configure(self, services, config) -> AppDefinition:
         router = HttpRouter()
         router.register("POST", "/greet", "say:hello", greet, request_type=Greet)
-        registry = Registry.from_definitions(router)
         db = services.get_service(Db)
         return AppDefinition(
             router=router,
             standard_paths=StandardPaths(
                 health=HealthChecks().add("db", db.ping),          # health reflects the injected Db
-                spec=ServiceSpec.derive(registry, service="greeter"),
             ),
+            contract=ContractInfo("greeter"),  # the self-description, served at /benzene/spec
         )
 
 
@@ -93,18 +91,16 @@ def test_spec_surface_on_the_cloud_host(host) -> None:
     response = host.send_http("GET", "/benzene/spec")
     assert response.status_code == 200
     doc = json.loads(response.body)
-    assert doc["openapi"] == "3.0.1"
-    assert doc["info"]["title"] == "greeter"
+    assert doc["schemaDialect"] == "openapi-3.0"
+    assert doc["service"] == "greeter"
     assert "say:hello" in {r["topic"] for r in doc["requests"]}
 
 
-def test_the_native_spec_shape_stays_reachable_on_the_cloud_host(host) -> None:
-    # ?type=native has to survive each host's own query-string plumbing, not just the ASGI app's.
-    response = host.send_http("GET", "/benzene/spec", query={"type": "native"})
-    assert response.status_code == 200
-    doc = json.loads(response.body)
-    assert doc["service"] == "greeter"
-    assert "say:hello" in {t["id"] for t in doc["topics"]}
+def test_the_spec_query_reaches_benzene_spec_on_the_cloud_host(host) -> None:
+    # ?type= has to survive each host's own query-string plumbing, not just the ASGI app's: an
+    # unsupported type is the topic's not-implemented, mapped to 501.
+    assert host.send_http("GET", "/benzene/spec", query={"type": "benzene"}).status_code == 200
+    assert host.send_http("GET", "/benzene/spec", query={"type": "asyncapi"}).status_code == 501
 
 
 def test_invoke_surface_on_the_cloud_host(host) -> None:

@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Typing :: Typed",
 ]
-dependencies = ["benzene-results>=0.1.0b1"]
+dependencies = ["benzene-results>=0.1.0b1", "rfc8785>=0.1.4"]
 
 [project.urls]
 Homepage = "https://github.com/daniellepelley/benzene-python"

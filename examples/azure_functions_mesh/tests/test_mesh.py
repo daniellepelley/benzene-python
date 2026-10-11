@@ -27,7 +27,8 @@ from azure_functions_mesh.service.domain import (
     ORDER_PLACED_TOPIC,
     PAYMENT_CAPTURED_TOPIC,
     PAYMENT_TAKE_TOPIC,
-    SERVICE_PRODUCES,
+    SERVICE_EVENTS,
+    SERVICE_SENDS,
     SERVICE_TOPICS,
     SHIPMENT_BOOK_TOPIC,
     SHIPMENT_DISPATCHED_TOPIC,
@@ -174,7 +175,7 @@ def test_run_mesh_aggregation_publishes_registry_and_full_catalog_to_blob() -> N
 def test_the_published_catalog_carries_the_whole_declared_producer_consumer_graph() -> None:
     # The point of the estate: after one discover -> interrogate -> publish pass, every topic in the
     # catalog must name BOTH sides — the providers each producing service declares on its
-    # /benzene/spec (SERVICE_PRODUCES, mesh.md §2.3) and the consumers derived from the handler
+    # /benzene/spec (SERVICE_EVENTS and SERVICE_SENDS, contract-document §3) and the consumers derived from the handler
     # registrations. A topic with consumers and an empty producers list means the declared provider
     # edge never made it across the pull path, which is exactly the failure this asserts against.
     endpoints, apps = _fleet()
@@ -223,16 +224,20 @@ def test_the_published_catalog_carries_the_whole_declared_producer_consumer_grap
 
 
 def test_every_interrogated_spec_document_declares_what_that_service_produces() -> None:
-    # The pull path's contract, service by service: /benzene/spec must carry `produces` for the three
-    # producers and omit it for the three terminal consumers (which genuinely send nothing).
+    # The pull path's contract, service by service: /benzene/spec must carry the events and sends of
+    # the three producers and none for the three terminal consumers (which genuinely send nothing).
     apps = {name: _build_app(name) for name in KNOWN_SERVICES}
-    declared = {}
+    events = {}
+    sends = {}
     for name, app in apps.items():
         document = json.loads(app.handle_http(method="GET", path="/benzene/spec").body)
-        # events[] is where a Contract Document declares what a service produces (§3).
-        declared[name] = [event["topic"] for event in document.get("events", [])]
+        # An event is a topic the service defines (the fan-outs); a send, a command onto a topic the
+        # next service defines (contract-document §3).
+        events[name] = [event["topic"] for event in document["events"]]
+        sends[name] = [send["topic"] for send in document["sends"]]
 
-    assert declared == {name: sorted(SERVICE_PRODUCES[name]) for name in KNOWN_SERVICES}
+    assert events == {name: sorted(SERVICE_EVENTS[name]) for name in KNOWN_SERVICES}
+    assert sends == {name: sorted(SERVICE_SENDS[name]) for name in KNOWN_SERVICES}
 
 
 def test_run_mesh_aggregation_empty_mesh_is_zero_not_an_error() -> None:

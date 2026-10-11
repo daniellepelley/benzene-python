@@ -11,8 +11,11 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import re
 import sys
 from collections.abc import Callable
+from dataclasses import field as dataclass_field
+from dataclasses import make_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -20,26 +23,38 @@ from benzene.aws import AwsLambdaApp, SqsConsumerApp
 from benzene.aws.events import EMBEDDED_HEADERS_KEY
 from benzene.azure import AzureFunctionsApp
 from benzene.codegen_client import contract_hash as codegen_contract_hash
-from benzene.codegen_client.document import parse_document
+from benzene.codegen_client.document import UnknownSchemaDialectError, parse_document
 from benzene.codegen_client.schema_closure import reachable_names
 from benzene.codegen_client.topic_scope import (
     TopicScopeOptions,
     UnknownTopicsError,
     apply_topic_scope,
+    topic_projection,
 )
 from benzene.core import (
     DEFAULT_TOPIC_KEY,
     DEFAULT_VERSION_KEY,
+    AppDefinition,
     BenzeneMessageApplication,
+    ComponentNameCollisionError,
+    ContractDocument,
+    ContractInfo,
     HealthCheckResult,
     HealthChecks,
     MetadataKeys,
     MiddlewarePipeline,
+    NoPayload,
+    OutboundRegistry,
     Registry,
     SettlementDefaults,
+    application_from,
+    contract_hash,
     read_message_metadata,
+    registration_hash,
     resolve_version,
+    schema_name,
 )
+from benzene.core.contract_hash import SCHEMA_REF_PREFIX, normalize_schema
 from benzene.core.envelope import encode_response
 from benzene.gcp import GcpFunctionsApp
 from benzene.grpc import SETTLEMENT_DEFAULTS as GRPC_SETTLEMENT_DEFAULTS
@@ -50,7 +65,6 @@ from benzene.kafka import KafkaConsumerApp
 from benzene.mesh import (
     InMemoryTraceExporter,
     MeshCollector,
-    OutboundRegistry,
     ServiceDescriptor,
     ServiceInfo,
     collector_registry,
@@ -62,6 +76,7 @@ from benzene.results import Result, is_successful
 from benzene.results.problems import problem_http_status, problem_title, problem_type
 
 from .canonical_handlers import (
+    CANONICAL_PAYLOAD_TYPES,
     VALIDATION_AVAILABLE,
     register_all_canonical,
     register_canonical,
@@ -70,6 +85,9 @@ from .canonical_handlers import (
 )
 
 CONFORMANCE_DIR = Path(__file__).resolve().parent.parent / "conformance"
+
+#: A valid component key (contract-document §4.1 rule 3).
+VALID_COMPONENT_NAME = re.compile(r"[A-Za-z0-9._-]+")
 
 #: Vendored fixtures that no runner opens, each with the reason it is deliberately unrun.
 #:
@@ -539,100 +557,337 @@ def run_settlement_defaults(data: dict) -> list[str]:
     return failures
 
 
+#: The schema members of each entry kind a derivation case compares (README "derivationCases").
+SCHEMA_MEMBERS: dict[str, tuple[str, ...]] = {
+    "requests": ("request", "response"),
+    "events": ("message",),
+    "sends": ("request", "response"),
+}
+
+
+def _canonical_registrations(
+    registrations: dict, types: dict[str, Any]
+) -> tuple[Registry, OutboundRegistry]:
+    """Register a case's handlers, events and sends natively (no HTTP mappings)."""
+
+    async def handler(_request: Any) -> Result:
+        return Result.ok()
+
+    registry = Registry()
+    for entry in registrations.get("requests", []):
+        registry.register(
+            entry["topic"],
+            handler,
+            entry.get("version", ""),
+            request_type=types[entry["request"]],
+            # An expected entry without a response is a handler that returns no payload.
+            response_type=types[entry["response"]] if "response" in entry else NoPayload,
+        )
+    outbound = OutboundRegistry()
+    for entry in registrations.get("events", []):
+        outbound.register_event(entry["topic"], types[entry["message"]], version=entry.get("version", ""))
+    for entry in registrations.get("sends", []):
+        outbound.register_send(
+            entry["topic"],
+            types[entry["request"]],
+            types[entry["response"]] if "response" in entry else None,
+            version=entry.get("version", ""),
+        )
+    return registry, outbound
+
+
+def _refs_resolve(value: Any, schemas: dict) -> bool:
+    if isinstance(value, dict):
+        ref = value.get("$ref")
+        if ref is not None and not (
+            isinstance(ref, str)
+            and ref.startswith(SCHEMA_REF_PREFIX)
+            and ref[len(SCHEMA_REF_PREFIX) :] in schemas
+        ):
+            return False
+        return all(_refs_resolve(item, schemas) for item in value.values())
+    if isinstance(value, list):
+        return all(_refs_resolve(item, schemas) for item in value)
+    return True
+
+
+def run_contract_derivation(data: dict) -> list[str]:
+    """``derivationCases``: the canonical registrations derive the expected entries and hashes."""
+    failures: list[str] = []
+    for case in _cases(data, "derivationCases", "contract-document", failures):
+        name = case["name"]
+        registry, outbound = _canonical_registrations(case["registrations"], CANONICAL_PAYLOAD_TYPES)
+        payload = ContractDocument.derive(
+            registry, service="conformance", outbound=outbound
+        ).to_payload()
+        schemas = payload["components"]["schemas"]
+        expected = case["expected"]
+        for kind, schema_members in SCHEMA_MEMBERS.items():
+            actual_entries = {(e["topic"], e.get("version")): e for e in payload[kind]}
+            expected_entries = {(e["topic"], e.get("version")): e for e in expected[kind]}
+            if set(actual_entries) != set(expected_entries):
+                failures.append(
+                    f"derivationCases[{name}]: {kind} {sorted(actual_entries, key=str)} != "
+                    f"{sorted(expected_entries, key=str)}"
+                )
+                continue
+            for key, expected_entry in expected_entries.items():
+                actual_entry = actual_entries[key]
+                for member in schema_members:
+                    if (member in expected_entry) != (member in actual_entry):
+                        failures.append(
+                            f"derivationCases[{name}]: {kind} {key[0]} {member} present "
+                            f"{member in actual_entry}, expected {member in expected_entry}"
+                        )
+                    elif member in expected_entry:
+                        got = normalize_schema(actual_entry[member], schemas)
+                        if got != expected_entry[member]:
+                            failures.append(
+                                f"derivationCases[{name}]: {kind} {key[0]} {member} {got} != "
+                                f"{expected_entry[member]}"
+                            )
+        invalid = [key for key in schemas if not VALID_COMPONENT_NAME.fullmatch(key)]
+        if invalid:
+            failures.append(f"derivationCases[{name}]: invalid component keys {invalid}")
+        if not _refs_resolve(payload, schemas):
+            failures.append(f"derivationCases[{name}]: a $ref does not resolve")
+        for field_name in ("contractHash", "registrationHash"):
+            if payload[field_name] != expected[field_name]:
+                failures.append(
+                    f"derivationCases[{name}]: {field_name} {payload[field_name]} != "
+                    f"{expected[field_name]}"
+                )
+    return failures
+
+
+def _naming_type(qualified: str, shape: dict, declared: str | None) -> type:
+    """A dataclass with ``qualified``'s module and simple name, and ``shape``'s string properties."""
+    module, _, simple = qualified.rpartition(".")
+    required = set(shape.get("required", []))
+    cls = make_dataclass(
+        simple,
+        [
+            (prop, str) if prop in required else (prop, str, dataclass_field(default=""))
+            for prop in shape.get("properties", {})
+        ],
+    )
+    cls.__module__ = module
+    return schema_name(declared)(cls) if declared else cls
+
+
+def run_contract_naming(data: dict) -> list[str]:
+    """``namingCases``: a collision fails before any message; a declared name resolves it."""
+    failures: list[str] = []
+    for case in _cases(data, "namingCases", "contract-document", failures):
+        name = case["name"]
+        declared = case.get("declaredNames", {})
+        types = {
+            qualified: _naming_type(qualified, shape, declared.get(qualified))
+            for qualified, shape in case["types"].items()
+        }
+        registry, outbound = _canonical_registrations(case["registrations"], types)
+        expected = case["expected"]
+        # Derivation happens at the composition root, so this is where it fails - before any
+        # message is handled.
+        definition = AppDefinition(
+            registry=registry, outbound=outbound, contract=ContractInfo("conformance")
+        )
+        try:
+            application_from(definition)
+            document = definition.contract_document()
+        except ComponentNameCollisionError as exc:
+            if expected.get("error") != exc.kind:
+                failures.append(f"namingCases[{name}]: unexpected collision: {exc}")
+            elif exc.name != expected["name"] or expected["name"] not in str(exc):
+                failures.append(f"namingCases[{name}]: collision names {exc.name!r}")
+            elif not all(qualified in str(exc) for qualified in case["types"]):
+                failures.append(f"namingCases[{name}]: the failure does not name both types: {exc}")
+            continue
+        if "error" in expected:
+            failures.append(f"namingCases[{name}]: expected {expected['error']}, derivation succeeded")
+            continue
+        assert document is not None
+        missing = set(expected["componentNames"]) - set(document.schemas)
+        if missing:
+            failures.append(f"namingCases[{name}]: components lack {sorted(missing)}")
+    return failures
+
+
+def _spec_definition() -> AppDefinition:
+    """The canonical handlers behind the composition root, with the self-description on."""
+    router = HttpRouter()
+    return AppDefinition(
+        registry=register_canonical(Registry()),
+        router=router,
+        standard_paths=StandardPaths(),
+        contract=ContractInfo("conformance"),
+    )
+
+
+def run_spec_topic(data: dict) -> list[str]:
+    """``specTopicCases`` (a ``benzene:spec`` envelope) and ``specHttpCases`` (``GET``)."""
+    failures: list[str] = []
+    application = application_from(_spec_definition())
+    for case in _cases(data, "specTopicCases", "contract-document", failures):
+        name = case["name"]
+        envelope: dict[str, Any] = {"topic": "benzene:spec", "headers": {}}
+        if case["request"] is not None:  # null means an absent body
+            envelope["body"] = json.dumps(case["request"])
+        response = asyncio.run(application.handle(envelope))
+        expected = case["expected"]
+        if response["statusCode"] != expected["statusCode"]:
+            failures.append(f"specTopicCases[{name}]: {response['statusCode']} != {expected['statusCode']}")
+        elif "document" in expected and not _is_subset(expected["document"], json.loads(response["body"])):
+            failures.append(f"specTopicCases[{name}]: document is not a superset of {expected['document']}")
+
+    http = BenzeneHttpApp.from_definition(_spec_definition())
+    for case in _cases(data, "specHttpCases", "contract-document", failures):
+        name = case["name"]
+        path, _, query = case["path"].partition("?")
+        http_response = asyncio.run(http.handle("GET", path, query))
+        expected = case["expected"]
+        if http_response.status_code != expected["httpStatus"]:
+            failures.append(f"specHttpCases[{name}]: {http_response.status_code} != {expected['httpStatus']}")
+        elif "document" in expected and not _is_subset(
+            expected["document"], json.loads(http_response.body)
+        ):
+            failures.append(f"specHttpCases[{name}]: document is not a superset of {expected['document']}")
+    return failures
+
+
+def _entry_failures(group: str, case_name: str, kind: str, expected_rows: list, actual: Any) -> list[str]:
+    """Per-entry parse rows, keyed by topic and (when given) version."""
+    failures: list[str] = []
+    for row in expected_rows:
+        matches = [
+            entry
+            for entry in actual
+            if entry.topic == row["topic"] and ("version" not in row or entry.version == row["version"])
+        ]
+        if len(matches) != 1:
+            failures.append(f"{group}[{case_name}]: {kind} {row['topic']!r} matched {len(matches)} entries")
+            continue
+        entry = matches[0]
+        if "versionPresent" in row and entry.version_present != row["versionPresent"]:
+            failures.append(f"{group}[{case_name}]: {kind} {entry.topic} versionPresent mismatch")
+        if "responsePresent" in row and entry.response_present != row["responsePresent"]:
+            failures.append(f"{group}[{case_name}]: {kind} {entry.topic} responsePresent mismatch")
+    return failures
+
+
 def run_contract_document_cases() -> list[str]:
-    """contract-document-cases.json: parseCases, topicScopeCases, schemaClosureCases (§§1-5)."""
+    """contract-document-cases.json: the producer groups (derivation, naming, the benzene:spec
+    request) and the client-generator groups (parse, topic scope, schema closure)."""
     failures: list[str] = []
     data = _load("contract-document-cases.json")
-    documents = {doc_id: parse_document(raw) for doc_id, raw in data["documents"].items()}
+    failures += run_contract_derivation(data)
+    failures += run_contract_naming(data)
+    failures += run_spec_topic(data)
+    raw_documents = data["documents"]
 
     for case in _cases(data, "parseCases", "contract-document", failures):
         name = case["name"]
-        document = documents[case["documentRef"]]
+        expected_error = case.get("expectedError")
+        try:
+            document = parse_document(raw_documents[case["documentRef"]])
+        except UnknownSchemaDialectError as exc:
+            if expected_error is None or expected_error["kind"] != exc.kind:
+                failures.append(f"parseCases[{name}]: unexpected {exc}")
+            continue
+        if expected_error is not None and expected_error["kind"] == "unknown-schema-dialect":
+            failures.append(f"parseCases[{name}]: expected the dialect to be rejected")
+            continue
 
-        if "expectedError" in case:
+        if expected_error is not None:
             options = case.get("options", {})
-            scope_options = TopicScopeOptions(
-                topics=tuple(options["topics"]) if options.get("topics") else None,
-                include_reserved=bool(options.get("includeReserved", False)),
-            )
             try:
-                apply_topic_scope(document, scope_options)
+                apply_topic_scope(document, TopicScopeOptions(topics=tuple(options.get("topics") or ()) or None))
                 failures.append(f"parseCases[{name}]: expected UnknownTopicsError, none raised")
             except UnknownTopicsError as exc:
-                expected = case["expectedError"]
-                if sorted(exc.unknown_topics) != sorted(expected["unknownTopics"]):
-                    failures.append(
-                        f"parseCases[{name}]: unknownTopics {exc.unknown_topics} != {expected['unknownTopics']}"
-                    )
-                if sorted(exc.valid_topics) != sorted(expected["validTopics"]):
-                    failures.append(
-                        f"parseCases[{name}]: validTopics {exc.valid_topics} != {expected['validTopics']}"
-                    )
+                if sorted(exc.unknown_topics) != sorted(expected_error["unknownTopics"]):
+                    failures.append(f"parseCases[{name}]: unknownTopics {exc.unknown_topics}")
+                if sorted(exc.valid_topics) != sorted(expected_error["validTopics"]):
+                    failures.append(f"parseCases[{name}]: validTopics {exc.valid_topics}")
             continue
 
         expected = case["expected"]
-        if "openapi" in expected and document.openapi != expected["openapi"]:
-            failures.append(f"parseCases[{name}]: openapi {document.openapi!r} != {expected['openapi']!r}")
-        for expected_request in expected.get("requests", []):
-            actual = document.find_request(expected_request["topic"])
-            if actual is None:
-                failures.append(f"parseCases[{name}]: request topic {expected_request['topic']!r} not found")
+        if "schemaDialect" in expected and document.schema_dialect != expected["schemaDialect"]:
+            failures.append(f"parseCases[{name}]: schemaDialect {document.schema_dialect!r}")
+        if "service" in expected and document.service != expected["service"]:
+            failures.append(f"parseCases[{name}]: service {document.service!r}")
+        for kind, actual in (
+            ("requests", document.requests),
+            ("events", document.events),
+            ("sends", document.sends),
+        ):
+            if kind not in expected:
                 continue
-            if "versionPresent" in expected_request and actual.version_present != expected_request["versionPresent"]:
-                failures.append(f"parseCases[{name}]: {actual.topic} versionPresent mismatch")
-            if "version" in expected_request and actual.version != expected_request["version"]:
-                failures.append(f"parseCases[{name}]: {actual.topic} version mismatch")
-            if "reserved" in expected_request and actual.is_reserved() != expected_request["reserved"]:
-                failures.append(f"parseCases[{name}]: {actual.topic} reserved mismatch")
-        for expected_event in expected.get("events", []):
-            actual_event = next((e for e in document.events if e.topic == expected_event["topic"]), None)
-            if actual_event is None:
-                failures.append(f"parseCases[{name}]: event topic {expected_event['topic']!r} not found")
-                continue
-            if "versionPresent" in expected_event and actual_event.version_present != expected_event["versionPresent"]:
-                failures.append(f"parseCases[{name}]: event {actual_event.topic} versionPresent mismatch")
-            if "version" in expected_event and actual_event.version != expected_event["version"]:
-                failures.append(f"parseCases[{name}]: event {actual_event.topic} version mismatch")
+            failures += _entry_failures("parseCases", name, kind, expected[kind], actual)
+            # Lists compare as sets: no entry beyond the expected ones (a benzene: entry above all).
+            if {e.topic for e in actual} != {row["topic"] for row in expected[kind]}:
+                failures.append(f"parseCases[{name}]: {kind} topics {[e.topic for e in actual]}")
 
     for case in _cases(data, "topicScopeCases", "contract-document", failures):
         name = case["name"]
-        document = documents[case["documentRef"]]
+        document = parse_document(raw_documents[case["documentRef"]])
         options = case.get("options", {})
-        scope_options = TopicScopeOptions(
-            topics=tuple(options["topics"]) if options.get("topics") else None,
-            include_reserved=bool(options.get("includeReserved", False)),
+        scoped = apply_topic_scope(
+            document, TopicScopeOptions(topics=tuple(options.get("topics") or ()) or None)
         )
-        scoped = apply_topic_scope(document, scope_options)
-        actual_topics = set(scoped.topics())
-        expected_topics = set(case["expectedTopics"])
-        if actual_topics != expected_topics:
-            failures.append(f"topicScopeCases[{name}]: {actual_topics} != {expected_topics}")
+        if set(scoped.topics()) != set(case["expectedTopics"]):
+            failures.append(f"topicScopeCases[{name}]: {set(scoped.topics())} != {set(case['expectedTopics'])}")
+        if "expectedEvents" in case and {e.topic for e in scoped.events} != set(case["expectedEvents"]):
+            failures.append(f"topicScopeCases[{name}]: events {[e.topic for e in scoped.events]}")
+        if "expectedSends" in case and {s.topic for s in scoped.sends} != set(case["expectedSends"]):
+            failures.append(f"topicScopeCases[{name}]: sends {[s.topic for s in scoped.sends]}")
 
     for case in _cases(data, "schemaClosureCases", "contract-document", failures):
         name = case["name"]
-        document = documents[case["documentRef"]]
+        document = parse_document(raw_documents[case["documentRef"]])
         request = document.find_request(case["topic"])
         if request is None:
             failures.append(f"schemaClosureCases[{name}]: topic {case['topic']!r} not found")
             continue
         actual_components = reachable_names(document.schemas, request.request, request.response)
-        expected_components = set(case["expectedComponents"])
-        if actual_components != expected_components:
-            failures.append(f"schemaClosureCases[{name}]: {actual_components} != {expected_components}")
+        if actual_components != set(case["expectedComponents"]):
+            failures.append(f"schemaClosureCases[{name}]: {actual_components} != {set(case['expectedComponents'])}")
 
     return failures
 
 
 def run_contract_hash_cases() -> list[str]:
-    """contract-hash-cases.json: exact contractHash values (§6)."""
+    """contract-hash-cases.json (contract-document §6).
+
+    As a producer, every case without a projection runs through ``benzene-core``'s hash - the one a
+    service serves. As a client generator (``benzene-codegen-client``), every case runs: a case with
+    a ``projection`` is projected by the generator's own §5.2/§5.3 projection first, and its hashes
+    recomputed over it.
+    """
     failures: list[str] = []
     data = _load("contract-hash-cases.json")
-    for case in data["cases"]:
+    for case in _cases(data, "cases", "contract-hash", failures):
         name = case["name"]
-        topic_scoped = name == "topic-scoped-projection"
-        got = codegen_contract_hash.compute(case["document"], topic_scoped=topic_scoped)
-        if got != case["expectedHash"]:
-            failures.append(f"contract-hash[{name}]: {got} != {case['expectedHash']}")
+        projection = case.get("projection")
+        if projection is None:
+            got = (contract_hash(case["document"]), registration_hash(case["document"]))
+        else:
+            document = parse_document(case["document"])
+            if projection["kind"] == "topic":
+                projected = topic_projection(document, projection["topic"])
+            elif projection["kind"] == "include-list":
+                projected = apply_topic_scope(
+                    document, TopicScopeOptions(topics=tuple(projection["topics"]))
+                )
+            else:
+                failures.append(f"contract-hash[{name}]: unknown projection {projection['kind']!r}")
+                continue
+            got = (
+                codegen_contract_hash.compute(projected),
+                codegen_contract_hash.compute_registration(projected),
+            )
+        want = (case["expectedContractHash"], case["expectedRegistrationHash"])
+        if got != want:
+            failures.append(f"contract-hash[{name}]: {got} != {want}")
     return failures
 
 
@@ -952,7 +1207,8 @@ if __name__ == "__main__":
         "CONFORMANCE PASSED — status vocabulary, HTTP mapping, problem details (+ envelope endpoint "
         "and health routes), envelope (+ version selection), transport metadata (+ settlement "
         "defaults), gRPC status mapping, mesh (descriptor + trace + collector + issues), "
-        "contract-document, and contract-hash cases all green; "
+        "contract-document (derivation + naming + benzene:spec + parse/scope/closure), and "
+        "contract-hash cases all green; "
         f"every vendored fixture claimed ({len(UNRUN_FIXTURES)} explicitly unrun); "
         f"{len(UNNAMED_SETTLEMENT_BINDINGS)} shipped binding not yet named by settlementDefaults."
     )

@@ -1,8 +1,8 @@
 """Payload-schema derivation for the mesh descriptor (mesh.md section 2).
 
-The derivation itself lives in :mod:`benzene.core.schema` — it is a projection of the registry's
-declared types, shared by the mesh :class:`ServiceDescriptor` and the profile's derived spec document
-(:class:`~benzene.core.ServiceSpec`). This module re-exports it so ``benzene.mesh``'s public surface
+The derivation itself lives in :mod:`benzene.core.schema` — the JSON Schema subset the descriptor
+carries until it is retired (the Contract Document derives its OpenAPI 3.0 schemas separately, in
+:mod:`benzene.core.contract_schema`). This module re-exports it so ``benzene.mesh``'s public surface
 (``benzene.mesh.schema.json_schema`` / ``Schema``) is unchanged.
 """
 
