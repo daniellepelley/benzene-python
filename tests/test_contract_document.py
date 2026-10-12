@@ -418,16 +418,21 @@ def test_the_collision_fails_at_the_composition_root_before_any_message() -> Non
         application_from(AppDefinition(registry=registry, contract=ContractInfo("shop")))
 
 
-def test_a_pydantic_model_derives_to_the_open_schema() -> None:
-    # Recorded gap (self-description-design Q11, deferred): this derivation reads dataclasses, so a
-    # pydantic payload publishes {} until a pydantic schema source lands.
+def test_a_pydantic_model_is_derived_too() -> None:
+    # Pydantic v2 models derive through the same table (tests/test_contract_pydantic.py has the
+    # detail); this pins only that the gap once recorded here - a model publishing {} - is closed.
     base_model: Any = pytest.importorskip("pydantic").BaseModel
 
     class Model(base_model):
         name: str
 
     document = _derive(Registry().register("m:1", handle, request_type=Model))
-    assert document["requests"][0]["request"] == {}
+    assert document["requests"][0]["request"] == {"$ref": "#/components/schemas/Model"}
+    assert document["components"]["schemas"]["Model"] == {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+    }
 
 
 # --- the reader this repo ships is the writer's cheapest end-to-end check ----------------------------

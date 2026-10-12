@@ -682,11 +682,27 @@ def _refs_resolve(value: Any, schemas: dict) -> bool:
 
 
 def run_contract_derivation(data: dict) -> list[str]:
-    """``derivationCases``: the canonical registrations derive the expected entries and hashes."""
+    """``derivationCases``: the canonical registrations derive the expected entries and hashes -
+    from the canonical dataclasses, and again from the same types written as pydantic v2 models
+    (when pydantic is installed), which must derive the identical document: one wire shape, one
+    contract, whichever way the payload type is declared."""
+    failures = _run_contract_derivation(data, CANONICAL_PAYLOAD_TYPES, "derivationCases")
+    try:
+        from .canonical_pydantic_types import CANONICAL_PYDANTIC_PAYLOAD_TYPES
+    except ImportError:
+        SKIPPED.append("contract-document.derivationCases[pydantic models] (requires pydantic)")
+    else:
+        failures += _run_contract_derivation(
+            data, CANONICAL_PYDANTIC_PAYLOAD_TYPES, "derivationCases[pydantic]"
+        )
+    return failures
+
+
+def _run_contract_derivation(data: dict, types: dict[str, type], group: str) -> list[str]:
     failures: list[str] = []
     for case in _cases(data, "derivationCases", "contract-document", failures):
-        name = case["name"]
-        registry, outbound = _canonical_registrations(case["registrations"], CANONICAL_PAYLOAD_TYPES)
+        name = case["name"] if group == "derivationCases" else f"{case['name']} (pydantic)"
+        registry, outbound = _canonical_registrations(case["registrations"], types)
         # The case's identity and placement, through the composition root's own path (ContractInfo).
         service_info = case.get("serviceInfo", {})
         info = ContractInfo(

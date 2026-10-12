@@ -405,13 +405,15 @@ AppDefinition(
 - **Responses.** A handler declared `response_type=NoPayload` has no `response` (no payload); an
   undeclared `response_type` is `{}` (a payload of any shape). A send with no `response_type` is
   one-way.
-- **Schemas** are OpenAPI 3.0 Schema Objects derived from the dataclasses (`contract_schema.py`):
-  `T | None` is `nullable: true`, or the `{"type", "nullable": true, "allOf": [{"$ref"}]}` wrapper for
-  a named type; every dataclass and `str`/`int` enum is hoisted into `components.schemas`; `format`
-  where it is known (`date-time`, `double`, `byte`); every field is `required`, a defaulted one
-  included — the marshaler always writes every dataclass field, and contract-document §4.2 makes a
-  property it always emits `required` even when the type declares a default. A pydantic model
-  derives to `{}` (a recorded gap).
+- **Schemas** are OpenAPI 3.0 Schema Objects derived from the dataclasses and pydantic v2 models
+  (`contract_schema.py`): `T | None` is `nullable: true`, or the
+  `{"type", "nullable": true, "allOf": [{"$ref"}]}` wrapper for a named type; every dataclass,
+  pydantic model and `str`/`int` enum is hoisted into `components.schemas`; `format` where it is
+  known (`date-time`, `double`, `byte`); every field is `required`, a defaulted one included — the
+  marshaler always writes every dataclass field (and every model field it does not exclude), and
+  contract-document §4.2 makes a property it always emits `required` even when the type declares a
+  default. A model's properties are its serialization aliases and computed fields, as
+  `model_dump(by_alias=True)` writes them; see [pydantic](pydantic.md#in-the-contract-document).
 - **Names** are the type's `__name__`, or the name declared with `@schema_name("…")`; a generic
   instance puts its arguments first (`Page[Order]` → `OrderPage`). Two different types claiming one
   name fail derivation — so building the app — with `ComponentNameCollisionError`, naming both types,

@@ -74,6 +74,27 @@ class Receipt(BaseModel):
     order_id: str          # -> "orderId" on the wire
 ```
 
+## In the Contract Document
+
+A pydantic v2 model used as a request, response, event or send payload is described in the service's
+Contract Document exactly as the wire mapper writes it (contract-document §4.2) — `benzene-core`
+reads the model through its v2 API, so this needs nothing from `benzene-pydantic`:
+
+- a hoisted `{"type": "object", "properties", "required"}` component, named by the class (or
+  `@schema_name("…")`; a generic `Page[Order]` is `OrderPage`), under the same collision rule as a
+  dataclass — a model and a dataclass with one wire shape share one schema;
+- one property per field and per `@computed_field`, named by its serialization alias (so the
+  `alias_generator` above is reflected), each derived from its annotation like a dataclass field:
+  `T | None` is `nullable: true` (the `allOf` wrapper for a named type), enums are hoisted with their
+  values, `datetime` carries `format: date-time`;
+- `required` is every property the dump always writes — defaulted and `Optional` fields included; a
+  `Field(exclude=True)` field is absent and one `exclude_if` may drop is not required;
+- `{}` where the shape is not the model's own to state: a custom serializer (`@field_serializer`,
+  `@model_serializer`, a `PlainSerializer`/`WrapSerializer`) or a stdlib dataclass nested in the
+  model (pydantic dumps it under the model's alias config). A `RootModel` is its root value, inline.
+
+Validation constraints (`min_length`, `ge`, `pattern`, …) are not emitted; §4.2 makes them optional.
+
 ## Exports
 
 `validated`, `validation_errors`, `field_pointer`, `format_validation_errors`.
