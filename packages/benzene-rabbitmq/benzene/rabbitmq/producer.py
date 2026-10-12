@@ -18,8 +18,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, encode_body
-from benzene.results import Result, Status
+from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, encode_body, failed_call_result
+from benzene.results import Result
 
 #: Header name carrying the Benzene topic (the cross-port convention; the consumer resolves it).
 TOPIC_HEADER = "topic"
@@ -97,5 +97,5 @@ class RabbitMqMessageSender:
                 properties=self._properties(amqp_headers),
             )
         except Exception as ex:  # a publish failure is service-unavailable, never a crash
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
         return Result.ok()

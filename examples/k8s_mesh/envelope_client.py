@@ -25,9 +25,10 @@ right size for the one example that specifically wants the generic single-endpoi
 
 from __future__ import annotations
 
+import asyncio
 import json
 
-from benzene.core import decode_response, encode_body
+from benzene.core import decode_response, encode_body, failed_call_result
 from benzene.http import from_http
 from benzene.http.client import HttpTransport, stdlib_transport
 from benzene.results import Result, is_successful, problem_errors, problem_status
@@ -46,9 +47,14 @@ class EnvelopeHttpMessageSender:
         self, topic: str, message: object, headers: dict[str, str] | None = None
     ) -> Result:
         envelope = {"topic": topic, "headers": dict(headers or {}), "body": encode_body(message)}
-        reply = await self._transport(
-            self._url, {"content-type": "application/json"}, json.dumps(envelope)
-        )
+        try:
+            reply = await self._transport(
+                self._url, {"content-type": "application/json"}, json.dumps(envelope)
+            )
+        except (OSError, asyncio.TimeoutError) as exc:
+            # No reply at all - a dead peer is a timeout or service-unavailable Result like any
+            # other failure, not an exception (transport-bindings §1).
+            return failed_call_result(exc, f"POST {self._url}")
         # The envelope endpoint answers 200 for every envelope it processed and carries the outcome in
         # the envelope, so read the body whatever the status; only a body that is not an envelope
         # falls back to the reverse HTTP table (transport-bindings §1, "Outbound clients").

@@ -103,10 +103,13 @@ result = await sender.send_message("orders:place", {"sku": "A"}, headers={"x-cor
   trip exactly. A failure also carries the structured errors on `grpc-status-details-bin` — one
   `google.rpc.BadRequest.FieldViolation` per error: `message` as `description`, `field` as the dotted
   path, `code` as `reason`.
-- `GrpcMessageSender(channel)` is a `MessageSender`: it calls `/benzene.Benzene/<topic>`, forwards the
+- `GrpcMessageSender(channel, *, timeout=None)` is a `MessageSender`: it calls `/benzene.Benzene/<topic>`, forwards the
   headers as metadata, and maps the outcome back (the trailer wins verbatim, else the code is mapped),
   reading a failure's `BadRequest` details back into `result.errors` (`message`, `field` and `code`).
-  The blocking gRPC call runs on a worker thread, so it never blocks the event loop.
+  The blocking gRPC call runs on a worker thread, so it never blocks the event loop. `timeout` is the
+  call's gRPC deadline; a call that gets no reply returns a Result, never raises (transport-bindings
+  §1): the deadline elapsing is `timeout`, an unreachable peer or a closed channel
+  `service-unavailable`.
 - `method_for(topic)` / `topic_for(method)` are the method-path convention if you need them directly.
 
 ## Testing

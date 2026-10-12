@@ -121,7 +121,8 @@ attributes. EventBridge/Kinesis have *no* metadata channel, so the sender leaves
 the wire body and embeds headers *inside* it, under the reserved `benzene-headers` key (mirrors .NET's
 `Benzene.Clients.Aws.EventBridge`) — keeping correlation/trace propagation intact without disturbing
 the payload shape a plain (non-Benzene) consumer of the stream/bus would see. Lambda's invoke Payload
-*is* the envelope already. A send failure maps to `service-unavailable`, never a raise.
+*is* the envelope already. A send failure maps to `service-unavailable` — or `timeout` when the
+client's own deadline elapsed (botocore's `ReadTimeoutError`/`ConnectTimeoutError`) — never a raise.
 
 Azure Functions and Kubernetes services have no equivalent native "invoke another function directly"
 primitive — the cross-platform way to reach the same synchronous-call outcome is over HTTP or gRPC

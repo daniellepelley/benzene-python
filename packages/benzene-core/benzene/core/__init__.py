@@ -19,7 +19,7 @@ the ``benzene.core`` subpackage to the shared ``benzene`` namespace.
 from __future__ import annotations
 
 from .casting import Cast, NoCastPathError, SchemaCasters, casting_handler
-from .clients import MessageSender
+from .clients import MessageSender, failed_call_result, is_timeout
 from .context import Context
 from .contract import (
     DEGRADABLE_MEMBERS,
@@ -192,6 +192,8 @@ __all__ = [
     "Lifetime",
     "MessageHandlingError",
     "MessageSender",
+    "failed_call_result",
+    "is_timeout",
     "DEFAULT_HEADERS_KEY",
     "DEFAULT_METADATA_KEYS",
     "DEFAULT_TOPIC_KEY",

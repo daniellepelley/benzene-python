@@ -88,3 +88,35 @@ def test_sqs_sender_maps_a_send_failure_to_service_unavailable() -> None:
     result = asyncio.run(SqsMessageSender("q", client=Boom()).send_message("t", {}))
     assert result.status == Status.SERVICE_UNAVAILABLE
     assert "sqs down" in " ".join(result.messages)
+
+
+def test_lambda_sender_maps_a_client_deadline_to_timeout_and_a_dead_endpoint_to_service_unavailable() -> None:
+    # transport-bindings §1 (spec 1.1): a call that fails before any reply yields a Result - timeout
+    # when the client's own deadline elapsed, otherwise service-unavailable. botocore's exceptions
+    # are recognised by name (boto3 is optional, so they cannot be imported here).
+    class ReadTimeoutError(Exception):
+        pass
+
+    class EndpointConnectionError(Exception):
+        pass
+
+    def client_raising(error: Exception):
+        class Client:
+            def invoke(self, **kwargs):
+                raise error
+
+        return Client()
+
+    from benzene.aws import LambdaMessageSender
+
+    timed_out = asyncio.run(
+        LambdaMessageSender("fn", client=client_raising(ReadTimeoutError("read timed out")))
+        .send_message("t", {})
+    )
+    assert timed_out.status == Status.TIMEOUT
+    unreachable = asyncio.run(
+        LambdaMessageSender("fn", client=client_raising(EndpointConnectionError("no endpoint")))
+        .send_message("t", {})
+    )
+    assert unreachable.status == Status.SERVICE_UNAVAILABLE
+    assert unreachable.messages == ("no endpoint",)

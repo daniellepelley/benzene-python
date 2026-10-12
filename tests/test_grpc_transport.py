@@ -243,3 +243,45 @@ def test_code_and_field_cross_independently_and_absent_ones_stay_absent() -> Non
         {"message": "amount exceeds the order total", "field": "/amount"},
         {"message": "refunds are closed"},
     ]
+
+
+# --- a call that fails before any reply (transport-bindings §1, spec 1.1) -------------------------
+
+
+def test_an_unreachable_peer_is_service_unavailable_not_an_exception() -> None:
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]  # nothing listens once the probe closes
+    channel = grpc.insecure_channel(f"127.0.0.1:{port}")
+    try:
+        result = asyncio.run(GrpcMessageSender(channel, timeout=5).send_message("orders:place", {}))
+    finally:
+        channel.close()
+    assert result.status == "service-unavailable"
+    assert not result.is_successful
+
+
+@message("orders:slow")
+async def slow(request: dict) -> Result:
+    await asyncio.sleep(2)
+    return Result.ok()
+
+
+def test_the_callers_deadline_elapsing_is_timeout() -> None:
+    with _serving(BenzeneMessageApplication(Registry().add(slow))) as channel:
+        result = asyncio.run(
+            GrpcMessageSender(channel, timeout=0.2).send_message("orders:slow", {})
+        )
+    assert result.status == "timeout"
+    assert not result.is_successful
+
+
+def test_a_closed_channel_is_service_unavailable_not_an_exception() -> None:
+    with _serving(_orders_app()) as channel:
+        sender = GrpcMessageSender(channel)
+        channel.close()
+        result = asyncio.run(sender.send_message("orders:place", {"sku": "A"}))
+    assert result.status == "service-unavailable"
+    assert "closed channel" in result.messages[0]

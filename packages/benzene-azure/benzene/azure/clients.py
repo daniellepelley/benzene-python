@@ -27,8 +27,14 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, encode_body, to_jsonable
-from benzene.results import Result, Status
+from benzene.core import (
+    DEFAULT_METADATA_KEYS,
+    MetadataKeys,
+    encode_body,
+    failed_call_result,
+    to_jsonable,
+)
+from benzene.results import Result
 
 
 def _require_config(
@@ -116,7 +122,7 @@ class ServiceBusMessageSender:
                 self._get_sender().send_messages, self._make_message(topic, message, headers)
             )
         except Exception as ex:
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
         return Result.ok()
 
 
@@ -184,7 +190,7 @@ class EventHubMessageSender:
         try:
             await asyncio.to_thread(self._send_sync, topic, message, headers)
         except Exception as ex:
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
         return Result.ok()
 
 
@@ -259,7 +265,7 @@ class QueueStorageMessageSender:
                 self._get_client().send_message, self._make_message(topic, message, headers)
             )
         except Exception as ex:
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
         return Result.ok()
 
 
@@ -348,5 +354,5 @@ class EventGridMessageSender:
                 self._get_client().send, self._make_event(topic, message, headers)
             )
         except Exception as ex:
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
         return Result.ok()

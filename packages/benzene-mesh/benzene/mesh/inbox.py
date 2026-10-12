@@ -28,7 +28,8 @@ import json
 import uuid
 from typing import Any
 
-from benzene.results import Result, Status
+from benzene.core import failed_call_result
+from benzene.results import Result
 
 
 class S3TraceInbox:
@@ -67,7 +68,7 @@ class S3TraceInbox:
                 ContentType="application/json",
             )
         except Exception as exc:  # noqa: BLE001 - mirrors every other MessageSender's own contract
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(exc))
+            return failed_call_result(exc)
         return Result.ok()
 
     def drain(self) -> list[dict[str, Any]]:

@@ -79,8 +79,8 @@ Implements the `benzene.core.MessageSender` port over a RabbitMQ channel: it ser
 the JSON body, forwards the header dictionary onto the AMQP `properties.headers` (so correlation/trace
 propagation rides across the hop), and carries the Benzene topic in the `topic` header (`TOPIC_HEADER`)
 — the same convention the consumer reads. All Benzene topics are published to the one configured
-`exchange` / `routing_key`, header-routed. A publish failure maps to `service-unavailable`. Inject a
-`channel` (any object exposing `basic_publish(exchange, routing_key, body, properties)`) for tests;
+`exchange` / `routing_key`, header-routed. A publish failure maps to `service-unavailable` — `timeout`
+for a raised timeout. Inject a `channel` (any object exposing `basic_publish(exchange, routing_key, body, properties)`) for tests;
 otherwise a `pika` blocking connection is opened lazily from `host` (default `localhost`) on first use.
 
 ## Testing

@@ -182,12 +182,18 @@ result = await sender.send_message("orders:place", {"sku": "A"}, headers={"x-cor
 # a 201 -> result.status == "created"; the response body becomes result.payload
 ```
 
-- `HttpMessageSender(url_for, *, transport=None, topic_header="topic")` — `url_for` resolves a topic to
+- `HttpMessageSender(url_for, *, transport=None, topic_header="topic", timeout=None)` — `url_for` resolves a topic to
   a URL: a **base URL** (topic appended as a path segment), a **`{topic: url}` map**, or a **`topic ->
   url` callable**.
 - `transport` is the injectable HTTP call — `async (url, headers, body) -> HttpReply` — so a test drives
   it with a fake and no network. The default (`stdlib_transport()`) uses `urllib` on a worker thread, so
   the sender needs **no extra dependency**; inject an `httpx`-backed transport for pooling in production.
+- A call that gets **no reply** returns a Result rather than raising (transport-bindings §1):
+  `timeout` when a deadline elapsed — the transport's own (`stdlib_transport(timeout=30.0)`) or
+  `timeout` seconds for the whole call when given — and `service-unavailable` for a refused, reset or
+  unreachable peer. A transport signals "no reply" by raising an `OSError` (`ConnectionError`,
+  `TimeoutError`; translate an SDK's own errors to those); any HTTP status is a reply and is returned.
+  Anything else a transport raises is a defect and propagates.
 
 ## Serving it alongside another transport
 

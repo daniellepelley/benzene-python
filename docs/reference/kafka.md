@@ -85,8 +85,8 @@ Implements the `benzene.core.MessageSender` port over a Kafka producer: it seria
 the JSON body, forwards the header dictionary onto the record's Kafka headers (so correlation/trace
 propagation rides across the hop), and carries the Benzene topic in the `topic` header. All Benzene
 topics are produced to the one configured Kafka topic, header-routed. A produce/flush failure (or a
-delivery error reported to the callback) maps to `service-unavailable`. Inject a `producer` for tests;
-otherwise a `confluent_kafka.Producer` is created lazily from `bootstrap_servers`.
+delivery error reported to the callback) maps to `service-unavailable` — `timeout` for a raised
+timeout. Inject a `producer` for tests; otherwise a `confluent_kafka.Producer` is created lazily from `bootstrap_servers`.
 
 ## Testing
 

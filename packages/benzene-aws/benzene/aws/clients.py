@@ -32,7 +32,13 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, decode_response, encode_body
+from benzene.core import (
+    DEFAULT_METADATA_KEYS,
+    MetadataKeys,
+    decode_response,
+    encode_body,
+    failed_call_result,
+)
 from benzene.results import Result, Status
 
 
@@ -81,7 +87,7 @@ class SnsMessageSender:
                 MessageAttributes=_string_attributes(topic, headers, self._keys),
             )
         except Exception as ex:
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
         return Result.ok()
 
 
@@ -119,7 +125,7 @@ class SqsMessageSender:
                 MessageAttributes=_string_attributes(topic, headers, self._keys),
             )
         except Exception as ex:
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
         return Result.ok()
 
 
@@ -202,7 +208,7 @@ class EventBridgeMessageSender:
                 ],
             )
         except Exception as ex:
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
         return Result.ok()
 
 
@@ -255,7 +261,7 @@ class KinesisMessageSender:
                 PartitionKey=self._partition_key(topic, headers),
             )
         except Exception as ex:
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
         return Result.ok()
 
 
@@ -319,7 +325,7 @@ class LambdaMessageSender:
         try:
             response = await asyncio.to_thread(self._lambda().invoke, **kwargs)
         except Exception as ex:
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
 
         if self._invocation_type != "RequestResponse":
             return Result.accepted()  # queued; the target's own outcome is never visible here

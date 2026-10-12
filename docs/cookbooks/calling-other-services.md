@@ -51,7 +51,9 @@ outbound = with_correlation_id(              # inject x-correlation-id ONCE (sta
   remembering. Outermost, so every retry attempt shares the one id (an id the caller already set is
   left untouched).
 - **`with_retry`** returns at once on success or a *real* failure (a `not-found` won't get better by
-  retrying); pass a `backoff` hook to sleep between attempts.
+  retrying); pass a `backoff` hook to sleep between attempts. A peer that never answers is retried
+  too: every client returns a call that got no reply as a `timeout` (its deadline elapsed) or
+  `service-unavailable` (refused, reset, unreachable) Result rather than raising.
 - **`with_trace_propagation`** forwards the trace of the *current* invocation (set by
   `trace_middleware`) — `traceparent`, and the inbound `tracestate` unchanged — so the callee joins the
   same trace. Wrap the sender you publish events through too: a meshed service forwards trace context

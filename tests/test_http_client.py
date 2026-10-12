@@ -267,3 +267,113 @@ def test_round_trip_through_the_real_inbound_binding() -> None:
     result = asyncio.run(sender.send_message("orders:place", {"sku": "ABC"}))
     assert result.status == "created"                       # 201 mapped back through from_http
     assert result.payload == {"sku": "ABC", "accepted": True}
+
+
+# --- a call that fails before any reply (transport-bindings §1, spec 1.1) -------------------------
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]  # closed again on exit: nothing listens here
+
+
+def test_a_refused_connection_is_service_unavailable_not_an_exception() -> None:
+    sender = HttpMessageSender(f"http://127.0.0.1:{_free_port()}")
+    result = asyncio.run(sender.send_message("orders:place", {"sku": "A"}))
+    assert result.status == "service-unavailable"
+    assert not result.is_successful
+    assert result.messages[0].startswith(f"POST {sender._resolve_url('orders:place')}: ")
+
+
+def _silent_server(behaviour: str):
+    """A TCP server that accepts and then either never answers ("hang") or hangs up at once ("reset")."""
+    import socket
+    import threading
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    held: list = []
+
+    def serve() -> None:
+        while True:
+            try:
+                connection, _ = listener.accept()
+            except OSError:
+                return
+            if behaviour == "reset":
+                connection.recv(65536)
+                connection.close()
+            else:
+                held.append(connection)
+
+    threading.Thread(target=serve, daemon=True).start()
+
+    def close() -> None:
+        listener.close()
+        for connection in held:
+            connection.close()
+
+    return listener.getsockname()[1], close
+
+
+def test_the_transports_own_deadline_elapsing_is_timeout() -> None:
+    from benzene.http import stdlib_transport
+
+    port, close = _silent_server("hang")
+    try:
+        sender = HttpMessageSender(f"http://127.0.0.1:{port}", transport=stdlib_transport(timeout=0.2))
+        result = asyncio.run(sender.send_message("orders:place", {}))
+    finally:
+        close()
+    assert result.status == "timeout"
+    assert not result.is_successful
+
+
+def test_a_connection_dropped_before_the_reply_is_service_unavailable() -> None:
+    port, close = _silent_server("reset")
+    try:
+        result = asyncio.run(HttpMessageSender(f"http://127.0.0.1:{port}").send_message("t", {}))
+    finally:
+        close()
+    assert result.status == "service-unavailable"
+
+
+def test_the_senders_own_deadline_bounds_any_transport() -> None:
+    async def slow(url: str, headers: dict, body: str) -> HttpReply:
+        await asyncio.sleep(5)
+        return HttpReply(200)
+
+    sender = HttpMessageSender("https://svc.example", transport=slow, timeout=0.05)
+    result = asyncio.run(sender.send_message("orders:place", {}))
+    assert result.status == "timeout"
+    assert result.messages == ("POST https://svc.example/orders:place: no reply within 0.05s",)
+
+
+@pytest.mark.parametrize(
+    "error,status",
+    [
+        (ConnectionRefusedError(111, "Connection refused"), "service-unavailable"),
+        (ConnectionResetError(104, "Connection reset by peer"), "service-unavailable"),
+        (TimeoutError("read timed out"), "timeout"),
+        (asyncio.TimeoutError(), "timeout"),
+    ],
+)
+def test_an_injected_transport_signals_no_reply_with_an_os_error(error, status) -> None:
+    async def failing(url: str, headers: dict, body: str) -> HttpReply:
+        raise error
+
+    result = asyncio.run(HttpMessageSender("https://svc", transport=failing).send_message("t", {}))
+    assert result.status == status
+
+
+def test_a_defect_in_a_transport_still_raises() -> None:
+    # Only "no reply" becomes a Result; a bug is an exception (AGENTS.md: exceptions are for defects).
+    async def broken(url: str, headers: dict, body: str) -> HttpReply:
+        raise RuntimeError("bug")
+
+    with pytest.raises(RuntimeError, match="bug"):
+        asyncio.run(HttpMessageSender("https://svc", transport=broken).send_message("t", {}))

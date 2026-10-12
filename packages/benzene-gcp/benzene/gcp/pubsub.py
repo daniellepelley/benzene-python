@@ -17,8 +17,14 @@ import base64
 from collections.abc import Callable
 from typing import Any
 
-from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, encode_body, read_message_metadata
-from benzene.results import Result, Status
+from benzene.core import (
+    DEFAULT_METADATA_KEYS,
+    MetadataKeys,
+    encode_body,
+    failed_call_result,
+    read_message_metadata,
+)
+from benzene.results import Result
 
 #: Message-attribute name carrying the Benzene topic (the cross-port convention).
 TOPIC_ATTRIBUTE = "topic"
@@ -92,5 +98,5 @@ class PubSubMessageSender:
             # ``await send_message(...)`` never blocks the event loop.
             await asyncio.to_thread(_publish)
         except Exception as ex:  # a failed publish is a service-unavailable, not a crash
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
         return Result.ok()

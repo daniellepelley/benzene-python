@@ -17,7 +17,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, encode_body
+from benzene.core import DEFAULT_METADATA_KEYS, MetadataKeys, encode_body, failed_call_result
 from benzene.results import Result, Status
 
 #: Header name carrying the Benzene topic (the cross-port convention; the consumer resolves it).
@@ -84,7 +84,7 @@ class KafkaMessageSender:
         try:
             await asyncio.to_thread(_publish)
         except Exception as ex:  # a produce/flush failure is service-unavailable, never a crash
-            return Result.failure(Status.SERVICE_UNAVAILABLE, str(ex))
+            return failed_call_result(ex)
         if delivery_errors:
             return Result.failure(Status.SERVICE_UNAVAILABLE, str(delivery_errors[0]))
         return Result.ok()
