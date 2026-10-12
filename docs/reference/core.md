@@ -456,7 +456,7 @@ form, and both derivations describe exactly that form:
 
 | Python value | Written as | Contract Document schema |
 |---|---|---|
-| `datetime` | `isoformat()` — RFC 3339 when aware | `{"type": "string", "format": "date-time"}` |
+| `datetime` | RFC 3339 via `isoformat()`; a naive one is taken as UTC (`+00:00`) | `{"type": "string", "format": "date-time"}` |
 | `date` | `"2026-10-12"` | `{"type": "string", "format": "date"}` |
 | `time` | `isoformat()`, e.g. `"09:30:15"` | `{"type": "string"}` |
 | `timedelta` | ISO 8601 duration in days/hours/minutes/seconds, e.g. `"PT1H30M"` | `{"type": "string", "format": "duration"}` |

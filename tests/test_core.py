@@ -226,7 +226,7 @@ def test_to_jsonable_serializes_the_declared_wire_scalar_types() -> None:
     from datetime import datetime
 
     # The schema layer advertises these as valid wire types; the serializer must not crash on them.
-    assert to_jsonable(datetime(2020, 1, 2, 3, 4, 5)) == "2020-01-02T03:04:05"
+    assert to_jsonable(datetime(2020, 1, 2, 3, 4, 5)) == "2020-01-02T03:04:05+00:00"  # naive = UTC
     assert to_jsonable(b"hi") == "aGk="  # base64
     assert sorted(to_jsonable({3, 1, 2})) == [1, 2, 3]  # set -> array
 
@@ -245,7 +245,7 @@ def test_datetime_payload_round_trips_through_a_response_envelope() -> None:
     app = BenzeneMessageApplication(Registry().register("t", h))
     response = asyncio.run(app.handle({"topic": "t", "headers": {}, "body": "{}"}))
     assert response["statusCode"] == Status.OK
-    assert json.loads(response["body"]) == {"id": "e1", "at": "2020-01-01T12:00:00"}
+    assert json.loads(response["body"]) == {"id": "e1", "at": "2020-01-01T12:00:00+00:00"}
 
 
 # --- decode_response (the inverse of encode_response) -------------------------------------------

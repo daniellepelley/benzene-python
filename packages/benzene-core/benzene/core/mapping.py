@@ -77,13 +77,19 @@ def to_jsonable(payload: Any) -> Any:
     # The non-JSON-native wire types the schema layers declare (schema.py, contract_schema.py), each
     # in its standard JSON form - kept in step so a handler can return them without json.dumps
     # crashing on a type the derived schema says is valid:
-    #   bytes → base64 string; datetime → isoformat (RFC 3339 when aware); date → ISO 8601 date;
+    #   bytes → base64 string; datetime → RFC 3339 (a naive one taken as UTC); date → ISO 8601 date;
     #   time → ISO 8601 time; timedelta → ISO 8601 duration; UUID → canonical hyphenated string;
     #   Decimal → JSON number; PurePath → its string; set/frozenset → array.
     # datetime is a date subclass, so it is matched first.
     if isinstance(payload, (bytes, bytearray)):
         return base64.b64encode(bytes(payload)).decode("ascii")
-    if isinstance(payload, (datetime.datetime, datetime.date, datetime.time)):
+    if isinstance(payload, datetime.datetime):
+        # RFC 3339 requires an offset, and the derived schema says format: date-time, so a naive
+        # datetime is taken as UTC (written as an aware UTC one is: +00:00).
+        if payload.tzinfo is None or payload.utcoffset() is None:
+            payload = payload.replace(tzinfo=datetime.timezone.utc)
+        return payload.isoformat()
+    if isinstance(payload, (datetime.date, datetime.time)):
         return payload.isoformat()
     if isinstance(payload, datetime.timedelta):
         return _iso_duration(payload)

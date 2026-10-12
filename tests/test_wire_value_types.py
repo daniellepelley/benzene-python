@@ -362,3 +362,13 @@ def test_a_model_derives_the_dataclass_schema_and_it_validates_what_was_written(
     written = _wire(wrapper(values=_model(values_model)))
     assert written == {"values": EXPECTED_WIRE}
     assert _validate(nested, {"$ref": "#/components/schemas/Wrapper"}, written) == []
+
+
+def test_a_naive_datetime_is_written_as_utc() -> None:
+    # RFC 3339 (format: date-time) requires an offset, so a naive datetime is taken as UTC and
+    # written exactly as the aware UTC datetime is; an aware one keeps its own offset.
+    naive = datetime.datetime(2026, 10, 12, 9, 30)
+    assert to_jsonable(naive) == to_jsonable(naive.replace(tzinfo=UTC)) == "2026-10-12T09:30:00+00:00"
+    assert _format_ok("date-time", to_jsonable(naive))
+    plus_two = datetime.timezone(datetime.timedelta(hours=2))
+    assert to_jsonable(datetime.datetime(2026, 10, 12, 9, 30, tzinfo=plus_two)) == "2026-10-12T09:30:00+02:00"
