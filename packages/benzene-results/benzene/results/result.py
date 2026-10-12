@@ -38,6 +38,24 @@ def problem_errors(document: Mapping[str, Any]) -> tuple[BenzeneError, ...]:
     return (BenzeneError(str(detail)),) if detail else ()
 
 
+def problem_status(document: Mapping[str, Any]) -> str | None:
+    """The status a peer's problem document states in ``benzeneStatus``, or ``None`` when it states none.
+
+    Wire-contracts.md section 4.1 (spec 1.1): a client that reads a problem document SHOULD take the
+    result's status from its ``benzeneStatus`` rather than from a transport's reverse status table,
+    so an application-defined status - which every such table collapses (an HTTP 500 reads back as
+    ``unexpected-error``) - survives the hop. Callers fall back to their table on ``None``.
+
+    Only a non-empty string naming a *failure* is a usable statement: a problem document is a
+    failure's body, so a success status there (or a non-string) is a malformed member, and reading
+    it would turn a failed reply into a success on the word of one field.
+    """
+    status = document.get("benzeneStatus")
+    if not isinstance(status, str) or not status or is_successful(status):
+        return None
+    return status
+
+
 #: What every failure factory accepts: a plain message, a structured error, or the mapping the wire
 #: decoder produces. One parameter type rather than a parallel set of ``*_with`` factories - Python
 #: takes the union where a language without overloads has to add a second function per status.

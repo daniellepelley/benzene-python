@@ -169,7 +169,9 @@ surfaces on a Lambda, Cloud Function, or Azure Function.
 ## Outbound — `HttpMessageSender`
 
 The reverse direction: a `MessageSender` that publishes a message to another Benzene service over HTTP
-POST and maps the response back via `from_http` (transport-bindings §2). It forwards the Benzene
+POST and maps the response back (transport-bindings §2): a failure's problem document supplies the
+status (its `benzeneStatus`, so an application-defined status survives the 500 it travelled as) and
+the `errors`; `from_http` supplies the status only for a body that states none. It forwards the Benzene
 headers as HTTP headers (plus the reserved `topic`), so correlation ids and trace context propagate.
 
 ```python

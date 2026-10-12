@@ -102,6 +102,65 @@ def test_a_failure_body_that_is_not_a_problem_document_never_fails_the_call(
     assert result.messages == messages
 
 
+@pytest.mark.parametrize(
+    "reply,status",
+    [
+        # An application-defined failure answers 500 (wire-contracts 4.1's forward table); the
+        # reverse table would read it back as unexpected-error. The document says what it was.
+        (HttpReply(500, '{"benzeneStatus": "card-declined", "detail": "insufficient funds"}'), "card-declined"),
+        # A vocabulary status the table collapses: 400 is bad-request, but the peer said
+        # validation-error (or 503/502 both read service-unavailable, 504/408 both timeout...).
+        (HttpReply(400, '{"benzeneStatus": "validation-error", "errors": [{"message": "m"}]}'), "validation-error"),
+        (HttpReply(502, '{"benzeneStatus": "timeout", "detail": "upstream timed out"}'), "timeout"),
+    ],
+)
+def test_a_problem_documents_benzene_status_is_the_result_status(reply, status) -> None:
+    # wire-contracts 4.1 (spec 1.1): a client that reads a problem document SHOULD take the result's
+    # status from its benzeneStatus rather than from the reverse table.
+    result = asyncio.run(_sender(reply).send_message("payments:charge", {}))
+    assert result.status == status
+    assert not result.is_successful
+    assert len(result.errors) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"benzeneStatus": "ok", "detail": "nonsense"}',  # a success status in a failure's body
+        '{"benzeneStatus": "", "detail": "empty"}',
+        '{"benzeneStatus": 422, "detail": "not a string"}',
+        '{"detail": "no status stated"}',
+    ],
+)
+def test_the_reverse_table_applies_when_the_document_states_no_failure_status(body) -> None:
+    result = asyncio.run(_sender(HttpReply(404, body)).send_message("orders:get", {}))
+    assert result.status == "not-found"
+    assert not result.is_successful
+
+
+def test_an_application_defined_failure_status_survives_the_real_http_hop() -> None:
+    # End to end through the real inbound binding: the server answers 500 with the problem document,
+    # and the client reads the status the handler actually returned.
+    @http_endpoint("POST", "/payments")
+    @message("payments:charge")
+    async def charge(request: dict) -> Result:
+        return Result.failure("card-declined", {"message": "insufficient funds", "code": "nsf"})
+
+    app = BenzeneHttpApp(HttpRouter().add(charge))
+
+    async def transport(url: str, headers: dict, body: str) -> HttpReply:
+        response = await app.handle("POST", "/payments", headers=headers, body=body)
+        assert response.status_code == 500
+        return HttpReply(response.status_code, response.body)
+
+    sender = HttpMessageSender("https://svc.example", transport=transport)
+    result = asyncio.run(sender.send_message("payments:charge", {}))
+    assert result.status == "card-declined"
+    assert [error.to_payload() for error in result.errors] == [
+        {"message": "insufficient funds", "code": "nsf"}
+    ]
+
+
 def test_it_forwards_headers_and_the_topic() -> None:
     captured: dict = {}
     asyncio.run(

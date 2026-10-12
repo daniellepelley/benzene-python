@@ -341,3 +341,33 @@ def test_decode_response_defaults_a_missing_status_to_unexpected_error() -> None
     result = decode_response({})
     assert result.status == Status.UNEXPECTED_ERROR
     assert result.payload is None
+
+
+def test_decode_response_round_trips_an_application_defined_failure_status() -> None:
+    # The envelope carries the status itself, so an application-defined one needs no table to survive.
+    envelope = encode_response(Result.failure("card-declined", "insufficient funds"))
+    result = decode_response(envelope)
+    assert result.status == "card-declined"
+    assert not result.is_successful
+    assert result.messages == ("insufficient funds",)
+
+
+def test_decode_response_takes_the_problem_documents_status_when_the_envelope_has_none() -> None:
+    # wire-contracts 4.1 (spec 1.1): a client reading a problem document takes the status from its
+    # benzeneStatus. An envelope's statusCode is the status when present (section 1.2); without one,
+    # the document's statement beats a guessed unexpected-error.
+    body = json.dumps({"benzeneStatus": "card-declined", "errors": [{"message": "insufficient funds"}]})
+    result = decode_response({"isSuccessful": False, "body": body})
+    assert result.status == "card-declined"
+    assert not result.is_successful
+    assert result.messages == ("insufficient funds",)
+
+
+@pytest.mark.parametrize("stated", ["ok", "", 7, None])
+def test_decode_response_ignores_a_benzene_status_that_states_no_failure(stated: object) -> None:
+    # A problem document is a failure's body: a success status (or a non-string) there is malformed,
+    # and must not turn a failed reply into a success, nor replace the fallback with garbage.
+    body = json.dumps({"benzeneStatus": stated, "detail": "boom"})
+    result = decode_response({"isSuccessful": False, "body": body})
+    assert result.status == Status.UNEXPECTED_ERROR
+    assert not result.is_successful

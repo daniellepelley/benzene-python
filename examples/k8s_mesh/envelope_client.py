@@ -30,7 +30,7 @@ import json
 from benzene.core import decode_response, encode_body
 from benzene.http import from_http
 from benzene.http.client import HttpTransport, stdlib_transport
-from benzene.results import Result, is_successful
+from benzene.results import Result, is_successful, problem_errors, problem_status
 
 
 class EnvelopeHttpMessageSender:
@@ -61,6 +61,12 @@ class EnvelopeHttpMessageSender:
         status = from_http(reply.status_code)
         if is_successful(status):
             return Result(status)
+        if isinstance(response_envelope, dict) and "benzeneStatus" in response_envelope:
+            # A carrier failure answered with a problem document (e.g. a body that was not an
+            # envelope, 400): its benzeneStatus and errors win over the bare table (wire-contracts 4.1).
+            return Result.failure(
+                problem_status(response_envelope) or status, *problem_errors(response_envelope)
+            )
         return Result.failure(
             status, f"{self._url} answered HTTP {reply.status_code} without a response envelope"
         )

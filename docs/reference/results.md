@@ -161,10 +161,11 @@ Two rules are easy to get wrong:
 Helpers for reading and building these:
 
 ```python
-from benzene.results import problem_errors, result_with_errors
+from benzene.results import problem_errors, problem_status, result_with_errors
 from benzene.results.problems import problem_http_status, problem_title, problem_type
 
 problem_errors(document)          # a peer's document -> tuple[BenzeneError, ...], in §1.3's precedence
+problem_status(document)          # its benzeneStatus when that names a failure, else None (§4.1)
 result_with_errors(status, errs)  # a failure Result from a status + an errors sequence (wire decoder)
 
 problem_type("not-found")         # "https://benzene.app/problems/not-found"; None if app-defined

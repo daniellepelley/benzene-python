@@ -2,7 +2,8 @@
 
 The reverse direction of the HTTP binding: an :class:`HttpMessageSender` implements the
 :class:`~benzene.core.MessageSender` port by **POSTing the message body to the target service** and
-mapping the HTTP response back to a :class:`~benzene.results.Result` via the reverse status table
+mapping the HTTP response back to a :class:`~benzene.results.Result` — its status from a failure's
+problem document (``benzeneStatus``) when it states one, else via the reverse status table
 (:func:`from_http`). Benzene headers are forwarded as HTTP headers (plus the reserved ``topic`` key),
 so correlation ids and trace context propagate end-to-end.
 
@@ -23,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any, TypeAlias
 
 from benzene.core import encode_body
-from benzene.results import Result, is_successful, problem_errors
+from benzene.results import Result, is_successful, problem_errors, problem_status
 
 from .status import from_http
 
@@ -87,13 +88,15 @@ def _reply_to_result(reply: HttpReply) -> Result:
     parsed = _parse(reply.body)
     if is_successful(status):
         return Result(status, parsed)
-    # The peer's problem document (section 1.3): errors is authoritative and ordered when present,
-    # detail stands in only when it is absent. This used to read detail alone, which threw away the
-    # authoritative half - and with it any field and code the peer had gone to the trouble of
-    # sending. Same rule as the envelope decoder, from the same function.
     if not isinstance(parsed, dict):
         return Result.failure(status)
-    return Result.failure(status, *problem_errors(parsed))
+    # The peer's problem document (section 1.3). Its benzeneStatus, when it states a failure, is the
+    # result's status (wire-contracts 4.1, spec 1.1): the reverse table collapses every status it has
+    # no row for - an application-defined one answers 500 and would read back as unexpected-error -
+    # so the table is only the fallback, for a body that states no status. errors is authoritative
+    # and ordered when present, detail stands in only when it is absent; same rules as the envelope
+    # decoder, from the same functions.
+    return Result.failure(problem_status(parsed) or status, *problem_errors(parsed))
 
 
 def _parse(body: str) -> Any:

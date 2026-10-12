@@ -15,6 +15,7 @@ from .result import (
     ProblemDetails,
     Result,
     problem_errors,
+    problem_status,
     result_with_errors,
 )
 from .status import (
@@ -36,5 +37,6 @@ __all__ = [
     "Status",
     "is_successful",
     "problem_errors",
+    "problem_status",
     "result_with_errors",
 ]

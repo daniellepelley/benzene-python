@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from benzene.results import Result, Status, is_successful, problem_errors
+from benzene.results import Result, Status, is_successful, problem_errors, problem_status
 from benzene.results.problems import problem_title, problem_type
 
 from .context import Context
@@ -223,10 +223,12 @@ def decode_response(response: Mapping[str, Any]) -> Result[Any]:
     *different* status vocabulary on the wire). An empty ``body`` maps to a ``None`` payload; a failure
     body in :func:`error_payload`'s shape (an RFC 9457 problem document) has its ``errors`` member read
     back into the result's ``errors`` tuple, falling back to ``detail`` as a single opaque message when
-    the producer sent no ``errors``. A failure body that is not a problem document never fails the
-    call: the peer's status stands, a JSON one riding along as the payload and anything else
-    dropped. Only a *success* body that isn't valid JSON becomes ``unexpected-error`` (rather than
-    raising, matching this envelope's "never crash the caller" rule everywhere else).
+    the producer sent no ``errors``; the envelope's ``statusCode`` is the status, and only an
+    envelope with none takes the document's ``benzeneStatus`` instead of ``unexpected-error``. A
+    failure body that is not a problem document never fails the call: the peer's status stands, a
+    JSON one riding along as the payload and anything else dropped. Only a *success* body that isn't
+    valid JSON becomes ``unexpected-error`` (rather than raising, matching this envelope's "never
+    crash the caller" rule everywhere else).
 
     The envelope's ``isSuccessful`` decides whether this is a success (:func:`successful_from`),
     never the status text, so an application-defined status carried on a result the sender marked
@@ -258,6 +260,13 @@ def decode_response(response: Mapping[str, Any]) -> Result[Any]:
     if not successful and isinstance(parsed, dict) and _looks_like_problem(parsed):
         # errors, when present, is authoritative and ordered (section 1.3); detail stands in only
         # when it is absent. problem_errors is that rule, shared with every other decode site.
+        # The envelope's own statusCode is the status (section 1.2), and the document's
+        # benzeneStatus mirrors it; when the envelope carries none, the document's statement is the
+        # status rather than unexpected-error (section 4.1, spec 1.1, the same reading every client
+        # makes of a problem document).
+        if not response.get("statusCode"):
+            status = problem_status(parsed) or status
+            stated = None if successful == is_successful(status) else successful
         return Result(status, None, problem_errors(parsed), successful=stated)
 
     return Result(status, parsed, successful=stated)
