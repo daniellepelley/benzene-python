@@ -213,6 +213,24 @@ def test_an_unknown_schema_dialect_is_rejected() -> None:
         parse_document({**legacy, "openapi": "3.0.1"})
 
 
+def test_a_document_with_no_schema_dialect_at_all_is_rejected_by_every_reader() -> None:
+    # contract-document §1 (spec 1.1): a document without schemaDialect has an unknown dialect, so a
+    # consumer MUST reject it - the parse case missing-schema-dialect-is-rejected. Its document is
+    # otherwise complete and current (no legacy `openapi` member), so nothing else gives it away.
+    from benzene.mesh import is_contract_document
+
+    data = json.loads((_CONFORMANCE_DIR / "contract-document-cases.json").read_text("utf-8"))
+    document = data["documents"]["missingDialect"]
+    assert "schemaDialect" not in document and "openapi" not in document
+
+    with pytest.raises(UnknownSchemaDialectError, match="has no schemaDialect") as caught:
+        parse_document(document)
+    assert caught.value.kind == "unknown-schema-dialect"
+    # The mesh's reader of a served /benzene/spec document (the Cloud Service Profile probe) agrees.
+    assert not is_contract_document(document)
+    assert is_contract_document({**document, "schemaDialect": "openapi-3.0"})
+
+
 def test_cli_rejects_an_unknown_dialect_and_has_no_include_reserved(tmp_path: Path) -> None:
     spec = tmp_path / "legacy.spec.json"
     spec.write_text(json.dumps({**_CLOSURE_DOCUMENT, "schemaDialect": "openapi-3.1"}))
