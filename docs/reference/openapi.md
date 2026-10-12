@@ -94,7 +94,8 @@ from `StandardPaths` (`benzene.http`).
 Every operation's `requestBody` and success response `$ref` a component in `components.schemas` whose
 value is exactly `benzene.core.json_schema` of the topic's request/response type — the same 2020-12
 subset, with wire-naming (`orderId`) property names and `required`
-tracking the caller's obligation. Failure responses map the Benzene failure statuses to HTTP codes
+tracking the caller's obligation. Dataclasses and pydantic v2 models are both described as the
+marshaler writes them (a model under its serialization aliases). Failure responses map the Benzene failure statuses to HTTP codes
 through `benzene.http.to_http` and share one `BenzeneProblem` component — the RFC 9457 problem
 document this port actually emits (`benzene.core.error_payload` plus the two additions §4.1 requires
 of an HTTP failure: the integer `status` equal to the code being sent, and the

@@ -481,7 +481,11 @@ two wire forms.
 OpenAPI 3.0, with named components); it is what [`benzene.openapi`](openapi.md) embeds in its
 OpenAPI 3.1 document. Property names follow the wire naming policy (camelCase), a dataclass field is
 `required` iff it has no default, and a genuine multi-type union or a recursive dataclass falls back
-to the open schema `{}`.
+to the open schema `{}`. A pydantic v2 model is read as the marshaler writes it
+(`model_dump(by_alias=True)`), the same reading the Contract Document makes: a property per field under
+its serialization alias, `Field(exclude=True)` omitted, a `@computed_field` included, `{}` for a
+custom serializer or a stdlib dataclass nested in a model. A model field is `required` when pydantic
+requires the caller to supply it; a computed field never is.
 
 | Python type | JSON Schema |
 |---|---|
@@ -496,7 +500,9 @@ to the open schema `{}`.
 | `T \| None` | `T`'s schema with `"null"` added to its `type` (and to its `enum`, if any) |
 | `list[T]` / `tuple[T, ...]` / `set` | `{"type": "array", "items": <T>}` |
 | `dict[str, T]` | `{"type": "object", "additionalProperties": <T>}` |
-| a `@dataclass` | `{"type": "object", "properties": {...}, "required": [...]}` |
+| a `str` / `int` enum | `{"type": "string" \| "integer", "enum": [values]}` |
+| a `@dataclass` / a pydantic v2 model | `{"type": "object", "properties": {...}, "required": [...]}` |
+| a pydantic `RootModel[T]` | `T`'s schema (it marshals as its root value) |
 | anything else / `None` / `Any` | `{}` |
 
 ## Transport metadata

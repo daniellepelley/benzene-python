@@ -24,7 +24,10 @@ Python type             JSON Schema
 ``T | None``            ``T``'s schema with ``"null"`` added to its ``type``
 ``list[T]`` / ``tuple`` ``{"type": "array", "items": <T>}``
 ``dict[str, T]``        ``{"type": "object", "additionalProperties": <T>}``
+a ``str``/``int`` enum  ``{"type": "string"|"integer", "enum": [values]}``
 a ``@dataclass``        ``{"type": "object", "properties": {...}, "required": [...]}``
+a pydantic v2 model     ``{"type": "object", "properties": {...}, "required": [...]}``
+a ``RootModel[T]``      ``T``'s schema (it marshals as its root value)
 anything else           ``{}``   (unknown/custom — matches everything)
 ======================  =========================================================
 
@@ -35,6 +38,13 @@ caller must supply. This is a declaration-time reading of the spec's "always emi
 marshaler": Python's marshaler happens to *emit* every field (defaulted or not), so ``required``
 deliberately tracks the caller's obligation, not runtime emission — which is exactly what the
 language-neutral conformance fixture pins (``errors`` carries a default and is *not* required).
+A pydantic v2 model is read as ``model_dump(by_alias=True)`` writes it, exactly as the Contract
+Document derivation reads it (:mod:`benzene.core.contract_schema`, whose duck-typed helpers this
+reuses, so ``benzene-core`` still has no pydantic dependency): a property per field under its
+serialization alias, ``Field(exclude=True)`` omitted, a ``@computed_field`` included, ``{}`` for a
+custom serializer or a stdlib dataclass nested in a model (pydantic dumps it with its own field
+names). Its ``required`` follows this module's rule: a field pydantic requires the caller to supply
+(``is_required()``); a computed field is never supplied, so never required.
 Properties are listed in declaration order (determinism feeds the descriptor hash). Recursive types
 cut the cycle with ``{}`` rather than emitting a ``$ref``.
 """
@@ -44,12 +54,21 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import decimal
+import enum
 import pathlib
 import types
 import uuid
-from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from .contract_schema import literal_schema
+from .contract_schema import (
+    _field_serialized,
+    _is_annotation,
+    _is_pydantic_model,
+    _is_pydantic_root_model,
+    _is_pydantic_serializer,
+    _pydantic_model_serialized,
+    literal_schema,
+)
 from .mapping import to_camel
 
 # Both spellings of a union must be recognised: ``typing.Optional[X]`` / ``typing.Union[...]`` carry
@@ -79,11 +98,20 @@ def json_schema(py_type: Any) -> Schema:
     return _schema(py_type, seen=())
 
 
-def _schema(py_type: Any, seen: tuple[Any, ...]) -> Schema:
+def _schema(py_type: Any, seen: tuple[Any, ...], in_model: bool = False) -> Schema:
+    """``in_model``: the position is written by pydantic's dump (inside a model), not by the
+    marshaler's own dataclass walk."""
     if py_type is None or py_type is type(None) or py_type is Any:
         return {}
 
     origin = get_origin(py_type)
+
+    if origin is Annotated:
+        # Metadata never changes the marshaled shape, except a pydantic serializer (custom: {}).
+        base, *metadata = get_args(py_type)
+        if any(_is_pydantic_serializer(item) for item in metadata):
+            return {}
+        return _schema(base, seen, in_model)
 
     # Optional / Union: fold None into a nullable type; a genuine multi-type union stays open ({}).
     # Handles both typing.Optional/Union and the PEP 604 ``X | None`` form.
@@ -92,17 +120,17 @@ def _schema(py_type: Any, seen: tuple[Any, ...]) -> Schema:
         nullable = len(args) != len(get_args(py_type))
         if len(args) != 1:
             return {}  # unions we can't render as a single subset type
-        inner = _schema(args[0], seen)
+        inner = _schema(args[0], seen, in_model)
         return _as_nullable(inner) if nullable else inner
 
     if origin in (list, tuple, set, frozenset):
         item_args = get_args(py_type)
-        item = _schema(item_args[0], seen) if item_args else {}
+        item = _schema(item_args[0], seen, in_model) if item_args else {}
         return {"type": "array", "items": item}
 
     if origin is dict:
         value_args = get_args(py_type)
-        value = _schema(value_args[1], seen) if len(value_args) == 2 else {}
+        value = _schema(value_args[1], seen, in_model) if len(value_args) == 2 else {}
         return {"type": "object", "additionalProperties": value}
 
     if origin is Literal:
@@ -118,10 +146,65 @@ def _schema(py_type: Any, seen: tuple[Any, ...]) -> Schema:
     if isinstance(py_type, type) and issubclass(py_type, pathlib.PurePath):
         return {"type": "string"}
 
+    if isinstance(py_type, type) and issubclass(py_type, enum.Enum):
+        members = [member.value for member in py_type]
+        if issubclass(py_type, str):
+            return {"type": "string", "enum": members}
+        if issubclass(py_type, int):
+            return {"type": "integer", "enum": members}
+        return {}  # a plain Enum member does not marshal
+
+    if _is_pydantic_root_model(py_type):
+        return _root_model_schema(py_type, seen)
+    if _is_pydantic_model(py_type):
+        return _model_schema(py_type, seen)
+
     if dataclasses.is_dataclass(py_type) and isinstance(py_type, type):
+        if in_model:
+            return {}  # dumped by pydantic with its own field names: no one shape (module notes)
         return _dataclass_schema(py_type, seen)
 
     return {}  # unknown/custom type — an open schema matches anything
+
+
+def _root_model_schema(cls: Any, seen: tuple[Any, ...]) -> Schema:
+    """A ``RootModel`` marshals as its root value, so it is that value's schema."""
+    if cls in seen or _pydantic_model_serialized(cls):
+        return {}
+    root = cls.model_fields.get("root")
+    if root is None or _field_serialized(cls, "root", root):
+        return {}
+    return _schema(root.annotation, (*seen, cls), in_model=True)
+
+
+def _model_schema(cls: Any, seen: tuple[Any, ...]) -> Schema:
+    """A pydantic v2 model as ``model_dump(by_alias=True)`` writes it (see the module notes)."""
+    if cls in seen or _pydantic_model_serialized(cls):
+        return {}  # recursive (cut the cycle), or a custom model serializer (no one shape)
+    seen = (*seen, cls)
+    properties: Schema = {}
+    required: list[str] = []
+    for name, info in cls.model_fields.items():
+        if info.exclude is True:
+            continue  # never dumped
+        key = info.serialization_alias or info.alias or name
+        if _field_serialized(cls, name, info):
+            properties[key] = {}
+        else:
+            properties[key] = _schema(info.annotation, seen, in_model=True)
+        if info.is_required():
+            required.append(key)
+    for name, info in getattr(cls, "model_computed_fields", {}).items():
+        key = getattr(info, "alias", None) or name
+        return_type = getattr(info, "return_type", Any)
+        if _field_serialized(cls, name, info) or not _is_annotation(return_type):
+            properties[key] = {}
+        else:
+            properties[key] = _schema(return_type, seen, in_model=True)
+    schema: Schema = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return schema
 
 
 def _dataclass_schema(cls: type, seen: tuple[Any, ...]) -> Schema:
