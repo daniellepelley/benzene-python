@@ -408,7 +408,9 @@ AppDefinition(
 - **Schemas** are OpenAPI 3.0 Schema Objects derived from the dataclasses and pydantic v2 models
   (`contract_schema.py`): `T | None` is `nullable: true`, or the
   `{"type", "nullable": true, "allOf": [{"$ref"}]}` wrapper for a named type; every dataclass,
-  pydantic model and `str`/`int` enum is hoisted into `components.schemas`; `format` where it is known (`date-time`, `date`, `uuid`, `duration`, `double`, `byte`);
+  pydantic model and `str`/`int` enum is hoisted into `components.schemas`; a `Literal[...]` is
+  inline as `{"type": <the values' type>, "enum": [...]}` (`{}` if the values have no single JSON
+  type); `format` where it is known (`date-time`, `date`, `uuid`, `duration`, `double`, `byte`);
   `Decimal` is `{"type": "number"}` (see *Wire values* below); every field is `required`, a defaulted one included — the
   marshaler always writes every dataclass field (and every model field it does not exclude), and
   contract-document §4.2 makes a property it always emits `required` even when the type declares a
@@ -490,7 +492,8 @@ to the open schema `{}`.
 | `time` / `Path` | `{"type": "string"}` |
 | `Decimal` | `{"type": "number"}` |
 | `bytes` | `{"type": "string"}` (base64 on the wire) |
-| `T \| None` | `T`'s schema with `"null"` added to its `type` |
+| `Literal[v, ...]` | `{"type": <the values' type>, "enum": [...]}`; `{}` if the values have no single JSON type |
+| `T \| None` | `T`'s schema with `"null"` added to its `type` (and to its `enum`, if any) |
 | `list[T]` / `tuple[T, ...]` / `set` | `{"type": "array", "items": <T>}` |
 | `dict[str, T]` | `{"type": "object", "additionalProperties": <T>}` |
 | a `@dataclass` | `{"type": "object", "properties": {...}, "required": [...]}` |

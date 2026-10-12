@@ -20,6 +20,7 @@ Python type             JSON Schema
 ``Decimal``             ``{"type": "number"}``       (a JSON number, see mapping.py)
 ``PurePath``            ``{"type": "string"}``
 ``bytes``               ``{"type": "string"}``       (base64 on the wire)
+``Literal[v, …]``       ``{"type": <the values' type>, "enum": [values]}``; ``{}`` if mixed
 ``T | None``            ``T``'s schema with ``"null"`` added to its ``type``
 ``list[T]`` / ``tuple`` ``{"type": "array", "items": <T>}``
 ``dict[str, T]``        ``{"type": "object", "additionalProperties": <T>}``
@@ -46,8 +47,9 @@ import decimal
 import pathlib
 import types
 import uuid
-from typing import Any, Union, get_args, get_origin, get_type_hints
+from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
+from .contract_schema import literal_schema
 from .mapping import to_camel
 
 # Both spellings of a union must be recognised: ``typing.Optional[X]`` / ``typing.Union[...]`` carry
@@ -103,6 +105,13 @@ def _schema(py_type: Any, seen: tuple[Any, ...]) -> Schema:
         value = _schema(value_args[1], seen) if len(value_args) == 2 else {}
         return {"type": "object", "additionalProperties": value}
 
+    if origin is Literal:
+        # The OpenAPI 3.0 derivation's literal rule, in this dialect: a None value is "null" in both
+        # the type and the enum (2020-12's enum admits only what it lists).
+        values = get_args(py_type)
+        schema = literal_schema(tuple(v for v in values if v is not None))
+        return _as_nullable(schema) if None in values else schema
+
     for primitive, schema in _PRIMITIVES.items():
         if py_type is primitive:
             return dict(schema)
@@ -141,11 +150,15 @@ def _dataclass_schema(cls: type, seen: tuple[Any, ...]) -> Schema:
 
 
 def _as_nullable(schema: Schema) -> Schema:
-    """Add ``"null"`` to a schema's ``type`` (mesh.md: nullable = original type + null)."""
+    """Add ``"null"`` to a schema's ``type`` (mesh.md: nullable = original type + null), and to its
+    ``enum`` if it has one."""
     existing = schema.get("type")
     if existing is None:
         return schema  # open schema already matches null
     types = existing if isinstance(existing, list) else [existing]
     if "null" not in types:
         types = [*types, "null"]
-    return {**schema, "type": types}
+    nullable = {**schema, "type": types}
+    if "enum" in schema and None not in schema["enum"]:
+        nullable["enum"] = [*schema["enum"], None]
+    return nullable

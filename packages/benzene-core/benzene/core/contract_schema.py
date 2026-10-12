@@ -20,6 +20,8 @@ Python type                        Schema
 ``Decimal``                        ``{"type": "number"}``          (a JSON number, see mapping.py)
 ``PurePath`` (``Path``, …)         ``{"type": "string"}``
 a ``str``/``int`` ``Enum``         hoisted: ``{"type": "string", "enum": [values]}``
+``Literal[v, …]``                  inline: ``{"type": <the values' type>, "enum": [values]}`` (§4.2's
+                                   enum row); ``{}`` when the values have no single JSON type
 ``list[T]``/``tuple``/``set``      ``{"type": "array", "items": T}``
 ``dict[str, T]``                   ``{"type": "object", "additionalProperties": T}``
 a ``@dataclass``                   hoisted: ``{"type": "object", "properties": …, "required": …}``
@@ -81,7 +83,16 @@ import types
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Annotated, Any, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from .contract_hash import SCHEMA_REF_PREFIX, normalize_schema
 from .mapping import to_camel
@@ -112,6 +123,13 @@ _PRIMITIVES: dict[type, Schema] = {
 
 #: Matched by subclass (a ``PosixPath`` is what ``Path()`` builds), after the exact primitives.
 _STRING_LIKE: tuple[type, ...] = (pathlib.PurePath,)
+
+#: A literal value's JSON type. ``bool`` first: it is an ``int`` subclass, but not the same JSON type.
+_LITERAL_TYPES: tuple[tuple[type, str], ...] = (
+    (bool, "boolean"),
+    (int, "integer"),
+    (str, "string"),
+)
 
 _INVALID_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -272,6 +290,9 @@ class SchemaCatalogue:
             value_args = get_args(py_type)
             value = self._derive(value_args[1], refs, bindings) if len(value_args) == 2 else {}
             return {"type": "object", "additionalProperties": value}
+
+        if origin is Literal:
+            return literal_schema(get_args(py_type))
 
         for primitive, schema in _PRIMITIVES.items():
             if py_type is primitive:
@@ -485,6 +506,43 @@ def _pydantic_generic(py_type: Any) -> tuple[Any, tuple[Any, ...]] | None:
     metadata = getattr(py_type, "__pydantic_generic_metadata__", None) or {}
     origin, args = metadata.get("origin"), tuple(metadata.get("args") or ())
     return (origin, args) if origin is not None and args else None
+
+
+def literal_schema(values: tuple[Any, ...]) -> Schema:
+    """``Literal[...]`` by §4.2's enum row: the values' one JSON type, with the values as written.
+
+    A ``str``/``int`` enum member stands for its value (that is what the marshaler writes); a
+    ``None`` among the values makes the schema nullable. Values of more than one JSON type, or of
+    a type with no literal JSON form here (``bytes``, a plain ``Enum`` member), derive to ``{}``.
+    """
+    written: list[Any] = []
+    seen: set[tuple[type, Any]] = set()
+    nullable = False
+    for value in values:
+        if value is None:
+            nullable = True
+            continue
+        if isinstance(value, enum.Enum):
+            if not isinstance(value, (str, int)):
+                return {}  # a plain Enum member does not marshal
+            value = value.value
+        if (type(value), value) not in seen:  # by type too: 1 and True are equal, not the same
+            seen.add((type(value), value))
+            written.append(value)
+    json_types = {_literal_type(value) for value in written}
+    if len(json_types) != 1 or None in json_types:
+        return {}
+    schema: Schema = {"type": json_types.pop(), "enum": written}
+    if nullable:
+        schema["nullable"] = True
+    return schema
+
+
+def _literal_type(value: Any) -> str | None:
+    for py_type, json_type in _LITERAL_TYPES:
+        if isinstance(value, py_type):
+            return json_type
+    return None
 
 
 def _enum_schema(cls: type[enum.Enum]) -> Schema:

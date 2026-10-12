@@ -4,8 +4,8 @@ contract-document §4.2: a schema describes a payload's *marshaled* JSON form. S
 checked end to end - the marshaler (``to_jsonable`` + ``json.dumps``) writes the value, and the
 schema derived for its declared type validates exactly what was written - for a stdlib dataclass
 and for a pydantic model alike, which must also agree with each other on both the wire form and the
-schema. Covered: ``UUID``, ``date``, ``time``, ``timedelta``, ``Decimal``, ``Path`` and ``str``/``int``
-enum members.
+schema. Covered: ``UUID``, ``date``, ``time``, ``timedelta``, ``Decimal``, ``Path``, ``str``/``int``
+enum members, and ``Literal``.
 """
 
 from __future__ import annotations
@@ -19,10 +19,10 @@ import pathlib
 import re
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import pytest
-from benzene.core import ContractDocument, Registry, encode_body, to_jsonable
+from benzene.core import ContractDocument, Registry, encode_body, json_schema, to_jsonable
 from benzene.results import Result
 
 # --- a small OpenAPI 3.0 Schema Object validator (the subset §4.2 derives) ---------------------------
@@ -134,6 +134,11 @@ class Values:
     where: pathlib.Path
     colour: Colour
     priority: Priority
+    kind: Literal["parcel", "letter"]
+    level: Literal[1, 2, 3]
+    flag: Literal[True]
+    pinned: Literal[Colour.RED, "green"]
+    maybe_kind: Literal["parcel", "letter"] | None
     maybe_id: uuid.UUID | None
     ids: list[uuid.UUID] = field(default_factory=list)
     by_day: dict[str, datetime.date] = field(default_factory=dict)
@@ -151,6 +156,11 @@ def _values() -> Values:
         where=pathlib.Path("orders/o-1.json"),
         colour=Colour.BLUE,
         priority=Priority.HIGH,
+        kind="letter",
+        level=2,
+        flag=True,
+        pinned=Colour.RED,
+        maybe_kind=None,
         maybe_id=None,
         ids=[ID],
         by_day={"start": datetime.date(2026, 1, 1)},
@@ -169,6 +179,11 @@ EXPECTED_WIRE = {
     "where": "orders/o-1.json",
     "colour": "blue",
     "priority": 2,
+    "kind": "letter",
+    "level": 2,
+    "flag": True,
+    "pinned": "red",
+    "maybeKind": None,
     "maybeId": None,
     "ids": ["6f1c2d9e-8a4b-4c3d-9e2f-1a2b3c4d5e6f"],
     "byDay": {"start": "2026-01-01"},
@@ -186,6 +201,11 @@ EXPECTED_PROPERTIES = {
     "where": {"type": "string"},
     "colour": {"$ref": "#/components/schemas/Colour"},
     "priority": {"$ref": "#/components/schemas/Priority"},
+    "kind": {"type": "string", "enum": ["parcel", "letter"]},
+    "level": {"type": "integer", "enum": [1, 2, 3]},
+    "flag": {"type": "boolean", "enum": [True]},
+    "pinned": {"type": "string", "enum": ["red", "green"]},
+    "maybeKind": {"type": "string", "enum": ["parcel", "letter"], "nullable": True},
     "maybeId": {"type": "string", "format": "uuid", "nullable": True},
     "ids": {"type": "array", "items": {"type": "string", "format": "uuid"}},
     "byDay": {"type": "object", "additionalProperties": {"type": "string", "format": "date"}},
@@ -212,6 +232,9 @@ def test_the_schema_validator_is_not_vacuous() -> None:
         ("day", "12/10/2026"),
         ("span", "90 minutes"),
         ("amount", "12.50"),  # a Decimal is a number, not a string
+        ("kind", "box"),
+        ("level", 4),
+        ("flag", False),
     ]:
         assert _validate(document, ref, {**EXPECTED_WIRE, name: bad}), name
 
@@ -253,6 +276,32 @@ def test_a_date_is_a_date_not_a_date_time() -> None:
     assert to_jsonable(datetime.datetime(2026, 1, 2, tzinfo=UTC)) == "2026-01-02T00:00:00+00:00"
 
 
+def test_a_literal_without_one_json_type_is_the_open_schema() -> None:
+    class Plain(enum.Enum):  # no str/int mixin: it does not marshal
+        A = object()
+
+    @dataclass
+    class Odd:
+        mixed: Literal[1, "one"]
+        number_or_bool: Literal[1, True]
+        plain: Literal[Plain.A]
+
+    properties = _document(Odd)["components"]["schemas"]["Odd"]["properties"]
+    assert properties == {"mixed": {}, "numberOrBool": {}, "plain": {}}
+
+
+def test_the_json_schema_projection_maps_the_same_types() -> None:
+    """``json_schema`` (the 2020-12 projection benzene-openapi embeds) follows the same mapping; a
+    nullable literal lists ``null`` in its enum too, since a 2020-12 enum admits only what it lists."""
+    assert json_schema(uuid.UUID) == {"type": "string", "format": "uuid"}
+    assert json_schema(datetime.date) == {"type": "string", "format": "date"}
+    assert json_schema(decimal.Decimal) == {"type": "number"}
+    assert json_schema(Literal["parcel", "letter"] | None) == {
+        "type": ["string", "null"], "enum": ["parcel", "letter", None],
+    }
+    assert json_schema(Literal[1, "one"]) == {}
+
+
 # --- the same payload, as a pydantic model -----------------------------------------------------------
 
 
@@ -273,6 +322,11 @@ def _model_types() -> tuple[Any, Any]:
         where: pathlib.Path
         colour: Colour
         priority: Priority
+        kind: Literal["parcel", "letter"]
+        level: Literal[1, 2, 3]
+        flag: Literal[True]
+        pinned: Literal[Colour.RED, "green"]
+        maybe_kind: Literal["parcel", "letter"] | None
         maybe_id: uuid.UUID | None
         ids: list[uuid.UUID] = []
         by_day: dict[str, datetime.date] = {}
