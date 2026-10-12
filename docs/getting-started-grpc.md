@@ -310,13 +310,13 @@ failure therefore also carries them on the `grpc-status-details-bin` trailer, as
 
 ```python
 result = await sender.send_message("orders:submit", {})
-[(e.message, e.field) for e in result.errors]
-# -> [("sku is required", "sku"), ("quantity must be positive", "quantity")]
+[(e.message, e.field, e.code) for e in result.errors]
+# -> [("sku is required", "/sku", "missing"), ("quantity must be positive", "/quantity", "greater_than")]
 ```
 
 So a `@validated(Model)` handler's per-field pydantic errors reach a gRPC caller intact, exactly as
-they do over HTTP. `error.code` is not carried — §4.2 doesn't say where it belongs, and a port
-choosing for itself would put the four ports on different wires. The `google.rpc` messages come from
+they do over HTTP: `field` crosses as `FieldViolation.field` (a dotted path, read back as a pointer)
+and `code` as `FieldViolation.reason` (§4.2). The `google.rpc` messages come from
 `grpcio-status`, installed by the `[transport]` extra; a peer that sends no details still decodes to
 the message-only failure it always did.
 

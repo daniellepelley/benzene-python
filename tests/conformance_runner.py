@@ -13,7 +13,8 @@ import asyncio
 import json
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import field as dataclass_field
 from dataclasses import make_dataclass
 from pathlib import Path
@@ -1168,8 +1169,9 @@ def _run_health_endpoint(rules: dict) -> list[str]:
 # accident: the SNS, SQS, EventBridge, Kinesis, Service Bus, Event Hub, Queue Storage, Event Grid,
 # Pub/Sub, Kafka and RabbitMQ senders, a LambdaMessageSender in "Event" mode and
 # InProcessFanOutSender are one-way - no reply, so no problem document. GrpcMessageSender receives
-# the gRPC error model of wire-contracts.md §4.2, not a problem document (field survives as a
-# BadRequest FieldViolation; §4.2 gives code no slot), tested in tests/test_grpc_transport.py.
+# the gRPC error model of wire-contracts.md §4.2 rather than a problem document - each error a
+# BadRequest FieldViolation, its field the dotted path and its code the `reason` - and is held to the
+# same cases over a loopback server below, since the errors it rebuilds must match all the same.
 
 
 class _InvokePayload:
@@ -1218,6 +1220,35 @@ def _route_mapped_http_sender(topics: set[str], content_types: list[str]) -> Mes
     return HttpMessageSender(lambda topic: f"/{topic}", transport=transport)
 
 
+@contextmanager
+def _grpc_loopback_sender() -> Iterator[MessageSender | None]:
+    """A :class:`GrpcMessageSender` on a channel to a real loopback gRPC server hosting the canonical
+    handlers, or ``None`` when grpcio or the ``google.rpc`` protos (both the ``[transport]`` extra)
+    are not installed - without the protos no structured error crosses at all."""
+    try:
+        import grpc
+        from benzene.grpc import GrpcMessageSender, add_benzene_handler
+        from benzene.grpc.details import DETAILS_SUPPORTED
+    except ImportError:
+        yield None
+        return
+    if not DETAILS_SUPPORTED:
+        yield None
+        return
+    from concurrent.futures import ThreadPoolExecutor
+
+    server = grpc.server(ThreadPoolExecutor(max_workers=2))
+    add_benzene_handler(server, _app())
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    channel = grpc.insecure_channel(f"127.0.0.1:{port}")
+    try:
+        yield GrpcMessageSender(channel)
+    finally:
+        channel.close()
+        server.stop(None)
+
+
 def client_result_failures(result: Result, expected: dict, where: str) -> list[str]:
     """Hold a client's decoded :class:`Result` to an envelope case's expectation: the status, the
     success signal and - where the case states them - the errors (message, field and code, in
@@ -1255,8 +1286,16 @@ def run_client_error_fidelity() -> list[str]:
       for the ``/benzene/invoke`` envelope endpoint);
     - ``InProcessMessageSender``: the failure envelope's body, no wire;
     - ``LambdaMessageSender`` (``RequestResponse``) against ``AwsLambdaApp``'s direct-invoke source:
-      the failure envelope's body.
+      the failure envelope's body;
+    - ``GrpcMessageSender`` against a loopback gRPC server: no problem document, but the same errors
+      rebuilt from the ``grpc-status-details-bin`` trailer's ``BadRequest`` (wire-contracts.md §4.2:
+      ``field`` from the dotted path, ``code`` from ``FieldViolation.reason``).
     """
+    with _grpc_loopback_sender() as grpc_sender:
+        return _run_client_error_fidelity(grpc_sender)
+
+
+def _run_client_error_fidelity(grpc_sender: MessageSender | None) -> list[str]:
     failures: list[str] = []
     data = _load("problem-details-cases.json")
     cases = [
@@ -1281,6 +1320,10 @@ def run_client_error_fidelity() -> list[str]:
             ),
         ),
     ]
+    if grpc_sender is None:
+        SKIPPED.append("problem-details.clientFidelity[GrpcMessageSender] (requires grpcio[transport])")
+    else:
+        clients.append(("GrpcMessageSender (loopback server)", grpc_sender))
     for client_name, sender in clients:
         for case in cases:
             request, expected = case["request"], case["expected"]

@@ -57,7 +57,7 @@ the problem's information onto gRPC's own error model instead. `benzene-status` 
 | --- | --- |
 | `message` | `description` |
 | `field` | `field`, as a dotted path: the JSON Pointer's segments unescaped and joined with `.`, a digits-only segment written `[n]` (`/items/0/sku` → `items[0].sku`); empty when the error has no field. Read back, the dotted path becomes a pointer again |
-| `code` | *not carried* — §4.2 doesn't say where it goes, so no port invents a home for it |
+| `code` | `reason` (§4.2, spec 1.1); empty when the error has no code. Read back, a non-empty `reason` becomes `code` again |
 
 The `google.rpc.Status` itself carries the numeric gRPC code and the same detail string the call sets,
 which is what lets a non-Benzene peer read it with the stock `grpc_status.rpc_status.from_call`.
@@ -65,7 +65,7 @@ which is what lets a non-Benzene peer read it with the stock `grpc_status.rpc_st
 ```python
 result = await sender.send_message("orders:submit", {})
 result.status                                    # -> "validation-error"
-[(e.message, e.field) for e in result.errors]    # -> [("sku is required", "/sku"), ...]
+[(e.message, e.field, e.code) for e in result.errors]  # -> [("sku is required", "/sku", "missing"), ...]
 ```
 
 The server attaches the trailer whenever the outcome is non-OK; the `BadRequest` goes in whenever the
@@ -100,11 +100,13 @@ result = await sender.send_message("orders:place", {"sku": "A"}, headers={"x-cor
 - `add_benzene_handler(server, application)` registers a `BenzeneGrpcHandler` on a `grpc.Server`. The
   response carries the mapped `StatusCode` and — on success and failure alike — a `benzene-status`
   trailer with the raw status, so a status like `created` (which maps to gRPC `OK`) survives the round
-  trip exactly. A failure also carries the structured errors on `grpc-status-details-bin`.
+  trip exactly. A failure also carries the structured errors on `grpc-status-details-bin` — one
+  `google.rpc.BadRequest.FieldViolation` per error: `message` as `description`, `field` as the dotted
+  path, `code` as `reason`.
 - `GrpcMessageSender(channel)` is a `MessageSender`: it calls `/benzene.Benzene/<topic>`, forwards the
   headers as metadata, and maps the outcome back (the trailer wins verbatim, else the code is mapped),
-  reading a failure's `BadRequest` details back into `result.errors`. The blocking gRPC call runs on a
-  worker thread, so it never blocks the event loop.
+  reading a failure's `BadRequest` details back into `result.errors` (`message`, `field` and `code`).
+  The blocking gRPC call runs on a worker thread, so it never blocks the event loop.
 - `method_for(topic)` / `topic_for(method)` are the method-path convention if you need them directly.
 
 ## Testing

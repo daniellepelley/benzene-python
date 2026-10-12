@@ -17,9 +17,10 @@ The mapping is pinned across the ports, so all four agree on the wire:
   dotted path gRPC uses: segments unescaped, joined with ``.``, a digits-only segment written ``[n]``
   (``/items/0/sku`` → ``items[0].sku``); left unset — empty — when absent. Reading, a dotted path is
   converted back to a pointer, so a result's ``field`` is a pointer whichever transport it crossed.
-* ``BenzeneError.code``    → nowhere. The spec does not say where it goes, and a port inventing a
-  home for it is a divergence dressed up as a feature. (``FieldViolation`` does have a ``reason``
-  member that reads like the natural candidate — deciding that is a spec change, not a port's call.)
+* ``BenzeneError.code``    → ``FieldViolation.reason`` (the §4.2 SHOULD of spec 1.1), left unset —
+  empty — when absent. Reading, a non-empty ``reason`` becomes the error's ``code`` again, so a
+  ``code`` survives a gRPC hop as it does an HTTP one. (An old googleapis-common-protos without the
+  ``reason`` member carries no ``code``, as before.)
 
 The ``google.rpc`` messages come from ``googleapis-common-protos`` (pulled in by ``grpcio-status``),
 which is part of the ``[transport]`` extra rather than a hard dependency. Everything here degrades to
@@ -66,6 +67,14 @@ def _load_protos() -> Any:
 
 _PROTOS = _load_protos()
 
+#: Whether the installed ``google.rpc`` protos have ``FieldViolation.reason`` - a later addition to
+#: googleapis-common-protos than ``grpcio-status``'s floor guarantees. Without it a ``code`` is
+#: neither written nor read (the pre-1.1 behaviour), rather than the trailer failing to build.
+_REASON_SUPPORTED = (
+    _PROTOS is not None
+    and "reason" in _PROTOS.errors.BadRequest.FieldViolation.DESCRIPTOR.fields_by_name
+)
+
 #: Whether structured details can be written and read at all (the protos are installed).
 DETAILS_SUPPORTED = _PROTOS is not None
 
@@ -95,6 +104,8 @@ def details_trailer(
             # string, so an empty one would read as "the field named ''" to the far side.
             if error.field:
                 violation.field = pointer_to_dotted(error.field)
+            if error.code and _REASON_SUPPORTED:
+                violation.reason = error.code
             bad_request.field_violations.append(violation)
         packed = _PROTOS.any.Any()
         packed.Pack(bad_request)
@@ -138,6 +149,7 @@ def _violations(rich_status: Any) -> tuple[BenzeneError, ...]:
             BenzeneError(
                 message=violation.description,
                 field=dotted_to_pointer(violation.field) or None,
+                code=(violation.reason or None) if _REASON_SUPPORTED else None,
             )
             for violation in bad_request.field_violations
         )

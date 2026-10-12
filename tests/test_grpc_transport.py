@@ -157,14 +157,12 @@ def test_structured_errors_survive_the_grpc_hop_with_their_fields() -> None:
     with _serving(_details_app()) as channel:
         result = asyncio.run(GrpcMessageSender(channel).send_message("orders:submit", {}))
     assert result.status == "validation-error"
-    # The §1.3 pointer crosses as FieldViolation's dotted path and is read back as a pointer.
-    assert [(error.message, error.field) for error in result.errors] == [
-        ("sku is required", "/sku"),
-        ("quantity must be positive", "/lines/0/quantity"),
+    # The §1.3 pointer crosses as FieldViolation's dotted path and is read back as a pointer, and the
+    # code crosses as FieldViolation.reason (§4.2, spec 1.1) - all three members survive the hop.
+    assert [(error.message, error.field, error.code) for error in result.errors] == [
+        ("sku is required", "/sku", "missing"),
+        ("quantity must be positive", "/lines/0/quantity", "greater_than"),
     ]
-    # `code` is deliberately not carried: section 4.2 does not say where it goes, and three ports
-    # each inventing a home for it is the divergence the spec exists to prevent.
-    assert all(error.code is None for error in result.errors)
 
 
 @needs_details
@@ -187,9 +185,10 @@ def test_the_details_trailer_is_a_conformant_google_rpc_status() -> None:
     assert status.details[0].Unpack(bad_request)
     # FieldViolation.field is a dotted path: the pointer's segments joined with '.', a digits-only
     # segment written [n] (wire-contracts §4.2).
-    assert [(v.field, v.description) for v in bad_request.field_violations] == [
-        ("sku", "sku is required"),
-        ("lines[0].quantity", "quantity must be positive"),
+    # FieldViolation.reason carries the error's code (§4.2, spec 1.1).
+    assert [(v.field, v.description, v.reason) for v in bad_request.field_violations] == [
+        ("sku", "sku is required", "missing"),
+        ("lines[0].quantity", "quantity must be positive", "greater_than"),
     ]
 
 
@@ -219,3 +218,28 @@ def test_a_failure_attaches_both_trailers() -> None:
     # The benzene-status trailer keeps working unchanged alongside the new one.
     assert trailers[BENZENE_STATUS_TRAILER] == "validation-error"
     assert isinstance(trailers[GRPC_DETAILS_TRAILER], bytes)
+
+
+@message("orders:refund")
+async def refund(request: dict) -> Result:
+    # A code without a field, and a field without a code: each member travels on its own.
+    return Result.failure(
+        "conflict",
+        BenzeneError("already refunded", code="duplicate"),
+        BenzeneError("amount exceeds the order total", field="/amount"),
+        BenzeneError("refunds are closed"),
+    )
+
+
+@needs_details
+def test_code_and_field_cross_independently_and_absent_ones_stay_absent() -> None:
+    app = BenzeneMessageApplication(Registry().add(refund))
+    with _serving(app) as channel:
+        result = asyncio.run(GrpcMessageSender(channel).send_message("orders:refund", {}))
+    assert result.status == "conflict"
+    # An empty FieldViolation.reason/field is read back as absent, never as the code/field "".
+    assert [error.to_payload() for error in result.errors] == [
+        {"message": "already refunded", "code": "duplicate"},
+        {"message": "amount exceeds the order total", "field": "/amount"},
+        {"message": "refunds are closed"},
+    ]
