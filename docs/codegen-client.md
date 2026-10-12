@@ -100,9 +100,10 @@ per-field metadata to round-trip against a .NET/Go/TypeScript peer.
   not a dataclass — it has no fields to hold. A `oneOf` union-member type site elsewhere is typed the
   same way.
 - `format` is not consulted (`date-time`, `uuid`, `int64`, …) — only the schema's declared `type`.
-  `benzene.core.mapping` has no `datetime`/UUID/decimal awareness today, and this generator doesn't
-  add unrequested serializer support as a side effect of code generation. If `mapping` grows that
-  awareness, the type builder can follow. See
+  `benzene.core.mapping` *writes* `datetime`/`date`/UUID/`Decimal` values in their standard JSON
+  forms, but `to_request` does not parse them back (a generated dataclass field would receive the
+  wire string), so typing a field `UUID` would claim a type it never holds. If `to_request` grows
+  that parsing, the type builder can follow. See
   [`types.py`](../packages/benzene-codegen-client/benzene/codegen_client/types.py)'s module
   docstring for the full reasoning (including why this is *not* the same divergence as the .NET
   reference's `format` heuristics).

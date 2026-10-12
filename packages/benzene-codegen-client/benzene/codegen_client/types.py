@@ -9,14 +9,14 @@ machinery, not bring in a validation library of their own).
 builder maps ``format: date-time`` -> ``DateTime?``, ``format: uuid`` -> ``Guid?``, and
 ``format: int64`` -> ``long`` — heuristics layered on top of the declared ``type``.
 ``benzene.core.mapping`` (``to_jsonable``/``to_request``, the serialization idiom every generated
-dataclass is meant to plug into) has no ``datetime``/UUID/decimal awareness today: it would silently
-fail to JSON-encode a ``datetime.datetime`` field. Rather than add unrequested serializer support as
-a side effect of code generation, this builder honours only the schema's declared JSON ``type``
+dataclass is meant to plug into) writes ``datetime``/``date``/UUID/``Decimal`` values, but
+``to_request`` does not parse them back from their wire strings, so a field typed ``UUID`` would
+receive a ``str``. Rather than add unrequested parsing as a side effect of code generation, this
+builder honours only the schema's declared JSON ``type``
 (``string``/``integer``/``number``/``boolean``/``array``/``object``) and ignores ``format`` — the
 schema still governs the wire shape (a ``string`` is a ``string``, however it's formatted); this is
 "no format heuristics beyond what the schema says" read as *the declared type*, not an invented
-extra type per format. If ``benzene.core.mapping`` grows ``datetime``/UUID support, this builder can
-follow.
+extra type per format. If ``to_request`` grows that parsing, this builder can follow.
 
 **oneOf-with-shared-base (the .NET builder's polymorphism case):** the .NET builder types a oneOf
 union member site as the members' shared ``allOf`` base class when discoverable, else ``object``.

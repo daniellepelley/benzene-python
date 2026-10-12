@@ -13,6 +13,12 @@ Python type                        Schema
 ``int``                            ``{"type": "integer"}``
 ``float``                          ``{"type": "number", "format": "double"}``
 ``datetime``                       ``{"type": "string", "format": "date-time"}``   (RFC 3339)
+``date``                           ``{"type": "string", "format": "date"}``        (ISO 8601)
+``time``                           ``{"type": "string"}``          (ISO 8601; no offset if naive)
+``timedelta``                      ``{"type": "string", "format": "duration"}``    (ISO 8601)
+``UUID``                           ``{"type": "string", "format": "uuid"}``
+``Decimal``                        ``{"type": "number"}``          (a JSON number, see mapping.py)
+``PurePath`` (``Path``, …)         ``{"type": "string"}``
 a ``str``/``int`` ``Enum``         hoisted: ``{"type": "string", "enum": [values]}``
 ``list[T]``/``tuple``/``set``      ``{"type": "array", "items": T}``
 ``dict[str, T]``                   ``{"type": "object", "additionalProperties": T}``
@@ -67,9 +73,12 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import decimal
 import enum
+import pathlib
 import re
 import types
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Annotated, Any, TypeVar, Union, get_args, get_origin, get_type_hints
@@ -94,7 +103,15 @@ _PRIMITIVES: dict[type, Schema] = {
     str: {"type": "string"},
     bytes: {"type": "string", "format": "byte"},
     datetime.datetime: {"type": "string", "format": "date-time"},
+    datetime.date: {"type": "string", "format": "date"},
+    datetime.time: {"type": "string"},  # no RFC 3339 "time" format: a naive time has no offset
+    datetime.timedelta: {"type": "string", "format": "duration"},
+    uuid.UUID: {"type": "string", "format": "uuid"},
+    decimal.Decimal: {"type": "number"},
 }
+
+#: Matched by subclass (a ``PosixPath`` is what ``Path()`` builds), after the exact primitives.
+_STRING_LIKE: tuple[type, ...] = (pathlib.PurePath,)
 
 _INVALID_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -259,6 +276,8 @@ class SchemaCatalogue:
         for primitive, schema in _PRIMITIVES.items():
             if py_type is primitive:
                 return dict(schema)
+        if isinstance(py_type, type) and issubclass(py_type, _STRING_LIKE):
+            return {"type": "string"}
 
         if _is_pydantic_root_model(py_type):
             return self._root_model(py_type, refs)

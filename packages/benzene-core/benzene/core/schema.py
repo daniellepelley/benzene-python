@@ -13,6 +13,12 @@ Python type             JSON Schema
 ``int``                 ``{"type": "integer"}``
 ``float``               ``{"type": "number"}``
 ``datetime``            ``{"type": "string", "format": "date-time"}``   (RFC 3339)
+``date``                ``{"type": "string", "format": "date"}``
+``time``                ``{"type": "string"}``       (ISO 8601; no offset if naive)
+``timedelta``           ``{"type": "string", "format": "duration"}``    (ISO 8601)
+``UUID``                ``{"type": "string", "format": "uuid"}``
+``Decimal``             ``{"type": "number"}``       (a JSON number, see mapping.py)
+``PurePath``            ``{"type": "string"}``
 ``bytes``               ``{"type": "string"}``       (base64 on the wire)
 ``T | None``            ``T``'s schema with ``"null"`` added to its ``type``
 ``list[T]`` / ``tuple`` ``{"type": "array", "items": <T>}``
@@ -36,7 +42,10 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import decimal
+import pathlib
 import types
+import uuid
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from .mapping import to_camel
@@ -55,6 +64,11 @@ _PRIMITIVES: dict[type, Schema] = {
     str: {"type": "string"},
     bytes: {"type": "string"},
     datetime.datetime: {"type": "string", "format": "date-time"},
+    datetime.date: {"type": "string", "format": "date"},
+    datetime.time: {"type": "string"},
+    datetime.timedelta: {"type": "string", "format": "duration"},
+    uuid.UUID: {"type": "string", "format": "uuid"},
+    decimal.Decimal: {"type": "number"},
 }
 
 
@@ -92,6 +106,8 @@ def _schema(py_type: Any, seen: tuple[Any, ...]) -> Schema:
     for primitive, schema in _PRIMITIVES.items():
         if py_type is primitive:
             return dict(schema)
+    if isinstance(py_type, type) and issubclass(py_type, pathlib.PurePath):
+        return {"type": "string"}
 
     if dataclasses.is_dataclass(py_type) and isinstance(py_type, type):
         return _dataclass_schema(py_type, seen)

@@ -408,8 +408,8 @@ AppDefinition(
 - **Schemas** are OpenAPI 3.0 Schema Objects derived from the dataclasses and pydantic v2 models
   (`contract_schema.py`): `T | None` is `nullable: true`, or the
   `{"type", "nullable": true, "allOf": [{"$ref"}]}` wrapper for a named type; every dataclass,
-  pydantic model and `str`/`int` enum is hoisted into `components.schemas`; `format` where it is
-  known (`date-time`, `double`, `byte`); every field is `required`, a defaulted one included — the
+  pydantic model and `str`/`int` enum is hoisted into `components.schemas`; `format` where it is known (`date-time`, `date`, `uuid`, `duration`, `double`, `byte`);
+  `Decimal` is `{"type": "number"}` (see *Wire values* below); every field is `required`, a defaulted one included — the
   marshaler always writes every dataclass field (and every model field it does not exclude), and
   contract-document §4.2 makes a property it always emits `required` even when the type declares a
   default. A model's properties are its serialization aliases and computed fields, as
@@ -447,6 +447,31 @@ conformance-profile self-check) and `degraded` (the members, of `requests`/`even
 service could not determine; omitted when empty). All four sit outside both hashes, so the served and
 the registered document are one and the same.
 
+### Wire values
+
+`to_jsonable` (and `encode_body`, which `json.dumps` it) writes every value in its standard JSON
+form, and both derivations describe exactly that form:
+
+| Python value | Written as | Contract Document schema |
+|---|---|---|
+| `datetime` | `isoformat()` — RFC 3339 when aware | `{"type": "string", "format": "date-time"}` |
+| `date` | `"2026-10-12"` | `{"type": "string", "format": "date"}` |
+| `time` | `isoformat()`, e.g. `"09:30:15"` | `{"type": "string"}` |
+| `timedelta` | ISO 8601 duration in days/hours/minutes/seconds, e.g. `"PT1H30M"` | `{"type": "string", "format": "duration"}` |
+| `UUID` | `"6f1c2d9e-8a4b-4c3d-9e2f-1a2b3c4d5e6f"` | `{"type": "string", "format": "uuid"}` |
+| `Decimal` | a JSON **number** | `{"type": "number"}` |
+| `bytes` | base64 | `{"type": "string", "format": "byte"}` |
+| `Path` / `PurePath` | `str(path)` | `{"type": "string"}` |
+| `set` / `frozenset` | an array | `{"type": "array", "items": …}` |
+
+A `Decimal` is a number, not a string: contract-document §4.2 types it as a floating kind, and the
+.NET port writes `decimal` as a number. `json` cannot emit a Decimal's own digits, so an integral
+value is written exactly (as an `int`) and any other as a `float` — exact for up to 15 significant
+digits. Declare a field `str` if it needs more precision than that on the wire. A pydantic model is
+dumped in its default (python) mode and its values written by the same rules — pydantic's own
+`mode="json"` would write a `Decimal` as a string and `bytes` as UTF-8 text, giving one Python type
+two wire forms.
+
 ### `json_schema` — a JSON Schema 2020-12 projection
 
 `json_schema(py_type)` derives a small, fixed **JSON Schema 2020-12 subset** for a Python type
@@ -460,6 +485,10 @@ to the open schema `{}`.
 |---|---|
 | `str` / `bool` / `int` / `float` | `{"type": "string" \| "boolean" \| "integer" \| "number"}` |
 | `datetime` | `{"type": "string", "format": "date-time"}` |
+| `date` / `UUID` | `{"type": "string", "format": "date" \| "uuid"}` |
+| `timedelta` | `{"type": "string", "format": "duration"}` |
+| `time` / `Path` | `{"type": "string"}` |
+| `Decimal` | `{"type": "number"}` |
 | `bytes` | `{"type": "string"}` (base64 on the wire) |
 | `T \| None` | `T`'s schema with `"null"` added to its `type` |
 | `list[T]` / `tuple[T, ...]` / `set` | `{"type": "array", "items": <T>}` |

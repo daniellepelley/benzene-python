@@ -86,7 +86,9 @@ reads the model through its v2 API, so this needs nothing from `benzene-pydantic
 - one property per field and per `@computed_field`, named by its serialization alias (so the
   `alias_generator` above is reflected), each derived from its annotation like a dataclass field:
   `T | None` is `nullable: true` (the `allOf` wrapper for a named type), enums are hoisted with their
-  values, `datetime` carries `format: date-time`;
+  values, and `datetime`, `date`, `UUID`, `Decimal`, … take the
+  same schemas as in a dataclass — the model is dumped in python mode and its values written by the
+  same rules ([wire values](core.md#wire-values)), so a `Decimal` is a JSON number here too;
 - `required` is every property the dump always writes — defaulted and `Optional` fields included; a
   `Field(exclude=True)` field is absent and one `exclude_if` may drop is not required;
 - `{}` where the shape is not the model's own to state: a custom serializer (`@field_serializer`,
