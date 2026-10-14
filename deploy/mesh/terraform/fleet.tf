@@ -22,8 +22,8 @@ locals {
 
 # --- IAM: one execution role for the fleet Lambdas (logs only; the calls are plain HTTP) ---------
 resource "aws_iam_role" "fleet" {
-  count              = var.deploy_fleet ? 1 : 0
-  name               = "${local.name}-fleet"
+  count = var.deploy_fleet ? 1 : 0
+  name  = "${local.name}-fleet"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
