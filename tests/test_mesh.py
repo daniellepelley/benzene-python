@@ -27,11 +27,13 @@ from benzene.core import (
 from benzene.mesh import (
     HEARTBEAT_TOPIC,
     ISSUES_TOPIC,
+    MAX_ISSUE_ERRORS,
     REGISTER_TOPIC,
     TRACES_TOPIC,
     Heartbeat,
     InMemoryTraceExporter,
     IssueAggregator,
+    IssueError,
     MeshFeedSender,
     QueueTraceExporter,
     TraceEvent,
@@ -39,12 +41,13 @@ from benzene.mesh import (
     current_traceparent,
     current_tracestate,
     issue_fingerprint,
+    merge_issue_errors,
     parse_traceparent,
     registration_document,
     trace_middleware,
     with_trace_propagation,
 )
-from benzene.results import Result
+from benzene.results import BenzeneError, Result
 from benzene.testing import FakeMessageSender
 
 from .canonical_handlers import register_canonical, register_with_panic
@@ -327,6 +330,142 @@ def test_publish_issues_sends_the_batch() -> None:
     assert fake.last_topic == ISSUES_TOPIC
     assert fake.last_message["service"] == "orders"
     assert fake.last_message["issues"][0]["classification"] == "exception"
+
+
+# --- issue error detail (mesh.md §4.1) -----------------------------------------------------------
+
+
+def test_issue_error_detail_counts_field_and_code_never_the_message() -> None:
+    # The pairs come from the failing result's structured errors. The message is free text a
+    # validator may have built from the payload, so it never reaches the wire, and an error carrying
+    # neither field nor code says nothing an issue can count.
+    result = Result.validation_error(
+        BenzeneError("orderId 'o-17' is required", field="/orderId", code="required"),
+        BenzeneError("totals disagree", code="TotalsDisagree"),
+        "prose only",
+    )
+    agg = IssueAggregator("orders")
+    agg.record(topic="order:create", status=result.status, errors=result.errors)
+    agg.record(
+        topic="order:create",
+        status=result.status,
+        errors=[{"message": "o-18 missing", "field": "/orderId", "code": "required"}],
+    )
+
+    issue = agg.flush().issues[0]
+    assert issue.count == 2
+    assert issue.errors == (
+        IssueError(field="/orderId", code="required", count=2),
+        IssueError(code="TotalsDisagree", count=1),
+    )
+    payload = issue.to_payload()
+    assert payload["errors"] == [
+        {"field": "/orderId", "code": "required", "count": 2},
+        {"code": "TotalsDisagree", "count": 1},
+    ]
+    assert "o-17" not in json.dumps(payload) and "prose" not in json.dumps(payload)
+
+
+def test_issue_error_detail_treats_an_empty_member_as_absent() -> None:
+    agg = IssueAggregator("orders")
+    agg.record(
+        topic="order:create",
+        status="validation-error",
+        errors=[
+            BenzeneError("totals disagree", field="", code="TotalsDisagree"),
+            BenzeneError("totals disagree", code="TotalsDisagree"),
+            BenzeneError("both empty", field="", code=""),
+        ],
+    )
+    issue = agg.flush().issues[0]
+    assert issue.errors == (IssueError(code="TotalsDisagree", count=2),)
+    assert issue.to_payload()["errors"] == [{"code": "TotalsDisagree", "count": 2}]
+
+
+def test_issue_error_detail_is_omitted_when_there_is_none() -> None:
+    agg = IssueAggregator("orders")
+    agg.record(topic="order:create", status="validation-error", errors=["message only"])
+    agg.record(topic="order:get", status="not-found")
+    for issue in agg.flush().issues:
+        assert issue.errors == ()
+        assert "errors" not in issue.to_payload()
+
+
+def test_issue_error_detail_is_a_delta_and_bounded_at_the_flush() -> None:
+    agg = IssueAggregator("orders")
+    # Twelve distinct fields once each, then /orderId three times: /orderId leads, and the bound of
+    # ten keeps the next nine by field order (ordinal), not by arrival.
+    for name in ["/l", "/k", "/j", "/i", "/h", "/g", "/f", "/e", "/d", "/c", "/b", "/a"]:
+        agg.record(
+            topic="order:create",
+            status="validation-error",
+            errors=[BenzeneError("m", field=name, code="required")],
+        )
+    for _ in range(3):
+        agg.record(
+            topic="order:create",
+            status="validation-error",
+            errors=[BenzeneError("m", field="/orderId", code="required")],
+        )
+
+    errors = agg.flush().issues[0].errors
+    assert len(errors) == MAX_ISSUE_ERRORS
+    assert errors[0] == IssueError(field="/orderId", code="required", count=3)
+    assert [e.field for e in errors[1:]] == ["/a", "/b", "/c", "/d", "/e", "/f", "/g", "/h", "/i"]
+
+    # The flush reset the window: the next batch's counts are deltas from zero.
+    agg.record(
+        topic="order:create",
+        status="validation-error",
+        errors=[BenzeneError("m", field="/orderId", code="required")],
+    )
+    assert agg.flush().issues[0].errors == (IssueError(field="/orderId", code="required", count=1),)
+
+
+def test_issue_error_detail_caps_distinct_pairs_per_window() -> None:
+    # A window admits at most 100 distinct pairs; a pair arriving after that is ignored even when it
+    # would have outranked every admitted one, while an admitted pair keeps counting.
+    agg = IssueAggregator("orders")
+    for index in range(100):
+        agg.record(
+            topic="order:create",
+            status="validation-error",
+            errors=[BenzeneError("m", field=f"/f{index:03d}", code="required")],
+        )
+    for _ in range(5):
+        agg.record(
+            topic="order:create",
+            status="validation-error",
+            errors=[
+                BenzeneError("m", field="/late", code="required"),
+                BenzeneError("m", field="/f099", code="required"),
+            ],
+        )
+
+    errors = agg.flush().issues[0].errors
+    assert all(e.field != "/late" for e in errors)
+    assert errors[0] == IssueError(field="/f099", code="required", count=6)
+
+
+def test_merge_issue_errors_sums_by_identity_and_orders_ties_absent_first() -> None:
+    assert merge_issue_errors((), ()) == ()
+    merged = merge_issue_errors(
+        [IssueError(field="/a", code="b"), IssueError(code="z")],
+        [IssueError(field="/a", code="a"), IssueError(code="z"), IssueError(field="/a")],
+    )
+    # An absent member sorts before every non-empty string; equal fields fall to code.
+    assert merged == (
+        IssueError(code="z", count=2),
+        IssueError(field="/a", count=1),
+        IssueError(field="/a", code="a", count=1),
+        IssueError(field="/a", code="b", count=1),
+    )
+    # An empty string is the same as an absent member (mesh.md §4.1): `{field: "", code: c}` is
+    # `{code: c}`, and an entry whose members are both empty has neither and is dropped.
+    assert merge_issue_errors(
+        [IssueError(field="", code="c", count=1), IssueError(field="", code="", count=5)],
+        [IssueError(code="c", count=1)],
+    ) == (IssueError(code="c", count=2),)
 
 
 # --- QueueTraceExporter (non-blocking, lossy) ----------------------------------------------------

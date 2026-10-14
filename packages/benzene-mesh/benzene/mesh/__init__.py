@@ -49,11 +49,15 @@ from .feeds import (
 from .inbox import S3TraceInbox
 from .issues import (
     CLASSIFICATIONS,
+    MAX_ISSUE_ERRORS,
     Issue,
     IssueAggregator,
     IssueBatch,
+    IssueError,
     classify,
+    decode_issue_errors,
     issue_fingerprint,
+    merge_issue_errors,
 )
 from .outbound import (
     DuplicateOutboundRegistrationError,
@@ -150,6 +154,8 @@ __all__ = [
     "Issue",
     "IssueAggregator",
     "IssueBatch",
+    "IssueError",
+    "MAX_ISSUE_ERRORS",
     "JsonFileCollectorStore",
     "MeshCollector",
     "MeshFeedSender",
@@ -184,6 +190,8 @@ __all__ = [
     "current_tracestate",
     "with_trace_propagation",
     "issue_fingerprint",
+    "merge_issue_errors",
+    "decode_issue_errors",
     "new_span_id",
     "new_trace_id",
     "parse_traceparent",

@@ -355,6 +355,26 @@ await feeds.publish_issues(issues.flush())           # count is a DELTA; flush()
 never a cumulative total. Flushing an empty aggregator is valid — that batch is the feed's liveness
 beat.
 
+**Error detail** (mesh.md §4.1). Pass the failing result's structured errors and the issue says
+*which field, which rule*, not only how often:
+
+```python
+issues.record(topic="order:create", status=result.status, errors=result.errors)
+# -> "errors": [{"field": "/orderId", "code": "required", "count": 9}, ...] on the flushed issue
+```
+
+`errors` takes anything a failure factory does (`BenzeneError`s, problem-document mappings, plain
+strings). Only each error's `field` and `code` are counted — **never `message`**, which is free text a
+validator may have built from the payload — and an error with neither is not counted; an empty
+string is the same as an absent member. Each `(field, code)` pair's `count` is a delta, like the
+issue's. At `flush()` an issue keeps at most
+`MAX_ISSUE_ERRORS` (10) entries as `IssueError`s: the highest counts, ties broken by `field` then
+`code` (ordinal, an absent member first), listed in that order; a window admits at most 100 distinct
+pairs per issue, and a pair arriving after that is ignored. An issue with no detail omits `errors`.
+Neither member participates in the fingerprint. `merge_issue_errors(existing, delta)` is that
+merge-and-bound rule — the collector applies the same one — and `decode_issue_errors(raw)` the
+collector's lenient read of the wire member.
+
 ## The collector — `MeshCollector`
 
 A collector is the receiving side: **an ordinary Benzene service** that ingests the feeds and renders
@@ -400,6 +420,16 @@ mesh.md §§4–6, pinned by `mesh-collector-cases.json`):
 - **`missingFeeds`** names which of `descriptor` (the read models' name for the registration) /
   `health` / `traces` a service hasn't reported, so a partial fleet renders as reduced rather than
   absent.
+- **Recent flows** — `query_fleet`'s `traces` summarises the newest 20 flows, newest first:
+  `{traceId, events, services, failed, startedAt, durationMs, status?}`. A flow's `status` (mesh.md §4) is the
+  status of its earliest-started failing event when it failed (`failed` is true exactly when some event
+  is not successful), otherwise of its earliest-started event — so a failed flow names the failure its
+  caller saw, not the `ok` of whatever ran first. `startedAt` is compared as an instant, not as text;
+  equal start times keep receipt order, an event with no readable `startedAt` sorts after every timed
+  one, and a flow whose deciding event carries no status omits `status`. `durationMs` is (latest event
+  end) − (earliest start), as benzene-go's meshd computes it, and never less than the longest single
+  event. An event with no readable start moves neither end; a flow with none at all has
+  `startedAt: ""` and sorts last. A non-numeric or negative event `durationMs` reads as 0.
 
 `service` is required on `register`, `heartbeat`, and `issues` (→ `bad-request`); an unknown service /
 topic / trace query is `not-found`; the query read models are one collector's shapes (the spec pins
@@ -408,7 +438,12 @@ them only as the observable surface for the ingest rules). Sender feeds live in 
 The optional **issues** feed is supported too: `benzene:mesh:issues` batches merge by `fingerprint`
 (`count` is a delta — occurrences accrue, exemplars accumulate), a malformed entry is skipped rather
 than rejecting the batch, and `issues` appears in a service's `missingFeeds` only when a failing trace
-is unexplained. Conformance-green against both `mesh-collector-cases` and `mesh-issue-cases`.
+is unexplained. An issue's `errors` detail merges by `(field, code)` identity (`count += delta`) and
+is bounded and ordered exactly as the emitter's is (above); an entry that is not an object, has
+neither member (an empty string being an absent one), has a non-string one, or whose `count` is not
+a positive integer (a JSON `true` and
+`1.5` included) is skipped, never costing the issue. The fleet view's issue reports `errors` only
+when it holds any. Conformance-green against both `mesh-collector-cases` and `mesh-issue-cases`.
 
 ### Persistence — `CollectorStore`
 
@@ -520,8 +555,8 @@ collector.query_fleet({})
 `trace_middleware`, `TraceEvent`, `TraceExporter`,
 `InMemoryTraceExporter`, `QueueTraceExporter`, `parse_traceparent`, `new_trace_id`, `new_span_id`,
 `current_traceparent`, `current_tracestate`, `with_trace_propagation`, `TracePropagatingMessageSender`,
-`MeshFeedSender`, `Heartbeat`, `Issue`, `IssueBatch`, `IssueAggregator`, `classify`,
-`issue_fingerprint`, `CLASSIFICATIONS`, `is_contract_document`, `spec_service`,
+`MeshFeedSender`, `Heartbeat`, `Issue`, `IssueBatch`, `IssueAggregator`, `IssueError`, `classify`,
+`issue_fingerprint`, `merge_issue_errors`, `decode_issue_errors`, `MAX_ISSUE_ERRORS`, `CLASSIFICATIONS`, `is_contract_document`, `spec_service`,
 `spec_service_version`, `spec_registration_hash`, `spec_entries`, `spec_topic_ids`, `known_members`,
 `resolve_schema`,
 `MeshCollector`, `collector_registry`, `CollectorError`,

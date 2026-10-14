@@ -62,8 +62,12 @@ await feeds.publish_traces(exporter.drain())                     # any iterable 
 
 issues = IssueAggregator(service="orders")
 issues.record(topic="order:create", status="service-unavailable", exception_type="HttpError")
+issues.record(topic="order:create", status=result.status, errors=result.errors)  # (field, code) detail
 await feeds.publish_issues(issues.flush())   # deduplicated failure signatures; count is a delta
 ```
+
+Passing a failing result's `errors` gives its issue an `errors` detail — each error's `field` and
+`code` counted, never its `message`, bounded to the ten most frequent pairs at the flush (mesh.md §4.1).
 
 Mirrors .NET's `Benzene.Mesh`, and contributes the `benzene.mesh` subpackage to the shared `benzene`
 namespace. The wire shapes (the registration, heartbeat, TraceEvent and collector topics) are the

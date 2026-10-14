@@ -13,14 +13,22 @@ would (cross-language merge depends on it):
 
 :class:`IssueAggregator` is the pit of success: ``record(...)`` each failure, ``flush()`` to a
 :class:`IssueBatch` (which resets the window, so ``count`` is always a delta).
+
+An issue may also carry its **error detail** (mesh.md §4.1): the ``(field, code)`` pairs behind the
+failures it counts — never the message — as :class:`IssueError` delta counts. :func:`merge_issue_errors`
+is the one merge-and-bound rule both sides share (the aggregator at its flush, the collector on
+ingest), and :func:`decode_issue_errors` the collector's lenient reading of the wire member.
 """
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+from benzene.results import BenzeneError, ErrorLike
 
 # The closed classification vocabulary (mesh.md). `contract-drift` is never produced by classify() —
 # it is reserved for collector/reader-derived issues (registration-hash mismatch, schema divergence).
@@ -29,6 +37,13 @@ CLASSIFICATIONS: frozenset[str] = frozenset(
 )
 
 _MAX_EXEMPLARS = 5
+
+#: An issue's error detail keeps at most this many entries, on both sides of the feed (mesh.md §4.1).
+MAX_ISSUE_ERRORS = 10
+# The distinct (field, code) pairs one issue accumulates in a flush window. The bound to
+# MAX_ISSUE_ERRORS is applied only at the flush, so a pair that turns frequent late in the window is
+# not evicted early; past this many, a new pair is not admitted, which caps the window's memory.
+_MAX_PENDING_ISSUE_ERRORS = 100
 
 
 def classify(status: str, exception_type: str | None = None) -> str:
@@ -58,6 +73,96 @@ def issue_fingerprint(
     return hashlib.sha256(raw.encode("utf-8")).digest()[:16].hex()
 
 
+@dataclass(frozen=True)
+class IssueError:
+    """One entry of an issue's error detail (mesh.md §4.1).
+
+    Its identity is the ``(field, code)`` pair. An empty string is the same as an absent member
+    (``None``), and an absent member is distinct from every non-empty string; :func:`merge_issue_errors`
+    and :func:`decode_issue_errors` normalise ``""`` to ``None``. ``count`` is a delta on the wire,
+    exactly as the issue's own is.
+    There is deliberately no ``message``: it is free text a validator may have built from the payload.
+    """
+
+    field: str | None = None
+    code: str | None = None
+    count: int = 1
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if self.field is not None:
+            payload["field"] = self.field
+        if self.code is not None:
+            payload["code"] = self.code
+        payload["count"] = self.count
+        return payload
+
+
+def _issue_error_order(entry: IssueError) -> tuple[int, int, str, int, str]:
+    """Count descending, then field, then code — ordinal, an absent member first (mesh.md §4.1)."""
+    return (
+        -entry.count,
+        entry.field is not None,
+        entry.field or "",
+        entry.code is not None,
+        entry.code or "",
+    )
+
+
+def merge_issue_errors(
+    existing: Iterable[IssueError], delta: Iterable[IssueError]
+) -> tuple[IssueError, ...]:
+    """Add ``delta`` into ``existing`` by ``(field, code)`` identity and bound the result (mesh.md §4.1).
+
+    The :data:`MAX_ISSUE_ERRORS` highest counts survive, listed count descending, then by field, then
+    by code (ordinal, absent first). An empty member is an absent one, and an entry with neither is
+    dropped. The aggregator bounds a flush window's detail with it and the
+    collector merges a batch's deltas into an issue with it, so both sides keep the same entries in the
+    same order.
+    """
+    counts: dict[tuple[str | None, str | None], int] = {}
+    for entry in (*existing, *delta):
+        key = (entry.field or None, entry.code or None)  # "" is absent (mesh.md §4.1)
+        if key == (None, None):
+            continue
+        counts[key] = counts.get(key, 0) + entry.count
+    merged = sorted(
+        (IssueError(field=f, code=c, count=n) for (f, c), n in counts.items()),
+        key=_issue_error_order,
+    )
+    return tuple(merged[:MAX_ISSUE_ERRORS])
+
+
+def decode_issue_errors(raw: Any) -> tuple[IssueError, ...]:
+    """Read an issue's wire ``errors`` member leniently (mesh.md §4.1).
+
+    An entry that is not an object, has neither ``field`` nor ``code`` (an empty string being an
+    absent member), carries a non-string one, or
+    whose ``count`` is not a positive integer is skipped — one malformed entry never costs the issue,
+    or the batch, it arrived in. A member that is not an array is no detail at all. A JSON ``true`` is
+    not a count (``bool`` is an ``int`` in Python), and neither is ``1.5`` nor ``2.0``.
+    """
+    if not isinstance(raw, list):
+        return ()
+    entries: list[IssueError] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        count = item.get("count")
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            continue
+        field_value, code = item.get("field"), item.get("code")
+        if field_value is not None and not isinstance(field_value, str):
+            continue
+        if code is not None and not isinstance(code, str):
+            continue
+        field_value, code = field_value or None, code or None  # "" is absent (mesh.md §4.1)
+        if field_value is None and code is None:
+            continue
+        entries.append(IssueError(field=field_value, code=code, count=count))
+    return tuple(entries)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -79,6 +184,8 @@ class Issue:
     last_seen: str | None = None
     exemplar_trace_ids: tuple[str, ...] = ()
     resolution_hint: str | None = None
+    # The (field, code) detail behind the failures counted — bounded, ordered, delta counts (§4.1).
+    errors: tuple[IssueError, ...] = ()
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -101,6 +208,8 @@ class Issue:
         payload.update({k: v for k, v in optional.items() if v is not None})
         if self.exemplar_trace_ids:
             payload["exemplarTraceIds"] = list(self.exemplar_trace_ids)
+        if self.errors:
+            payload["errors"] = [error.to_payload() for error in self.errors]
         return payload
 
 
@@ -122,11 +231,17 @@ class IssueAggregator:
     drains everything seen since the previous flush and resets, so every reported ``count`` is a
     delta, never a cumulative total (mesh.md). Safe to flush an empty aggregator — that batch is the
     feed's liveness beat.
+
+    Pass the failing result's ``errors`` to ``record`` and the issue carries its error detail: each
+    error's ``(field, code)`` pair is counted, its message never kept, and an error with neither is not
+    counted. The window's pairs are bounded to :data:`MAX_ISSUE_ERRORS` at the flush (mesh.md §4.1).
     """
 
     def __init__(self, service: str) -> None:
         self._service = service
         self._issues: dict[str, Issue] = {}
+        # fingerprint -> {(field, code): count} for the current window; bounded only at the flush.
+        self._errors: dict[str, dict[tuple[str | None, str | None], int]] = {}
 
     def record(
         self,
@@ -139,8 +254,13 @@ class IssueAggregator:
         trace_id: str | None = None,
         resolution_hint: str | None = None,
         at: str | None = None,
+        errors: Iterable[ErrorLike] = (),
     ) -> Issue:
-        """Record one failure occurrence, merging into its fingerprint's running issue."""
+        """Record one failure occurrence, merging into its fingerprint's running issue.
+
+        ``errors`` is the failing result's structured errors (``result.errors``, or the mappings a
+        problem document decodes to): only each one's ``field`` and ``code`` are counted.
+        """
         classification = classify(status, exception_type)
         discriminator = exception_type or status
         fingerprint = issue_fingerprint(self._service, topic, version, classification, discriminator)
@@ -167,10 +287,31 @@ class IssueAggregator:
         issue.last_seen = when
         if trace_id and len(issue.exemplar_trace_ids) < _MAX_EXEMPLARS:
             issue.exemplar_trace_ids = (*issue.exemplar_trace_ids, trace_id)
+        self._count_errors(fingerprint, errors)
         return issue
 
+    def _count_errors(self, fingerprint: str, errors: Iterable[ErrorLike]) -> None:
+        pending = self._errors.setdefault(fingerprint, {})
+        for error in errors:
+            coerced = BenzeneError.coerce(error)
+            # Never the message; an empty member is an absent one (mesh.md §4.1).
+            pair = (coerced.field or None, coerced.code or None)
+            if pair == (None, None):
+                continue  # an error with neither member says nothing an issue can count
+            if pair in pending or len(pending) < _MAX_PENDING_ISSUE_ERRORS:
+                pending[pair] = pending.get(pair, 0) + 1
+
     def flush(self) -> IssueBatch:
-        """Return everything accumulated since the last flush and reset (so ``count`` stays a delta)."""
+        """Return everything accumulated since the last flush and reset (so ``count`` stays a delta).
+
+        Each issue's error detail is bounded and ordered here, at the flush (mesh.md §4.1).
+        """
+        for fingerprint, issue in self._issues.items():
+            pending = self._errors.get(fingerprint, {})
+            issue.errors = merge_issue_errors(
+                (), (IssueError(field=f, code=c, count=n) for (f, c), n in pending.items())
+            )
         batch = IssueBatch(service=self._service, issues=list(self._issues.values()))
         self._issues = {}
+        self._errors = {}
         return batch

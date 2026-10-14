@@ -435,6 +435,240 @@ def test_null_aggregated_fields_do_not_crash_the_batch() -> None:
     assert merged["firstSeen"] == "2026-01-02"  # a null incoming span is ignored, not compared
 
 
+def _issue_with_errors(errors: object, count: int = 1) -> dict:
+    return {
+        "service": "orders",
+        "issues": [
+            {
+                "fingerprint": "e",
+                "classification": "validation",
+                "service": "orders",
+                "topic": "order:create",
+                "status": "validation-error",
+                "count": count,
+                "errors": errors,
+            }
+        ],
+    }
+
+
+def test_invalid_error_detail_entries_are_skipped_and_the_issue_kept() -> None:
+    # mesh.md §4.1: an entry that is not an object, has neither member, or whose count is not a
+    # positive integer is skipped - the issue and the batch are still accepted. In Python a JSON
+    # `true` decodes to an int, so it is rejected explicitly; so is a member that is not a string.
+    c = MeshCollector()
+    accepted = c.ingest_issues(
+        _issue_with_errors(
+            [
+                "required",
+                ["/a", "required", 1],
+                {"count": 1},
+                {"field": None, "code": None, "count": 1},
+                {"field": "/a", "count": 0},
+                {"field": "/a", "count": -2},
+                {"field": "/a", "count": 1.5},
+                {"field": "/a", "count": 2.0},
+                {"field": "/a", "count": True},
+                {"field": "/a", "count": "3"},
+                {"field": "/a", "code": "required"},
+                {"field": 7, "count": 1},
+                {"field": "/a", "code": ["required"], "count": 1},
+                {"field": "", "code": "", "count": 5},  # both empty: neither member
+                {"field": "/b", "code": "required", "count": 2, "message": "kept out"},
+                {"field": None, "code": "TotalsDisagree", "count": 1},
+                {"field": "", "code": "TotalsDisagree", "count": 1},  # "" is absent: same identity
+            ]
+        )
+    )
+    assert accepted == {"accepted": 1}
+    issue = c.query_fleet({})["issues"][0]
+    assert issue["count"] == 1
+    assert issue["errors"] == [
+        {"code": "TotalsDisagree", "count": 2},  # absent field sorts first among equal counts
+        {"field": "/b", "code": "required", "count": 2},  # the message is never kept
+    ]
+
+
+def test_an_errors_member_that_is_not_an_array_is_no_detail() -> None:
+    c = MeshCollector()
+    assert c.ingest_issues(_issue_with_errors("required")) == {"accepted": 1}
+    assert c.ingest_issues(_issue_with_errors(None)) == {"accepted": 1}
+    issue = c.query_fleet({})["issues"][0]
+    assert issue["count"] == 2
+    assert "errors" not in issue  # reported only when the issue holds any
+
+
+def test_error_detail_merges_by_identity_and_keeps_the_bound() -> None:
+    c = MeshCollector()
+    c.ingest_issues(_issue_with_errors([{"field": f"/f{i:02d}", "count": 1} for i in range(10)]))
+    c.ingest_issues(
+        _issue_with_errors(
+            [{"field": "/f09", "count": 2}, {"field": "/new", "count": 1}, {"code": "c", "count": 1}]
+        )
+    )
+    # A later batch without detail keeps what the issue already holds.
+    c.ingest_issues(_issue_with_errors([]))
+    errors = c.query_fleet({})["issues"][0]["errors"]
+    assert len(errors) == 10
+    assert errors[0] == {"field": "/f09", "count": 3}
+    # Ties order absent field first, then by field: `{code: c}` leads the count-1 entries, and the
+    # bound drops the tail (/f08, /new) rather than the earliest arrivals.
+    assert errors[1] == {"code": "c", "count": 1}
+    assert [e["field"] for e in errors[2:]] == [f"/f{i:02d}" for i in range(8)]
+
+
+def test_error_detail_survives_a_snapshot_round_trip() -> None:
+    source = MeshCollector()
+    source.ingest_issues(_issue_with_errors([{"field": "/a", "code": "required", "count": 2}]))
+    restored = MeshCollector()
+    restored.restore(source.snapshot())
+    restored.ingest_issues(_issue_with_errors([{"field": "/a", "code": "required", "count": 1}]))
+    assert restored.query_fleet({})["issues"][0]["errors"] == [
+        {"field": "/a", "code": "required", "count": 3}
+    ]
+
+
+def _span(
+    trace: str,
+    span: str,
+    status: str,
+    started_at: str | None,
+    service: str = "svc",
+    duration_ms: object = None,
+) -> dict:
+    event: dict = {"traceId": trace, "spanId": span, "service": service, "topic": "t", "status": status}
+    if started_at is not None:
+        event["startedAt"] = started_at
+    if duration_ms is not None:
+        event["durationMs"] = duration_ms
+    return event
+
+
+def test_a_failed_flow_names_its_earliest_failure_by_time_not_text() -> None:
+    # `...09:00:00.005Z` sorts before `...09:00:00Z` as text; as instants it is later. The failing
+    # events arrive latest-first, so receipt order would also pick the wrong one.
+    c = MeshCollector()
+    c.ingest_traces(
+        {
+            "events": [
+                _span("t1", "s3", "service-unavailable", "2026-07-16T09:00:00.010Z"),
+                _span("t1", "s2", "validation-error", "2026-07-16T09:00:00.005Z"),
+                _span("t1", "s1", "ok", "2026-07-16T09:00:00Z"),
+            ]
+        }
+    )
+    (flow,) = c.query_fleet({})["traces"]
+    assert flow["failed"] is True
+    assert flow["status"] == "validation-error"
+    assert flow["events"] == 3
+    assert flow["startedAt"] == "2026-07-16T09:00:00Z"
+
+
+def test_a_successful_flow_carries_its_earliest_events_status() -> None:
+    c = MeshCollector()
+    c.ingest_traces(
+        {
+            "events": [
+                _span("t1", "s2", "created", "2026-07-16T09:00:00.0050000Z"),  # seven digits (.NET)
+                _span("t1", "s1", "ok", "2026-07-16T09:00:00+00:00"),
+            ]
+        }
+    )
+    (flow,) = c.query_fleet({})["traces"]
+    assert flow["failed"] is False
+    assert flow["status"] == "ok"
+
+
+def test_equal_start_times_keep_receipt_order_and_an_untimed_event_sorts_last() -> None:
+    c = MeshCollector()
+    c.ingest_traces(
+        {
+            "events": [
+                _span("tie", "a", "timeout", "2026-07-16T09:00:00Z"),
+                _span("tie", "b", "not-found", "2026-07-16T09:00:00Z"),
+                _span("late", "c", "conflict", None),
+                _span("late", "d", "accepted", "2026-07-16T08:00:00Z"),
+            ]
+        }
+    )
+    flows = {flow["traceId"]: flow for flow in c.query_fleet({})["traces"]}
+    assert flows["tie"]["status"] == "timeout"  # the first received of two equal start times
+    # The untimed failing event cannot claim to be the earliest; it is still the only failure.
+    assert flows["late"]["status"] == "conflict"
+    assert flows["late"]["failed"] is True
+
+
+def test_fleet_traces_are_newest_first_and_omit_an_unknown_status() -> None:
+    c = MeshCollector()
+    c.ingest_traces(
+        {
+            "events": [
+                _span("old", "a", "ok", "2026-07-16T08:00:00Z"),
+                _span("new", "b", "ok", "2026-07-16T09:00:00Z"),
+                {"traceId": "blank", "spanId": "c", "service": "svc", "topic": "t"},
+            ]
+        }
+    )
+    flows = c.query_fleet({})["traces"]
+    assert [flow["traceId"] for flow in flows] == ["new", "old", "blank"]
+    blank = flows[2]
+    assert "status" not in blank
+    assert blank["failed"] is True  # an empty status is not a success (wire-contracts §3)
+
+
+def test_a_flow_lasts_from_its_earliest_start_to_its_latest_end() -> None:
+    # meshd's rule: (latest event end) - (earliest start). The root's 30ms outlasts its children.
+    c = MeshCollector()
+    c.ingest_traces(
+        {
+            "events": [
+                _span("t1", "s2", "ok", "2026-07-16T09:00:00.005Z", duration_ms=10),
+                _span("t1", "s3", "ok", "2026-07-16T09:00:00.020Z", duration_ms=25.5),
+                _span("t1", "s1", "ok", "2026-07-16T09:00:00Z", duration_ms=30),
+            ]
+        }
+    )
+    (flow,) = c.query_fleet({})["traces"]
+    assert flow["startedAt"] == "2026-07-16T09:00:00Z"
+    assert flow["durationMs"] == 45.5  # .020 + 25.5ms, measured from .000
+
+
+def test_every_flow_summary_carries_started_at_and_duration_ms() -> None:
+    # The mesh UI formats both unconditionally. An event with no readable start cannot be placed on
+    # the timeline, so it moves neither end; its own duration is still a lower bound on the flow's.
+    # A flow with no readable start at all says so with an empty startedAt, never a made-up time.
+    c = MeshCollector()
+    c.ingest_traces(
+        {
+            "events": [
+                _span("mixed", "a", "ok", "2026-07-16T09:00:00Z", duration_ms=5),
+                _span("mixed", "b", "ok", "not a time", duration_ms=40),
+                _span("untimed", "c", "ok", None, duration_ms=12),
+                _span("untimed", "d", "ok", None, duration_ms=True),  # not a duration: 0
+                _span("bare", "e", "ok", None),
+                _span("huge", "f", "ok", "9999-12-31T23:59:59Z", duration_ms=1e300),
+            ]
+        }
+    )
+    flows = {flow["traceId"]: flow for flow in c.query_fleet({})["traces"]}
+    for flow in flows.values():
+        assert isinstance(flow["startedAt"], str)
+        assert isinstance(flow["durationMs"], float)
+    assert flows["mixed"]["startedAt"] == "2026-07-16T09:00:00Z"
+    assert flows["mixed"]["durationMs"] == 40.0
+    assert flows["untimed"] == {**flows["untimed"], "startedAt": "", "durationMs": 12.0}
+    assert flows["bare"]["durationMs"] == 0.0
+    assert flows["huge"]["durationMs"] == 1e300  # past datetime's range: its own length still counts
+
+
+def test_event_durations_survive_a_snapshot_round_trip() -> None:
+    source = MeshCollector()
+    source.ingest_traces({"events": [_span("t1", "s1", "ok", "2026-07-16T09:00:00Z", duration_ms=7)]})
+    restored = MeshCollector()
+    restored.restore(source.snapshot())
+    assert restored.query_fleet({})["traces"][0]["durationMs"] == 7.0
+
+
 def test_issues_feed_absence_flagged_only_when_a_failure_needs_explaining() -> None:
     c = MeshCollector()
     c.ingest_traces(

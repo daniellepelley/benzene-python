@@ -38,16 +38,19 @@ The ``benzene:mesh:query:*`` shapes follow the reference collector and are pinne
 from __future__ import annotations
 
 import copy
+import math
+import re
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from benzene.core import Handler, Registry
 from benzene.results import Result, is_successful
 
 from .feeds import HEARTBEAT_TOPIC, ISSUES_TOPIC, REGISTER_TOPIC, TRACES_TOPIC
-from .issues import issue_fingerprint
+from .issues import decode_issue_errors, issue_fingerprint, merge_issue_errors
 from .specdoc import (
     is_reserved_topic,
     known_members,
@@ -76,7 +79,9 @@ _FEEDS = ("descriptor", "health", "traces", "issues")
 # Merged issue exemplars keep the newest few (mesh.md §4.1).
 _MAX_EXEMPLARS = 3
 # Issue fields the collector aggregates itself — everything else is "latest-wins" on merge.
-_AGGREGATED_ISSUE_FIELDS = frozenset({"count", "exemplarTraceIds", "firstSeen", "lastSeen"})
+_AGGREGATED_ISSUE_FIELDS = frozenset({"count", "errors", "exemplarTraceIds", "firstSeen", "lastSeen"})
+# The fleet view's recent flows, newest first.
+_MAX_FLEET_TRACES = 20
 
 
 class CollectorError(Exception):
@@ -129,6 +134,7 @@ class _Event:
     topic: str
     status: str
     started_at: str | None = None
+    duration_ms: float = 0.0
 
 
 class MeshCollector:
@@ -210,6 +216,7 @@ class MeshCollector:
                 topic=str(raw.get("topic", "")),
                 status=str(raw.get("status", "")),
                 started_at=raw.get("startedAt"),
+                duration_ms=_duration_ms(raw.get("durationMs")),
             )
             self._events.append(event)
             self._span_owner[event.span_id] = event.service
@@ -275,6 +282,8 @@ class MeshCollector:
             merged = dict(issue)
             merged["count"] = _safe_int(issue.get("count", 0))
             merged["exemplarTraceIds"] = incoming_exemplars[-_MAX_EXEMPLARS:]  # keep the newest
+            merged.pop("errors", None)
+            _merge_issue_errors(merged, issue.get("errors"))
             self._issues[fingerprint] = merged
             return
         # Merge by fingerprint (mesh.md §4.1): count is a delta; firstSeen/lastSeen span; exemplars keep
@@ -289,6 +298,7 @@ class MeshCollector:
             if trace_id not in existing["exemplarTraceIds"]
         ]
         existing["exemplarTraceIds"] = combined[-_MAX_EXEMPLARS:]
+        _merge_issue_errors(existing, issue.get("errors"))
         first = issue.get("firstSeen")
         if first is not None:
             existing["firstSeen"] = min(existing.get("firstSeen") or first, first)
@@ -338,6 +348,7 @@ class MeshCollector:
                     "topic": event.topic,
                     "status": event.status,
                     "startedAt": event.started_at,
+                    "durationMs": event.duration_ms,
                 }
                 for event in self._events
             ],
@@ -390,6 +401,7 @@ class MeshCollector:
                 topic=str(raw.get("topic", "")),
                 status=str(raw.get("status", "")),
                 started_at=raw.get("startedAt"),
+                duration_ms=_duration_ms(raw.get("durationMs")),
             )
             for raw in snapshot.get("events", [])
         ]
@@ -419,7 +431,12 @@ class MeshCollector:
             }
             for topic in sorted(self._topics)
         ]
-        return {"services": services, "topics": topics, "issues": list(self._issues.values())}
+        return {
+            "services": services,
+            "topics": topics,
+            "traces": self._trace_summaries(),
+            "issues": list(self._issues.values()),
+        }
 
     def query_service(self, body: dict[str, Any]) -> dict[str, Any]:
         name = _require(body, "service")
@@ -544,6 +561,49 @@ class MeshCollector:
             activity[name] = {"lastObservedAt": last_observed_at} if last_observed_at else {}
         return activity
 
+    def _trace_summaries(self) -> list[dict[str, Any]]:
+        """The fleet view's recent flows, newest first — one summary per trace id.
+
+        A flow's ``status`` (mesh.md §4) is that of its earliest-started failing event when it failed,
+        else of its earliest-started event; an event is failing exactly when it makes ``failed`` true,
+        and equal start times keep receipt order. An event with no readable ``startedAt`` sorts after
+        every timed one, and a flow whose deciding event carries no status omits ``status``.
+
+        Every summary carries ``startedAt`` (the earliest readable start, as received) and
+        ``durationMs`` (latest event end − earliest start, as benzene-go's meshd computes it). An
+        event with no readable start cannot be placed on the timeline, so it moves neither; its own
+        duration is still a lower bound on the flow's. A flow with no readable start at all has
+        ``startedAt: ""`` — a string a reader can render, claiming no time — and sorts last.
+        """
+        flows: dict[str, list[_Event]] = {}
+        for event in self._events:  # receipt order
+            flows.setdefault(event.trace_id, []).append(event)
+        summaries: list[tuple[datetime | None, dict[str, Any]]] = []
+        for trace_id, events in flows.items():
+            ordered = sorted(events, key=_start_order)  # stable: ties keep receipt order
+            failing = [event for event in ordered if not is_successful(event.status)]
+            summary: dict[str, Any] = {
+                "traceId": trace_id,
+                "events": len(events),
+                "services": sorted({event.service for event in events if event.service}),
+                "failed": bool(failing),
+            }
+            started = _instant(ordered[0].started_at)
+            summary["startedAt"] = ordered[0].started_at if started is not None else ""
+            summary["durationMs"] = _flow_duration_ms(events, started)
+            status = (failing or ordered)[0].status
+            if status:
+                summary["status"] = status
+            summaries.append((started, summary))
+        # Newest first (a stable sort), a flow with no known start time after every timed one.
+        timed = sorted(
+            (pair for pair in summaries if pair[0] is not None),
+            key=lambda pair: pair[0] or _EPOCH,
+            reverse=True,
+        )
+        untimed = [pair for pair in summaries if pair[0] is None]
+        return [summary for _, summary in (timed + untimed)[:_MAX_FLEET_TRACES]]
+
     def _invocations_on(self, topic: str) -> int:
         return sum(1 for event in self._events if event.topic == topic)
 
@@ -591,6 +651,74 @@ def _require(body: dict[str, Any], key: str) -> str:
     if not value:
         raise CollectorBadRequest(f"{key!r} is required")
     return str(value)
+
+
+def _merge_issue_errors(merged: dict[str, Any], incoming: Any) -> None:
+    """Merge an incoming issue's ``errors`` delta into ``merged`` by (field, code) identity, bounded
+    and ordered as mesh.md §4.1 says; an invalid entry is skipped, and ``errors`` is reported only when
+    the issue holds any."""
+    existing = decode_issue_errors(merged.get("errors"))
+    combined = merge_issue_errors(existing, decode_issue_errors(incoming))
+    if combined:
+        merged["errors"] = [entry.to_payload() for entry in combined]
+    else:
+        merged.pop("errors", None)
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_MILLISECOND = timedelta(milliseconds=1)
+
+
+def _duration_ms(value: Any) -> float:
+    """An event's ``durationMs``; anything but a finite, non-negative number (a JSON ``true``
+    included) reads as 0 rather than failing the batch."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    duration = float(value)
+    return duration if math.isfinite(duration) and duration >= 0 else 0.0
+
+
+def _flow_duration_ms(events: list[_Event], started: datetime | None) -> float:
+    """(latest event end) − (earliest start) in milliseconds, over the events with a readable start;
+    never shorter than the longest single event, since each one ran inside the flow."""
+    longest = max(event.duration_ms for event in events)
+    if started is None:
+        return longest
+    end = started
+    for event in events:
+        instant = _instant(event.started_at)
+        if instant is None:
+            continue
+        try:
+            end = max(end, instant + timedelta(milliseconds=event.duration_ms))
+        except OverflowError:  # an absurd duration past datetime's range: its own length still counts
+            continue
+    return max((end - started) / _MILLISECOND, longest)
+_FRACTION = re.compile(r"\.(\d+)")
+
+
+def _instant(started_at: str | None) -> datetime | None:
+    """``startedAt`` as an aware instant, or ``None`` when absent or unreadable.
+
+    A flow's events are ordered by *time*, not by text: ``…09:00:00Z`` precedes ``…09:00:00.005Z``,
+    which a string comparison gets backwards. Any fractional precision is accepted (``fromisoformat``
+    before Python 3.11 takes only three or six digits), and an offset-less stamp is read as UTC.
+    """
+    if not isinstance(started_at, str) or not started_at:
+        return None
+    text = _FRACTION.sub(lambda m: "." + (m.group(1) + "000000")[:6], started_at, count=1)
+    text = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _start_order(event: _Event) -> tuple[bool, datetime]:
+    """Sort key for a flow's events: by start instant, an unreadable one after every timed one."""
+    instant = _instant(event.started_at)
+    return (instant is None, instant or _EPOCH)
 
 
 def _safe_int(value: Any) -> int:
