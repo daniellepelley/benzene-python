@@ -28,7 +28,7 @@ same mesh.
 > well-known HTTP surfaces (`/benzene/invoke`, `/benzene/health`, `/benzene/spec`) are all implemented.
 > Each package
 > builds a `twine`-clean sdist + wheel and ships from a trusted-publishing
-> [`release`](.github/workflows/release.yml) workflow; `0.1.0b1` is on PyPI
+> [`release`](.github/workflows/release.yml) workflow; `0.1.0b2` is on PyPI
 > ([`docs/publishing.md`](docs/publishing.md)). See the [roadmap](#roadmap).
 
 ## Layered packages — install only what you use
@@ -144,7 +144,7 @@ the templates improve you re-run `copier update` inside your project and pull th
 (three-way-merged against your edits).
 
 > **Heads up:** a generated `pyproject.toml` depends on the real `benzene-*` package names. Those
-> resolve from PyPI (`0.1.0b1`), so a plain `pip install -e .` works — but pre-1.0 that is a
+> resolve from PyPI (`0.1.0b2`), so a plain `pip install -e .` works — but pre-1.0 that is a
 > prerelease, and it will not carry anything merged since the last tag. To build against this
 > checkout instead, install the `benzene-*` deps from it (editable) and then install the generated
 > project with `--no-deps` — the generated `README.md` and
@@ -348,10 +348,8 @@ running .NET Benzene service) is what "conformant" means — see the spec's
     a bundled `LICENSE`, classifiers, pinned inter-package deps) and builds a clean sdist + wheel that
     passes `twine check`. A [`release`](.github/workflows/release.yml) workflow builds all nineteen
     and publishes them via **trusted publishing** (OIDC, no stored tokens) on a `vX.Y.Z` tag; see
-    [`docs/publishing.md`](docs/publishing.md). `0.1.0b1` is published and installs from PyPI
-    (verified 2026-08-14). One step is still outstanding before the *next* tag: the pending trusted
-    publisher for `benzene-codegen-client`, added after that release, has to be registered on PyPI
-    or the publish fails for every package at once.
+    [`docs/publishing.md`](docs/publishing.md). `0.1.0b2` of all nineteen is published and installs from PyPI
+    (verified 2026-10-16; released from `main` at `563be93`, which includes spec 1.2).
 15. **(done)** The mesh on real infrastructure — a Fargate **Mesh Host** (poller + collector + durable
     EFS-backed store) and a demo fleet on Lambda, stood up by one dispatchable `terraform apply`
     ([`deploy/mesh`](deploy/mesh)). It projects the catalog into the cross-language **mesh-ui** read-model

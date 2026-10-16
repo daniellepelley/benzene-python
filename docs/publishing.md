@@ -31,8 +31,8 @@ each version bump.
 
 > **A note on what the prerelease version does and does not gate.** It does not stop a plain
 > `pip install`. When the *only* published version satisfying a requirement is a prerelease, pip
-> takes it anyway — so `pip install benzene-results` today installs `0.1.0b1` with no `--pre`
-> (verified 2026-08-14). The prerelease segment is therefore honest signalling, not enforcement; it
+> takes it anyway — so `pip install benzene-results` today installs `0.1.0b2` with no `--pre`
+> (verified 2026-10-16). The prerelease segment is therefore honest signalling, not enforcement; it
 > starts excluding these builds only once a stable version exists to prefer instead. Do not
 > reintroduce a non-prerelease floor believing it gates anything — the exclusion happens at the
 > top level, not through the dependency floors.
@@ -60,14 +60,6 @@ benzene-pydantic  benzene-testing   benzene-gcp      benzene-aws       benzene-a
 benzene-kafka     benzene-rabbitmq  benzene-auth     benzene-cache     benzene-resilience
 benzene-openapi   benzene-otel      benzene-mesh-fleet   benzene-codegen-client
 ```
-
-> **`benzene-codegen-client` still needs its pending publisher registered.** It was added to
-> `packages/` after the first release and was missing from this list and from the workflow's; the
-> lists are now correct, but registering the publisher is the one step in this document the
-> repository cannot do for itself. Until a maintainer adds it on PyPI, the next tagged release
-> **fails**: the build globs `packages/*/`, so that distribution is uploaded in the same
-> `pypi-publish` call as the other eighteen, and PyPI rejects the whole upload for a project with no
-> publisher it trusts. Do this before the next tag.
 
 add a *pending* trusted publisher (Account → Publishing) pointing at:
 
